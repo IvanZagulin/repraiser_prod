@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     ADMIN_EMAIL: str = "admin@example.com"
     ADMIN_PASSWORD: str = "changeme123"
 
+    # Redis / Celery
+    REDIS_URL: str = "redis://redis:6379/0"
+
     # SMTP (для приветственных писем)
     SMTP_HOST: str = "smtp.yandex.ru"
     SMTP_PORT: int = 465

@@ -26,7 +26,8 @@
       "Bash(git add backend/app/services/email_service.py)",
       "Bash(git add backend/app/api/auth.py)",
       "Bash(git add docker-compose.yml)",
-      "Bash(git add -A)"
+      "Bash(git add -A)",
+      "Bash(git add backend/app/api/auth.py backend/app/main.py backend/app/models/user.py backend/requirements.txt)"
     ]
   }
 }

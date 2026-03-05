@@ -11,7 +11,6 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'backend'))
 
 from app.config import settings
-from app.services.repricer_engine import RepricerEngine
 from app.services.telegram import telegram_notifier
 from app.services.proxy_pool import proxy_pool
 
@@ -31,7 +30,7 @@ logger = logging.getLogger(__name__)
 engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Глобальная ссылка на планировщик (для динамического перепланирования)
+# Глобальная ссылка на планировщик
 _scheduler: AsyncIOScheduler = None
 _current_interval_minutes: int = 60
 
@@ -39,19 +38,16 @@ _current_interval_minutes: int = 60
 def _read_interval_from_db() -> int:
     """
     Читает минимальный интервал из настроек всех пользователей.
-    Сначала пробует глобальный (user_id IS NULL), потом минимум по всем юзерам.
     """
     try:
         db = SessionLocal()
         try:
-            # Глобальный дефолт
             row = db.execute(
                 text("SELECT value FROM app_settings "
                      "WHERE key = 'repricer_interval_minutes' AND user_id IS NULL")
             ).fetchone()
             if row:
                 return max(1, int(row[0]))
-            # Минимум среди всех пользователей
             row = db.execute(
                 text("SELECT MIN(value::int) FROM app_settings "
                      "WHERE key = 'repricer_interval_minutes'")
@@ -67,12 +63,13 @@ def _read_interval_from_db() -> int:
 
 async def repricer_job():
     """
-    Задача репрайсера: запускает репрайсер для каждого активного пользователя отдельно.
+    Читает активных пользователей и отправляет задачу репрайсера
+    в Celery-воркер для каждого. Воркеры обрабатывают пользователей параллельно.
     """
     global _scheduler, _current_interval_minutes
 
     logger.info("=" * 70)
-    logger.info("Запуск автоматического репрайсера (multi-tenant)")
+    logger.info("Планировщик: отправка задач репрайсера в Celery")
     logger.info("=" * 70)
 
     new_interval = _read_interval_from_db()
@@ -82,22 +79,18 @@ async def repricer_job():
         _scheduler.reschedule_job('repricer_job', trigger=IntervalTrigger(minutes=new_interval))
 
     db = SessionLocal()
-
     try:
-        if not proxy_pool._initialized:
-            logger.info("Инициализация proxy pool...")
-            await proxy_pool.initialize()
-
-        # Получаем всех активных пользователей
         users = db.execute(
             text("SELECT id FROM users WHERE is_active = TRUE")
         ).fetchall()
 
         logger.info(f"Активных пользователей: {len(users)}")
 
+        from app.tasks.repricer_task import run_repricer_for_user
+
+        dispatched = 0
         for (user_id,) in users:
             try:
-                # ID продуктов этого пользователя
                 product_rows = db.execute(
                     text("""
                         SELECT p.id FROM products p
@@ -111,21 +104,17 @@ async def repricer_job():
                 if not product_ids:
                     continue
 
-                logger.info(f"Пользователь {user_id}: {len(product_ids)} товаров")
-                engine_inst = RepricerEngine(db, user_id=user_id)
-                run = await engine_inst.run_repricer(
-                    product_ids=product_ids,
-                    run_type="scheduled"
-                )
-                duration = (run.completed_at - run.started_at).total_seconds() if run.completed_at else 0
+                task = run_repricer_for_user.delay(user_id, product_ids, "scheduled")
                 logger.info(
-                    f"  user={user_id} run={run.id}: "
-                    f"обновлено={run.updated_count}, пропущено={run.skipped_count}, "
-                    f"ошибок={run.error_count}, время={duration:.1f}s"
+                    f"  user={user_id}: задача {task.id} поставлена "
+                    f"в очередь ({len(product_ids)} товаров)"
                 )
+                dispatched += 1
 
             except Exception as e:
-                logger.error(f"Ошибка репрайсера для user_id={user_id}: {e}", exc_info=True)
+                logger.error(f"Ошибка при отправке задачи для user_id={user_id}: {e}", exc_info=True)
+
+        logger.info(f"Отправлено задач: {dispatched}")
 
     except Exception as e:
         logger.error(f"Критическая ошибка в repricer_job: {e}", exc_info=True)
@@ -138,27 +127,22 @@ async def repricer_job():
 
 
 async def health_check_proxies():
-    """
-    Задача для периодической проверки прокси
-    
-    Запускается каждые 30 минут
-    """
+    """Периодическая проверка прокси — каждые 30 минут."""
     logger.info("Запуск health check прокси...")
-    
+
     try:
         if not proxy_pool._initialized:
             await proxy_pool.initialize()
         else:
             await proxy_pool.health_check_all()
-        
+
         stats = proxy_pool.get_stats()
         logger.info(f"Health check завершен: {stats}")
-        
-        # Если все прокси мертвы - уведомление
+
         if stats['alive'] == 0 and stats['total'] > 0:
             logger.critical("⚠️ ВСЕ ПРОКСИ МЕРТВЫ!")
             await telegram_notifier.notify_all_proxies_dead()
-        
+
     except Exception as e:
         logger.error(f"Ошибка в health_check_proxies: {e}", exc_info=True)
 
@@ -167,7 +151,6 @@ def setup_scheduler(interval_minutes: int) -> AsyncIOScheduler:
     """Настройка и запуск планировщика"""
     scheduler = AsyncIOScheduler(timezone="UTC")
 
-    # Задача #1: Репрайсер с настраиваемым интервалом
     scheduler.add_job(
         repricer_job,
         trigger=IntervalTrigger(minutes=interval_minutes),
@@ -178,7 +161,6 @@ def setup_scheduler(interval_minutes: int) -> AsyncIOScheduler:
     )
     logger.info(f"✓ Задача 'repricer_job' зарегистрирована (каждые {interval_minutes} мин.)")
 
-    # Задача #2: Health check прокси каждые 30 минут
     scheduler.add_job(
         health_check_proxies,
         trigger=IntervalTrigger(minutes=30),
@@ -196,15 +178,13 @@ async def startup():
     logger.info("=" * 70)
     logger.info("WB Repricer Scheduler запускается...")
     logger.info("=" * 70)
-    
-    # Инициализация прокси пула
+
     logger.info("Инициализация proxy pool...")
     await proxy_pool.initialize()
-    
+
     stats = proxy_pool.get_stats()
     logger.info(f"Proxy pool готов: {stats}")
-    
-    # Проверка подключения к БД
+
     try:
         db = SessionLocal()
         db.execute(text("SELECT 1"))
@@ -213,7 +193,7 @@ async def startup():
     except Exception as e:
         logger.error(f"✗ Ошибка подключения к БД: {e}")
         raise
-    
+
     logger.info("=" * 70)
     logger.info("Scheduler готов к работе")
     logger.info("=" * 70)
@@ -226,25 +206,19 @@ async def main():
     try:
         await startup()
 
-        # Читаем интервал из БД
         _current_interval_minutes = _read_interval_from_db()
         logger.info(f"Интервал репрайсера из БД: {_current_interval_minutes} мин.")
 
-        # Настройка планировщика
         _scheduler = setup_scheduler(_current_interval_minutes)
-
-        # Запуск планировщика
         _scheduler.start()
-        logger.info("Планировщик запущен. Ожидание задач...")
+        logger.info("Планировщик запущен. Задачи отправляются в Celery.")
 
-        # Бесконечный цикл — каждые 60 сек проверяем изменение интервала в БД
         while True:
             await asyncio.sleep(60)
             new_interval = _read_interval_from_db()
             if new_interval != _current_interval_minutes:
                 logger.info(
-                    f"Интервал изменён в БД: {_current_interval_minutes} → {new_interval} мин. "
-                    f"Немедленное перепланирование..."
+                    f"Интервал изменён в БД: {_current_interval_minutes} → {new_interval} мин."
                 )
                 _current_interval_minutes = new_interval
                 _scheduler.reschedule_job(

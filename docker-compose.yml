@@ -14,7 +14,7 @@ services:
       -c effective_cache_size=1GB
       -c work_mem=4MB
       -c maintenance_work_mem=64MB
-      -c max_connections=50
+      -c max_connections=100
       -c checkpoint_completion_target=0.9
       -c wal_buffers=16MB
       -c default_statistics_target=100
@@ -24,7 +24,16 @@ services:
     restart: unless-stopped
     networks:
       - wb_network
-    # Блок ports убран. БД недоступна снаружи, только изнутри сети Докера.
+
+  redis:
+    image: redis:7-alpine
+    container_name: wb_repricer_redis
+    restart: unless-stopped
+    networks:
+      - wb_network
+    volumes:
+      - redis_data:/data
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
 
   backend:
     build:
@@ -33,6 +42,7 @@ services:
     container_name: wb_repricer_backend_prod
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-wb_repricer}
+      REDIS_URL: redis://redis:6379/0
       JWT_SECRET: ${JWT_SECRET}
       JWT_ALGORITHM: HS256
       JWT_EXPIRE_HOURS: 24
@@ -48,10 +58,40 @@ services:
       SMTP_FROM: ${SMTP_FROM}
       APP_URL: ${APP_URL:-https://qvaz.quasar-x.ru}
     ports:
-      - "127.0.0.1:8000:8000" # Проброс только на локалхост сервера для Nginx
+      - "127.0.0.1:8000:8000"
     depends_on:
       - db
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
+      - redis
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    restart: unless-stopped
+    networks:
+      - wb_network
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: wb_repricer_celery
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-wb_repricer}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: HS256
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      SOCKS5_PROXIES: ${SOCKS5_PROXIES}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
+      APP_URL: ${APP_URL:-https://qvaz.quasar-x.ru}
+    depends_on:
+      - db
+      - redis
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=4
     restart: unless-stopped
     networks:
       - wb_network
@@ -63,6 +103,7 @@ services:
     container_name: wb_repricer_scheduler_prod
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-wb_repricer}
+      REDIS_URL: redis://redis:6379/0
       BACKEND_URL: http://backend:8000
       JWT_SECRET: ${JWT_SECRET}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
@@ -70,6 +111,7 @@ services:
       SOCKS5_PROXIES: ${SOCKS5_PROXIES}
     depends_on:
       - backend
+      - redis
     volumes:
       - ./backend:/backend
     command: python scheduler.py
@@ -83,11 +125,9 @@ services:
       dockerfile: Dockerfile
     container_name: wb_repricer_frontend_prod
     environment:
-      # Nginx будет направлять запросы с /api на бэкенд, поэтому обращаемся к себе же
-      VITE_API_URL: https://qvaz.quasar-x.ru 
+      VITE_API_URL: https://qvaz.quasar-x.ru
     ports:
-      - "127.0.0.1:5173:5173" # Проброс только на локалхост сервера для Nginx
-    # Собираем статику и запускаем через preview для продакшена
+      - "127.0.0.1:5173:5173"
     command: sh -c "npm run build && npm run preview -- --host 0.0.0.0 --port 5173"
     restart: unless-stopped
     networks:
@@ -95,6 +135,7 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
 
 networks:
   wb_network:

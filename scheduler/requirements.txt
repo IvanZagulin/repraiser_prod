@@ -1,4 +1,5 @@
 apscheduler==3.10.4
+celery[redis]==5.3.6
 sqlalchemy==2.0.25
 psycopg2-binary==2.9.9
 httpx==0.25.2

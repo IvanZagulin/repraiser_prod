@@ -1,5 +1,5 @@
 from typing import Annotated, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
@@ -28,25 +28,20 @@ def _user_product_ids(db: Session, user_id: int, seller_skus: Optional[List[str]
     return [p.id for p in q.all()]
 
 
-async def run_repricer_task(product_ids: Optional[List[int]], run_type: str, db: Session):
-    engine = RepricerEngine(db)
-    await engine.run_repricer(product_ids=product_ids, run_type=run_type)
-
-
 @router.post("/run", response_model=RepricerRunResponse)
 async def manual_run(
     request: ManualRunRequest,
-    background_tasks: BackgroundTasks,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ):
-    """Ручной запуск репрайсера (асинхронный)"""
+    """Ручной запуск репрайсера (через Celery — не блокирует API)"""
     product_ids = _user_product_ids(db, current_user.id, request.seller_skus or None)
 
     if not product_ids:
         raise HTTPException(status_code=404, detail="No products found")
 
-    background_tasks.add_task(run_repricer_task, product_ids=product_ids, run_type="manual", db=db)
+    from app.tasks.repricer_task import run_repricer_for_user
+    run_repricer_for_user.delay(current_user.id, product_ids, "manual")
 
     return {
         "id": 0,
@@ -105,7 +100,6 @@ async def fetch_prices(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Получить текущие цены с WB и сохранить снимки (без изменения цен)."""
-    # Собираем ID продуктов только текущего пользователя
     product_ids = _user_product_ids(db, current_user.id)
     engine = RepricerEngine(db)
     result = await engine.fetch_price_snapshots(product_ids=product_ids)

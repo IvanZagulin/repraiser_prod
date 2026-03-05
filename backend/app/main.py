@@ -226,7 +226,21 @@ async def startup_db_migration():
 
         conn.commit()
 
-        # 5. Seed admin user if no users exist
+        # 5. Performance indexes
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_products_account_id ON products(account_id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_price_snapshots_product_snapshot "
+            "ON price_snapshots(product_id, snapshot_at DESC)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_repricer_runs_status_started "
+            "ON repricer_runs(status, started_at DESC)"
+        ))
+        conn.commit()
+
+        # 6. Seed admin user if no users exist
         count = conn.execute(text("SELECT COUNT(*) FROM users")).scalar()
         if count == 0:
             hashed = pwd.hash(settings.ADMIN_PASSWORD)
