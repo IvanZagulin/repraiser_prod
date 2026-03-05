@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     # Redis / Celery
     REDIS_URL: str = "redis://redis:6379/0"
 
+    # Sentry (опционально — оставь пустым чтобы отключить)
+    SENTRY_DSN: Optional[str] = None
+
     # SMTP (для приветственных писем)
     SMTP_HOST: str = "smtp.yandex.ru"
     SMTP_PORT: int = 465

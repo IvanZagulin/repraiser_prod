@@ -8,6 +8,15 @@ from slowapi.errors import RateLimitExceeded
 from app.config import settings
 from app.api import auth, accounts, products, repricer, export, settings as settings_api
 
+# Sentry — инициализируем до создания app
+if settings.SENTRY_DSN:
+    import sentry_sdk
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        traces_sample_rate=0.1,   # 10% транзакций для performance monitoring
+        environment="production",
+    )
+
 # Rate limiter — ключ по IP
 limiter = Limiter(key_func=get_remote_address)
 

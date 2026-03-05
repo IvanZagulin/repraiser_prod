@@ -119,6 +119,27 @@ services:
     networks:
       - wb_network
 
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: wb_repricer_flower
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-wb_repricer}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: HS256
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+    ports:
+      - "127.0.0.1:5555:5555"
+    depends_on:
+      - redis
+    command: celery -A app.celery_app flower --port=5555 --basic_auth=${ADMIN_EMAIL}:${ADMIN_PASSWORD}
+    restart: unless-stopped
+    networks:
+      - wb_network
+
   frontend:
     build:
       context: ./frontend

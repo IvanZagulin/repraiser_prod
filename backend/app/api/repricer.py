@@ -28,6 +28,33 @@ def _user_product_ids(db: Session, user_id: int, seller_skus: Optional[List[str]
     return [p.id for p in q.all()]
 
 
+def _build_change_responses(db: Session, changes: list) -> list:
+    """Строит список PriceChangeResponse за 1 запрос вместо N (fix N+1)."""
+    if not changes:
+        return []
+    product_ids = list({c.product_id for c in changes})
+    product_map = {
+        p.id: p for p in db.query(Product).filter(Product.id.in_(product_ids)).all()
+    }
+    result = []
+    for change in changes:
+        product = product_map.get(change.product_id)
+        result.append(PriceChangeResponse(
+            id=change.id,
+            product_id=change.product_id,
+            seller_sku=product.seller_sku if product else None,
+            product_name=product.name if product else None,
+            old_seller_price=change.old_seller_price,
+            old_final_price=change.old_final_price,
+            new_seller_price=change.new_seller_price,
+            new_final_price=change.new_final_price,
+            reason_code=change.reason_code,
+            reason_message=change.reason_message,
+            changed_at=change.changed_at,
+        ))
+    return result
+
+
 @router.post("/run", response_model=RepricerRunResponse)
 async def manual_run(
     request: ManualRunRequest,
@@ -72,25 +99,8 @@ async def manual_run_sync(
     run = await engine.run_repricer(product_ids=product_ids, run_type="manual")
 
     changes = db.query(PriceChange).filter(PriceChange.run_id == run.id).all()
-    change_responses = []
-    for change in changes:
-        product = db.query(Product).filter(Product.id == change.product_id).first()
-        change_responses.append(PriceChangeResponse(
-            id=change.id,
-            product_id=change.product_id,
-            seller_sku=product.seller_sku,
-            product_name=product.name,
-            old_seller_price=change.old_seller_price,
-            old_final_price=change.old_final_price,
-            new_seller_price=change.new_seller_price,
-            new_final_price=change.new_final_price,
-            reason_code=change.reason_code,
-            reason_message=change.reason_message,
-            changed_at=change.changed_at,
-        ))
-
     response = RepricerRunResponse.model_validate(run)
-    response.changes = change_responses
+    response.changes = _build_change_responses(db, changes)
     return response
 
 
@@ -143,22 +153,6 @@ async def get_run(
 
     if include_changes:
         changes = db.query(PriceChange).filter(PriceChange.run_id == run_id).all()
-        change_responses = []
-        for change in changes:
-            product = db.query(Product).filter(Product.id == change.product_id).first()
-            change_responses.append(PriceChangeResponse(
-                id=change.id,
-                product_id=change.product_id,
-                seller_sku=product.seller_sku,
-                product_name=product.name,
-                old_seller_price=change.old_seller_price,
-                old_final_price=change.old_final_price,
-                new_seller_price=change.new_seller_price,
-                new_final_price=change.new_final_price,
-                reason_code=change.reason_code,
-                reason_message=change.reason_message,
-                changed_at=change.changed_at,
-            ))
-        response.changes = change_responses
+        response.changes = _build_change_responses(db, changes)
 
     return response
