@@ -20,8 +20,14 @@ export default function Login() {
       loginStore(response.data.access_token);
       toast.success('Добро пожаловать!');
       navigate('/');
-    } catch {
-      toast.error('Неверный email или пароль');
+    } catch (err) {
+      const detail = err.response?.data?.detail;
+      if (detail === 'Email не подтверждён') {
+        toast.error('Сначала подтвердите email');
+        navigate('/verify-email', { state: { email: email.trim().toLowerCase() } });
+      } else {
+        toast.error('Неверный email или пароль');
+      }
     } finally {
       setLoading(false);
     }
@@ -199,6 +205,17 @@ export default function Login() {
           <p style={{
             textAlign: 'center', fontSize: '0.6875rem',
             color: '#555577', letterSpacing: '0.05em',
+          }}>
+            <Link
+              to="/forgot-password"
+              style={{ color: '#7c3aed', textDecoration: 'none', fontWeight: 600 }}
+            >
+              Забыли пароль?
+            </Link>
+          </p>
+          <p style={{
+            textAlign: 'center', fontSize: '0.6875rem',
+            color: '#555577', letterSpacing: '0.05em', marginTop: '0.5rem',
           }}>
             Нет аккаунта?{' '}
             <Link

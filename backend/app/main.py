@@ -100,6 +100,28 @@ async def startup_db_migration():
             "CREATE INDEX IF NOT EXISTS ix_users_email ON users(email)"
         ))
 
+        # 1b. Email verification & password reset columns
+        conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+            "is_verified BOOLEAN NOT NULL DEFAULT TRUE"
+        ))
+        conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+            "verification_code VARCHAR(6)"
+        ))
+        conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+            "verification_code_expires_at TIMESTAMP"
+        ))
+        conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+            "reset_code VARCHAR(6)"
+        ))
+        conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+            "reset_code_expires_at TIMESTAMP"
+        ))
+
         # 2. accounts.user_id FK
         conn.execute(text(
             "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS "

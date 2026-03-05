@@ -18,7 +18,15 @@
       "Bash(curl -sD - http://localhost:8000/api/health)",
       "Bash(docker-compose logs --tail=15 frontend)",
       "WebFetch(domain:quasar-x.ru)",
-      "Bash(docker compose up -d --build)"
+      "Bash(docker compose up -d --build)",
+      "Bash(git add backend/app/models/user.py backend/app/services/email_service.py frontend/src/pages/RegisterPage.jsx backend/app/api/accounts.py backend/app/api/auth.py backend/app/api/products.py backend/app/api/repricer.py backend/app/api/settings.py backend/app/config.py backend/app/main.py backend/app/models/__init__.py backend/app/models/account.py backend/app/models/app_setting.py backend/app/schemas/auth.py backend/app/services/repricer_engine.py frontend/src/App.jsx frontend/src/api/client.js frontend/src/pages/Login.jsx frontend/src/store/index.js scheduler/scheduler.py)",
+      "Bash(git commit:*)",
+      "Bash(git push origin main)",
+      "Bash(git add backend/app/main.py)",
+      "Bash(git add backend/app/services/email_service.py)",
+      "Bash(git add backend/app/api/auth.py)",
+      "Bash(git add docker-compose.yml)",
+      "Bash(git add -A)"
     ]
   }
 }

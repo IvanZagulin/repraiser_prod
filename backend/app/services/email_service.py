@@ -123,10 +123,102 @@ def send_welcome_email(to_email: str) -> bool:
             server.sendmail(msg["From"], to_email, msg.as_string())
 
         logger.info(f"Welcome email отправлен на {to_email}")
-        print(f"[EMAIL] ✅ Welcome email отправлен на {to_email}", flush=True)
         return True
 
     except Exception as e:
         logger.warning(f"Не удалось отправить email на {to_email}: {e}")
-        print(f"[EMAIL] FAIL {to_email}: {e}", flush=True)
-        return str(e)
+        return False
+
+
+def _send_code_email(to_email: str, subject: str, title: str, subtitle: str, code: str, footer: str) -> bool:
+    """Базовая функция отправки письма с 6-значным кодом."""
+    if not settings.SMTP_USER or not settings.SMTP_PASS:
+        logger.info(f"SMTP не настроен, пропускаем {subject} для {to_email}")
+        return False
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = settings.SMTP_FROM or settings.SMTP_USER
+        msg["To"] = to_email
+
+        html = f"""
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#0f0f1a;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center" style="padding:40px 20px;">
+        <table width="560" cellpadding="0" cellspacing="0"
+               style="background:linear-gradient(135deg,#1a1a2e,#16213e);
+                      border-radius:16px;border:1px solid #00f0ff22;overflow:hidden;">
+          <tr>
+            <td align="center" style="padding:32px 40px 24px;">
+              <div style="font-size:28px;font-weight:900;letter-spacing:2px;
+                          color:#00f0ff;">QUASAR-X</div>
+              <div style="color:#6b7280;font-size:12px;letter-spacing:3px;margin-top:4px;">
+                REPRICER</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 40px 32px;">
+              <h1 style="color:#f9fafb;font-size:22px;margin:0 0 12px;">{title}</h1>
+              <p style="color:#9ca3af;font-size:15px;line-height:1.6;margin:0 0 24px;">{subtitle}</p>
+              <div style="text-align:center;padding:28px 20px;background:#ffffff0a;
+                          border-radius:12px;margin:0 0 24px;">
+                <span style="font-family:monospace;font-size:40px;font-weight:900;
+                             letter-spacing:10px;color:#00f0ff;">{code}</span>
+              </div>
+              <p style="color:#6b7280;font-size:13px;text-align:center;margin:0 0 8px;">
+                {footer}
+              </p>
+              <p style="color:#4b5563;font-size:12px;text-align:center;margin:0;">
+                Это письмо отправлено автоматически. Не отвечайте на него.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+"""
+        msg.attach(MIMEText(html, "html", "utf-8"))
+
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, context=context) as server:
+            server.login(settings.SMTP_USER, settings.SMTP_PASS)
+            server.sendmail(msg["From"], to_email, msg.as_string())
+
+        logger.info(f"{subject} отправлен на {to_email}")
+        return True
+
+    except Exception as e:
+        logger.warning(f"Не удалось отправить {subject} на {to_email}: {e}")
+        return False
+
+
+def send_verification_code(to_email: str, code: str) -> bool:
+    """Отправляет код подтверждения email при регистрации."""
+    return _send_code_email(
+        to_email=to_email,
+        subject="Код подтверждения — QUASAR-X",
+        title="Подтверждение email",
+        subtitle="Введите этот код на странице подтверждения:",
+        code=code,
+        footer="Код действителен 15 минут. Не передавайте его третьим лицам.",
+    )
+
+
+def send_reset_code(to_email: str, code: str) -> bool:
+    """Отправляет код сброса пароля."""
+    return _send_code_email(
+        to_email=to_email,
+        subject="Сброс пароля — QUASAR-X",
+        title="Сброс пароля",
+        subtitle="Вы запросили сброс пароля. Введите этот код:",
+        code=code,
+        footer="Код действителен 15 минут. Если вы не запрашивали сброс — проигнорируйте письмо.",
+    )

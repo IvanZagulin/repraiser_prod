@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { register } from '../api/client';
-import { useAuthStore } from '../store';
 
 export default function RegisterPage() {
   const [email, setEmail]       = useState('');
@@ -10,8 +9,7 @@ export default function RegisterPage() {
   const [confirm, setConfirm]   = useState('');
   const [loading, setLoading]   = useState(false);
 
-  const navigate   = useNavigate();
-  const loginStore = useAuthStore((state) => state.login);
+  const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -25,10 +23,9 @@ export default function RegisterPage() {
     }
     setLoading(true);
     try {
-      const response = await register(email, password);
-      loginStore(response.data.access_token);
-      toast.success('Аккаунт создан! Добро пожаловать 🚀');
-      navigate('/');
+      await register(email, password);
+      toast.success('Код подтверждения отправлен на ваш email');
+      navigate('/verify-email', { state: { email: email.trim().toLowerCase() } });
     } catch (err) {
       const detail = err.response?.data?.detail;
       toast.error(detail || 'Ошибка регистрации');

@@ -43,6 +43,18 @@ export const register = (email, password) =>
 export const verifyToken = () =>
   api.get('/api/auth/verify');
 
+export const verifyEmail = (email, code) =>
+  api.post('/api/auth/verify-email', { email, code });
+
+export const resendCode = (email) =>
+  api.post('/api/auth/resend-code', { email });
+
+export const forgotPassword = (email) =>
+  api.post('/api/auth/forgot-password', { email });
+
+export const resetPassword = (email, code, new_password) =>
+  api.post('/api/auth/reset-password', { email, code, new_password });
+
 // Accounts
 export const getAccounts = () =>
   api.get('/api/accounts');
