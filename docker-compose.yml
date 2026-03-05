@@ -62,6 +62,8 @@ services:
       SOCKS5_PROXIES: ${SOCKS5_PROXIES}
     depends_on:
       - backend
+    volumes:
+      - ./backend:/backend
     command: python scheduler.py
     restart: unless-stopped
     networks:
