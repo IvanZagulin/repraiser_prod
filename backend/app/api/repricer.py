@@ -68,7 +68,7 @@ async def manual_run(
         raise HTTPException(status_code=404, detail="No products found")
 
     from app.tasks.repricer_task import run_repricer_for_user
-    run_repricer_for_user.delay(current_user.id, product_ids, "manual")
+    run_repricer_for_user.delay(current_user.id, product_ids, "manual", request.dry_run)
 
     return {
         "id": 0,

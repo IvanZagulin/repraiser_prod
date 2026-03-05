@@ -7,6 +7,7 @@ from decimal import Decimal
 class ManualRunRequest(BaseModel):
     """Схема запроса ручного запуска репрайсера"""
     seller_skus: Optional[List[str]] = Field(None, description="Список артикулов продавца. Если не указан — запуск по всем активным товарам")
+    dry_run: bool = Field(False, description="Если True — пропускает реальные вызовы WB API (для нагрузочного тестирования)")
 
 
 class PriceChangeResponse(BaseModel):

@@ -1,5 +1,7 @@
 import asyncio
+import json
 import logging
+import time
 from types import SimpleNamespace
 from typing import Optional, Dict, List, Tuple
 from decimal import Decimal, ROUND_UP
@@ -525,43 +527,65 @@ class RepricerEngine:
     async def process_product(
         self,
         product: Product,
-        run: RepricerRun
+        run: RepricerRun,
+        dry_run: bool = False,
     ) -> str:
         """
         Обработка одного товара
-        
+
         Returns:
             reason_code (UPDATED, NO_CHANGE, SKIPPED_*, etc)
         """
+        _t0 = time.monotonic()
         logger.info(f"Обработка товара: {product.seller_sku} (nm_id={product.nm_id})")
-        
+
         # Получаем конфигурацию
         config = product.config
         if not config or not config.is_active:
             logger.info(f"Репрайсер отключен для {product.seller_sku}")
-            return "SKIPPED_INACTIVE"
-        
+            _reason = "SKIPPED_INACTIVE"
+            logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": _reason, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
+            return _reason
+
         # Проверка min_price (обязательное поле)
         if config.min_price is None:
             logger.error(f"min_price не установлен для {product.seller_sku}")
-            return "SKIPPED_INACTIVE"
-        
+            _reason = "SKIPPED_INACTIVE"
+            logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": _reason, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
+            return _reason
+
         # Получаем аккаунт
         account = product.account
         if not account or not account.is_active:
             logger.warning(f"Аккаунт неактивен для {product.seller_sku}")
-            return "SKIPPED_INACTIVE"
-        
-        # Проверяем токен
-        if is_token_expired(account.wb_api_token):
-            logger.error(f"Токен истек для аккаунта {account.name}")
-            await telegram_notifier.notify_token_expired(account.name, account.id)
-            return "WB_API_ERROR"
-        
-        # Получаем текущие данные
-        current_data = await self._get_current_price_data(product, account)
-        if not current_data:
-            return "PARSE_ERROR"
+            _reason = "SKIPPED_INACTIVE"
+            logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": _reason, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
+            return _reason
+
+        if dry_run:
+            # В dry_run режиме пропускаем все внешние вызовы
+            current_data = {
+                'seller_price': Decimal(str(config.min_price or 1000)) + Decimal('50'),
+                'final_price': Decimal(str(config.min_price or 1000)),
+                'spp': Decimal('10'),
+                'is_in_promo': False,
+                'total_quantity': 5,
+            }
+        else:
+            # Проверяем токен
+            if is_token_expired(account.wb_api_token):
+                logger.error(f"Токен истек для аккаунта {account.name}")
+                await telegram_notifier.notify_token_expired(account.name, account.id)
+                _reason = "WB_API_ERROR"
+                logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": _reason, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
+                return _reason
+
+            # Получаем текущие данные
+            current_data = await self._get_current_price_data(product, account)
+            if not current_data:
+                _reason = "PARSE_ERROR"
+                logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": _reason, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
+                return _reason
         
         # Загружаем скидку кошелька из глобальных настроек
         wallet_row = self.db.query(AppSetting).filter(
@@ -603,9 +627,12 @@ class RepricerEngine:
             )
             return "NO_CHANGE"
         
-        # Обновляем цену в WB
-        success = await self._update_price_in_wb(product, account, final_new_price)
-        
+        # Обновляем цену в WB (в dry_run пропускаем реальный вызов)
+        if dry_run:
+            success = True
+        else:
+            success = await self._update_price_in_wb(product, account, final_new_price)
+
         if success:
             # Рассчитываем новую финальную цену
             if current_data.get('spp'):
@@ -625,13 +652,16 @@ class RepricerEngine:
                 limit_reason if limit_reason != "UPDATED" else "UPDATED",
                 f"{reason_msg}. Цена применена: {final_new_price}₽"
             )
-            return limit_reason if limit_reason != "UPDATED" else "UPDATED"
+            _reason = limit_reason if limit_reason != "UPDATED" else "UPDATED"
+            logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": _reason, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
+            return _reason
         else:
             self._save_price_snapshot(product, current_data)
             self._save_price_change(
                 run, product, current_data, final_new_price, None,
                 "WB_API_ERROR", "Не удалось применить цену в WB API"
             )
+            logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": "WB_API_ERROR", "duration_ms": int((time.monotonic() - _t0) * 1000)}))
             return "WB_API_ERROR"
     
     async def fetch_price_snapshots(
@@ -685,20 +715,23 @@ class RepricerEngine:
     async def run_repricer(
         self,
         product_ids: Optional[List[int]] = None,
-        run_type: str = "scheduled"
+        run_type: str = "scheduled",
+        dry_run: bool = False,
     ) -> RepricerRun:
         """
         Запуск репрайсера
-        
+
         Args:
             product_ids: Список ID товаров (None = все активные)
             run_type: Тип запуска (scheduled или manual)
-            
+            dry_run: Если True — пропускает реальные вызовы WB API (нагрузочное тестирование)
+
         Returns:
             RepricerRun запись с результатами
         """
-        logger.info(f"Запуск репрайсера (тип: {run_type})")
-        
+        _run_start = time.monotonic()
+        logger.info(f"Запуск репрайсера (тип: {run_type}, dry_run={dry_run})")
+
         # Создаем запись о прогоне
         run = RepricerRun(
             run_type=run_type,
@@ -707,55 +740,76 @@ class RepricerEngine:
         )
         self.db.add(run)
         self.db.commit()
-        
+
         try:
             # Получаем товары для обработки
             query = select(Product).join(ProductConfig).filter(
                 ProductConfig.is_active == True
             )
-            
+
             if product_ids:
                 query = query.filter(Product.id.in_(product_ids))
-            
+
             products = self.db.execute(query).scalars().all()
-            
+
             logger.info(f"Найдено {len(products)} товаров для обработки")
             run.total_products = len(products)
             self.db.commit()
-            
+
+            logger.info("METRIC " + json.dumps({
+                "metric": "run_start",
+                "run_id": run.id,
+                "total": len(products),
+                "run_type": run_type,
+                "dry_run": dry_run,
+            }))
+
             # Обрабатываем товары
             results = {'updated': 0, 'skipped': 0, 'errors': 0}
-            
+
             for product in products:
                 try:
-                    reason_code = await self.process_product(product, run)
-                    
+                    reason_code = await self.process_product(product, run, dry_run=dry_run)
+
                     if reason_code in ['UPDATED', 'CLAMPED_TO_MIN', 'CLAMPED_TO_MAX']:
                         results['updated'] += 1
                     elif reason_code in ['SKIPPED_PROMO', 'SKIPPED_INACTIVE', 'NO_CHANGE', 'COMPETITOR_OOS']:
                         results['skipped'] += 1
                     else:
                         results['errors'] += 1
-                    
+
                     self.db.commit()
-                    
+
                 except Exception as e:
                     logger.error(f"Ошибка обработки товара {product.seller_sku}: {e}", exc_info=True)
                     results['errors'] += 1
                     self.db.rollback()
-            
+
             # Обновляем статус прогона
+            _duration_ms = int((time.monotonic() - _run_start) * 1000)
             run.updated_count = results['updated']
             run.skipped_count = results['skipped']
             run.error_count = results['errors']
             run.status = "completed"
             run.completed_at = datetime.utcnow()
             self.db.commit()
-            
+
             logger.info(
                 f"Репрайсер завершен: обновлено={results['updated']}, "
                 f"пропущено={results['skipped']}, ошибок={results['errors']}"
             )
+            logger.info("METRIC " + json.dumps({
+                "metric": "run_complete",
+                "run_id": run.id,
+                "total": run.total_products,
+                "updated": results['updated'],
+                "skipped": results['skipped'],
+                "errors": results['errors'],
+                "duration_ms": _duration_ms,
+                "run_type": run_type,
+                "dry_run": dry_run,
+                "products_per_sec": round(run.total_products / (_duration_ms / 1000), 2) if _duration_ms > 0 else 0,
+            }))
             
             return run
             
