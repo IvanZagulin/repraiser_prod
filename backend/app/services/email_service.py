@@ -123,8 +123,10 @@ def send_welcome_email(to_email: str) -> bool:
             server.sendmail(msg["From"], to_email, msg.as_string())
 
         logger.info(f"Welcome email отправлен на {to_email}")
+        print(f"[EMAIL] ✅ Welcome email отправлен на {to_email}", flush=True)
         return True
 
     except Exception as e:
         logger.warning(f"Не удалось отправить email на {to_email}: {e}")
+        print(f"[EMAIL] ❌ Ошибка отправки на {to_email}: {e}", flush=True)
         return False
