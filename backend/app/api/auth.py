@@ -2,10 +2,12 @@ import random
 import string
 from datetime import datetime, timedelta
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Request, status, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -20,6 +22,10 @@ from app.schemas.auth import (
 router = APIRouter()
 security = HTTPBearer()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+limiter = Limiter(key_func=get_remote_address)
+
+# Максимум неудачных попыток ввода кода до инвалидации
+MAX_CODE_ATTEMPTS = 5
 
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
@@ -79,13 +85,15 @@ async def get_current_user(
 # ─── endpoints ────────────────────────────────────────────────────────────────
 
 @router.post("/register", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("5/minute")
 async def register(
-    request: RegisterRequest,
+    request: Request,
+    body: RegisterRequest,
     background_tasks: BackgroundTasks,
     db: Annotated[Session, Depends(get_db)],
 ):
     """Регистрация нового пользователя — отправляет код подтверждения на email."""
-    existing = db.query(User).filter(User.email == request.email.lower()).first()
+    existing = db.query(User).filter(User.email == body.email.lower()).first()
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -96,13 +104,14 @@ async def register(
     expires_at = datetime.utcnow() + timedelta(minutes=15)
 
     user = User(
-        email=request.email.lower().strip(),
-        password_hash=hash_password(request.password),
+        email=body.email.lower().strip(),
+        password_hash=hash_password(body.password),
         is_active=True,
         is_admin=False,
         is_verified=False,
         verification_code=code,
         verification_code_expires_at=expires_at,
+        verification_attempts=0,
     )
     db.add(user)
     db.commit()
@@ -112,7 +121,7 @@ async def register(
 
     # Код подтверждения — синхронно (нужен сразу)
     from app.services.email_service import send_verification_code, send_welcome_email
-    send_verification_code(user.email, code)
+    send_verification_code(body.email.lower().strip(), code)
 
     # Welcome email — в фоне
     background_tasks.add_task(send_welcome_email, user.email)
@@ -121,27 +130,38 @@ async def register(
 
 
 @router.post("/verify-email", response_model=TokenResponse)
+@limiter.limit("10/minute")
 async def verify_email(
-    request: VerifyEmailRequest,
+    request: Request,
+    body: VerifyEmailRequest,
     db: Annotated[Session, Depends(get_db)],
 ):
     """Подтверждение email по 6-значному коду → возвращает JWT."""
-    user = db.query(User).filter(User.email == request.email.lower()).first()
+    user = db.query(User).filter(User.email == body.email.lower()).first()
     if not user:
         raise HTTPException(status_code=400, detail="Неверный email или код")
 
     if user.is_verified:
         raise HTTPException(status_code=400, detail="Email уже подтверждён")
 
-    if not user.verification_code or user.verification_code != request.code:
-        raise HTTPException(status_code=400, detail="Неверный код подтверждения")
-
-    if user.verification_code_expires_at < datetime.utcnow():
+    if user.verification_code_expires_at and user.verification_code_expires_at < datetime.utcnow():
         raise HTTPException(status_code=400, detail="Код истёк. Запросите новый")
+
+    if not user.verification_code or user.verification_code != body.code:
+        user.verification_attempts = (user.verification_attempts or 0) + 1
+        if user.verification_attempts >= MAX_CODE_ATTEMPTS:
+            user.verification_code = None
+            user.verification_code_expires_at = None
+            user.verification_attempts = 0
+            db.commit()
+            raise HTTPException(status_code=400, detail="Превышено число попыток. Запросите новый код")
+        db.commit()
+        raise HTTPException(status_code=400, detail=f"Неверный код. Осталось попыток: {MAX_CODE_ATTEMPTS - user.verification_attempts}")
 
     user.is_verified = True
     user.verification_code = None
     user.verification_code_expires_at = None
+    user.verification_attempts = 0
     db.commit()
 
     token = create_access_token(user)
@@ -153,12 +173,14 @@ async def verify_email(
 
 
 @router.post("/resend-code", response_model=MessageResponse)
+@limiter.limit("3/minute")
 async def resend_code(
-    request: ResendCodeRequest,
+    request: Request,
+    body: ResendCodeRequest,
     db: Annotated[Session, Depends(get_db)],
 ):
     """Повторная отправка кода подтверждения email."""
-    user = db.query(User).filter(User.email == request.email.lower()).first()
+    user = db.query(User).filter(User.email == body.email.lower()).first()
 
     if not user or user.is_verified:
         return MessageResponse(message="Если аккаунт существует и не подтверждён, код отправлен")
@@ -166,6 +188,7 @@ async def resend_code(
     code = generate_code()
     user.verification_code = code
     user.verification_code_expires_at = datetime.utcnow() + timedelta(minutes=15)
+    user.verification_attempts = 0
     db.commit()
 
     from app.services.email_service import send_verification_code
@@ -175,14 +198,16 @@ async def resend_code(
 
 
 @router.post("/login", response_model=TokenResponse)
+@limiter.limit("10/minute")
 async def login(
-    request: LoginRequest,
+    request: Request,
+    body: LoginRequest,
     db: Annotated[Session, Depends(get_db)],
 ):
     """Вход в систему."""
-    user = db.query(User).filter(User.email == request.email.lower()).first()
+    user = db.query(User).filter(User.email == body.email.lower()).first()
 
-    if not user or not verify_password(request.password, user.password_hash):
+    if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Неверный email или пароль",
@@ -208,12 +233,14 @@ async def login(
 
 
 @router.post("/forgot-password", response_model=MessageResponse)
+@limiter.limit("3/minute")
 async def forgot_password(
-    request: ForgotPasswordRequest,
+    request: Request,
+    body: ForgotPasswordRequest,
     db: Annotated[Session, Depends(get_db)],
 ):
     """Отправляет код сброса пароля на email."""
-    user = db.query(User).filter(User.email == request.email.lower()).first()
+    user = db.query(User).filter(User.email == body.email.lower()).first()
 
     if not user:
         return MessageResponse(message="Если аккаунт существует, код отправлен на email")
@@ -221,6 +248,7 @@ async def forgot_password(
     code = generate_code()
     user.reset_code = code
     user.reset_code_expires_at = datetime.utcnow() + timedelta(minutes=15)
+    user.reset_attempts = 0
     db.commit()
 
     from app.services.email_service import send_reset_code
@@ -230,24 +258,35 @@ async def forgot_password(
 
 
 @router.post("/reset-password", response_model=TokenResponse)
+@limiter.limit("10/minute")
 async def reset_password(
-    request: ResetPasswordRequest,
+    request: Request,
+    body: ResetPasswordRequest,
     db: Annotated[Session, Depends(get_db)],
 ):
     """Сброс пароля по коду → автологин (возвращает JWT)."""
-    user = db.query(User).filter(User.email == request.email.lower()).first()
+    user = db.query(User).filter(User.email == body.email.lower()).first()
     if not user:
         raise HTTPException(status_code=400, detail="Неверный email или код")
 
-    if not user.reset_code or user.reset_code != request.code:
-        raise HTTPException(status_code=400, detail="Неверный код сброса")
+    if not user.reset_code or user.reset_code != body.code:
+        user.reset_attempts = (user.reset_attempts or 0) + 1
+        if user.reset_attempts >= MAX_CODE_ATTEMPTS:
+            user.reset_code = None
+            user.reset_code_expires_at = None
+            user.reset_attempts = 0
+            db.commit()
+            raise HTTPException(status_code=400, detail="Превышено число попыток. Запросите новый код")
+        db.commit()
+        raise HTTPException(status_code=400, detail=f"Неверный код. Осталось попыток: {MAX_CODE_ATTEMPTS - user.reset_attempts}")
 
     if user.reset_code_expires_at < datetime.utcnow():
         raise HTTPException(status_code=400, detail="Код истёк. Запросите новый")
 
-    user.password_hash = hash_password(request.new_password)
+    user.password_hash = hash_password(body.new_password)
     user.reset_code = None
     user.reset_code_expires_at = None
+    user.reset_attempts = 0
     user.is_verified = True  # На случай если не был верифицирован
     db.commit()
 

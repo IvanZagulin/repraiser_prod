@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, SmallInteger
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -19,10 +19,12 @@ class User(Base):
     # Email verification
     verification_code            = Column(String(6), nullable=True)
     verification_code_expires_at = Column(DateTime, nullable=True)
+    verification_attempts        = Column(Integer, default=0, nullable=False)
 
     # Password reset
     reset_code            = Column(String(6), nullable=True)
     reset_code_expires_at = Column(DateTime, nullable=True)
+    reset_attempts        = Column(Integer, default=0, nullable=False)
 
     # Relationships
     accounts = relationship("Account", back_populates="user", cascade="all, delete-orphan")

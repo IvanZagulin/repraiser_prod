@@ -1,8 +1,15 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from app.config import settings
 from app.api import auth, accounts, products, repricer, export, settings as settings_api
+
+# Rate limiter — ключ по IP
+limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(
     title="WB Repricer API",
@@ -21,6 +28,10 @@ ALLOWED_ORIGINS = [
     "https://qvaz.quasar-x.ru",
     "http://qvaz.quasar-x.ru",
 ]
+
+# Rate limiter
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -120,6 +131,14 @@ async def startup_db_migration():
         conn.execute(text(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
             "reset_code_expires_at TIMESTAMP"
+        ))
+        conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+            "verification_attempts SMALLINT NOT NULL DEFAULT 0"
+        ))
+        conn.execute(text(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+            "reset_attempts SMALLINT NOT NULL DEFAULT 0"
         ))
 
         # 2. accounts.user_id FK
