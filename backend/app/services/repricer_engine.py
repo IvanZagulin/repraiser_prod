@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from types import SimpleNamespace
 from typing import Optional, Dict, List, Tuple
 from decimal import Decimal, ROUND_UP
 from datetime import datetime
@@ -15,6 +16,7 @@ from app.services import (
     catalog_parser, create_wb_client, telegram_notifier
 )
 from app.utils.jwt import is_token_expired
+from app.redis_client import cache_get, cache_set
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +70,27 @@ class RepricerEngine:
         seller_price = final_price / (1 - spp / 100)
         return Decimal(self._round_up(seller_price))
     
+    async def _cached_parse_product(self, nm_id: int):
+        """
+        Парсинг товара из WB Catalog API с кешированием в Redis (TTL=180с).
+        Снижает нагрузку на WB Catalog при прогоне по многим товарам.
+        """
+        cache_key = f"wb_catalog:{nm_id}"
+        cached = cache_get(cache_key)
+        if cached is not None:
+            return SimpleNamespace(
+                final_price=Decimal(str(cached['final_price'])),
+                spp=Decimal(str(cached['spp'])) if cached['spp'] is not None else None,
+                is_in_promo=cached['is_in_promo'],
+                total_quantity=cached['total_quantity'],
+                in_stock=cached['in_stock'],
+            )
+
+        product_data = await catalog_parser.parse_product(nm_id)
+        if product_data:
+            cache_set(cache_key, product_data.to_dict(), ttl=180)
+        return product_data
+
     async def _get_current_price_data(
         self,
         product: Product,
@@ -89,9 +112,9 @@ class RepricerEngine:
                 
                 price_data = prices[0]
                 
-                # Парсим текущую цену через catalog для получения СПП
-                catalog_product = await catalog_parser.parse_product(product.nm_id)
-                
+                # Парсим текущую цену через catalog для получения СПП (с Redis-кешем)
+                catalog_product = await self._cached_parse_product(product.nm_id)
+
                 if not catalog_product:
                     logger.warning(f"Не удалось спарсить nm_id={product.nm_id} из каталога")
                     return None
@@ -230,7 +253,7 @@ class RepricerEngine:
         prices: List[Tuple[int, Decimal, bool]] = []  # (nm_id, price, in_stock)
         for nm_id in nm_ids:
             try:
-                p = await catalog_parser.parse_product(nm_id)
+                p = await self._cached_parse_product(nm_id)
                 if p:
                     prices.append((nm_id, p.final_price, p.in_stock))
             except Exception as e:
