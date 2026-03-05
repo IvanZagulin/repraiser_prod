@@ -34,8 +34,11 @@ api.interceptors.response.use(
 );
 
 // Auth
-export const login = (username, password) =>
-  api.post('/api/auth/login', { username, password });
+export const login = (email, password) =>
+  api.post('/api/auth/login', { email, password });
+
+export const register = (email, password) =>
+  api.post('/api/auth/register', { email, password });
 
 export const verifyToken = () =>
   api.get('/api/auth/verify');

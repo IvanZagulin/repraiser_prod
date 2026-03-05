@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
@@ -9,6 +9,7 @@ class Account(Base):
     __tablename__ = "accounts"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     name = Column(String(255), nullable=False, comment="Название аккаунта")
     wb_api_token = Column(Text, nullable=False, comment="JWT токен WB API")
     token_expires_at = Column(DateTime, nullable=True, comment="Срок действия токена")
@@ -17,6 +18,7 @@ class Account(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
+    user = relationship("User", back_populates="accounts")
     products = relationship("Product", back_populates="account", cascade="all, delete-orphan")
 
     def __repr__(self):

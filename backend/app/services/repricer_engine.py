@@ -28,9 +28,10 @@ class RepricerEngine:
     2. Competitor - привязка к цене конкурента с заданным смещением
     """
     
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, user_id: Optional[int] = None):
         self.db = db
-    
+        self.user_id = user_id  # None → глобальные/дефолтные настройки
+
     def _round_up(self, value: Decimal) -> int:
         """
         Округление вверх до ближайшего целого рубля
@@ -350,24 +351,20 @@ class RepricerEngine:
             reason_code = "CLAMPED_TO_MAX"
             logger.info(f"Цена ограничена максимумом: {original_price}₽ → {new_price}₽")
 
-        # Проверка минимальной маржи (Margin Guard)
-        min_margin_row = self.db.query(AppSetting).filter(AppSetting.key == "min_margin_pct").first()
-        min_margin_pct = float(min_margin_row.value) if min_margin_row else 0.0
+        # Проверка минимальной маржи (Margin Guard) — per-user настройки
+        from app.api.settings import _get_setting as _gs_setting
+        uid = self.user_id
+        min_margin_pct = float(_gs_setting(self.db, "min_margin_pct", "0.0", uid))
 
         if min_margin_pct > 0 and config.product and config.product.cost_price:
             cost_price = float(config.product.cost_price)
             if cost_price > 0:
-                # Читаем настройки комиссий
-                def _gs(key, default):
-                    row = self.db.query(AppSetting).filter(AppSetting.key == key).first()
-                    return row.value if row else default
-
-                commission_type  = _gs("commission_type",  "pct")
-                commission_value = float(_gs("commission_value", "0.0"))
-                logistics_type   = _gs("logistics_type",   "rub")
-                logistics_value  = float(_gs("logistics_value",  "0.0"))
-                acquiring_type   = _gs("acquiring_type",   "pct")
-                acquiring_value  = float(_gs("acquiring_value",  "0.0"))
+                commission_type  = _gs_setting(self.db, "commission_type",  "pct", uid)
+                commission_value = float(_gs_setting(self.db, "commission_value", "0.0", uid))
+                logistics_type   = _gs_setting(self.db, "logistics_type",   "rub", uid)
+                logistics_value  = float(_gs_setting(self.db, "logistics_value",  "0.0", uid))
+                acquiring_type   = _gs_setting(self.db, "acquiring_type",   "pct", uid)
+                acquiring_value  = float(_gs_setting(self.db, "acquiring_value",  "0.0", uid))
 
                 sp = float(new_price)
                 fees = 0.0

@@ -1,10 +1,16 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 
 
 class LoginRequest(BaseModel):
     """Схема запроса на логин"""
-    username: str = Field(..., min_length=3, max_length=100)
+    email: str = Field(..., min_length=3, max_length=255)
     password: str = Field(..., min_length=6)
+
+
+class RegisterRequest(BaseModel):
+    """Схема запроса на регистрацию"""
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=6, max_length=128)
 
 
 class TokenResponse(BaseModel):
@@ -16,5 +22,7 @@ class TokenResponse(BaseModel):
 
 class TokenData(BaseModel):
     """Данные из JWT токена"""
-    username: str
+    user_id: int
+    email: str
+    is_admin: bool = False
     exp: int

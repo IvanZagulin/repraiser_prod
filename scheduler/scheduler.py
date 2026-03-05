@@ -37,15 +37,27 @@ _current_interval_minutes: int = 60
 
 
 def _read_interval_from_db() -> int:
-    """Читает интервал репрайсера из БД, возвращает 60 по умолчанию"""
+    """
+    Читает минимальный интервал из настроек всех пользователей.
+    Сначала пробует глобальный (user_id IS NULL), потом минимум по всем юзерам.
+    """
     try:
         db = SessionLocal()
         try:
+            # Глобальный дефолт
             row = db.execute(
-                text("SELECT value FROM app_settings WHERE key = 'repricer_interval_minutes'")
+                text("SELECT value FROM app_settings "
+                     "WHERE key = 'repricer_interval_minutes' AND user_id IS NULL")
             ).fetchone()
             if row:
                 return max(1, int(row[0]))
+            # Минимум среди всех пользователей
+            row = db.execute(
+                text("SELECT MIN(value::int) FROM app_settings "
+                     "WHERE key = 'repricer_interval_minutes'")
+            ).fetchone()
+            if row and row[0]:
+                return max(1, row[0])
         finally:
             db.close()
     except Exception as e:
@@ -55,54 +67,65 @@ def _read_interval_from_db() -> int:
 
 async def repricer_job():
     """
-    Задача репрайсера.
-    При каждом запуске проверяет актуальный интервал в БД
-    и перепланирует себя если он изменился.
+    Задача репрайсера: запускает репрайсер для каждого активного пользователя отдельно.
     """
     global _scheduler, _current_interval_minutes
 
     logger.info("=" * 70)
-    logger.info("Запуск автоматического репрайсера")
+    logger.info("Запуск автоматического репрайсера (multi-tenant)")
     logger.info("=" * 70)
 
-    # Проверяем, не изменился ли интервал
     new_interval = _read_interval_from_db()
     if new_interval != _current_interval_minutes and _scheduler is not None:
-        logger.info(
-            f"Интервал изменён: {_current_interval_minutes} → {new_interval} мин. "
-            f"Перепланирование задачи..."
-        )
+        logger.info(f"Интервал изменён: {_current_interval_minutes} → {new_interval} мин.")
         _current_interval_minutes = new_interval
-        _scheduler.reschedule_job(
-            'repricer_job',
-            trigger=IntervalTrigger(minutes=new_interval)
-        )
+        _scheduler.reschedule_job('repricer_job', trigger=IntervalTrigger(minutes=new_interval))
 
     db = SessionLocal()
 
     try:
-        # Инициализация прокси (если еще не инициализирован)
         if not proxy_pool._initialized:
             logger.info("Инициализация proxy pool...")
             await proxy_pool.initialize()
 
-        # Запускаем репрайсер
-        engine_inst = RepricerEngine(db)
-        run = await engine_inst.run_repricer(
-            product_ids=None,  # Все активные товары
-            run_type="scheduled"
-        )
+        # Получаем всех активных пользователей
+        users = db.execute(
+            text("SELECT id FROM users WHERE is_active = TRUE")
+        ).fetchall()
 
-        duration = (run.completed_at - run.started_at).total_seconds() if run.completed_at else 0
+        logger.info(f"Активных пользователей: {len(users)}")
 
-        logger.info("=" * 70)
-        logger.info(f"Прогон завершен: ID={run.id}")
-        logger.info(f"  Всего товаров: {run.total_products}")
-        logger.info(f"  Обновлено: {run.updated_count}")
-        logger.info(f"  Пропущено: {run.skipped_count}")
-        logger.info(f"  Ошибок: {run.error_count}")
-        logger.info(f"  Время выполнения: {duration:.1f}s")
-        logger.info("=" * 70)
+        for (user_id,) in users:
+            try:
+                # ID продуктов этого пользователя
+                product_rows = db.execute(
+                    text("""
+                        SELECT p.id FROM products p
+                        JOIN accounts a ON p.account_id = a.id
+                        WHERE a.user_id = :uid
+                    """),
+                    {"uid": user_id}
+                ).fetchall()
+                product_ids = [r[0] for r in product_rows]
+
+                if not product_ids:
+                    continue
+
+                logger.info(f"Пользователь {user_id}: {len(product_ids)} товаров")
+                engine_inst = RepricerEngine(db, user_id=user_id)
+                run = await engine_inst.run_repricer(
+                    product_ids=product_ids,
+                    run_type="scheduled"
+                )
+                duration = (run.completed_at - run.started_at).total_seconds() if run.completed_at else 0
+                logger.info(
+                    f"  user={user_id} run={run.id}: "
+                    f"обновлено={run.updated_count}, пропущено={run.skipped_count}, "
+                    f"ошибок={run.error_count}, время={duration:.1f}s"
+                )
+
+            except Exception as e:
+                logger.error(f"Ошибка репрайсера для user_id={user_id}: {e}", exc_info=True)
 
     except Exception as e:
         logger.error(f"Критическая ошибка в repricer_job: {e}", exc_info=True)
@@ -110,6 +133,8 @@ async def repricer_job():
 
     finally:
         db.close()
+
+    logger.info("=" * 70)
 
 
 async def health_check_proxies():

@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { useAuthStore } from './store';
 import Login from './pages/Login';
+import RegisterPage from './pages/RegisterPage';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import Products from './pages/Products';
@@ -37,6 +38,7 @@ function App() {
       
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<RegisterPage />} />
         
         <Route
           path="/"

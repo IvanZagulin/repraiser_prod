@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { login } from '../api/client';
 import { useAuthStore } from '../store';
 
 export default function Login() {
-  const [username, setUsername] = useState('');
+  const [email, setEmail]     = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading]   = useState(false);
 
@@ -16,12 +16,12 @@ export default function Login() {
     e.preventDefault();
     setLoading(true);
     try {
-      const response = await login(username, password);
+      const response = await login(email, password);
       loginStore(response.data.access_token);
       toast.success('Добро пожаловать!');
       navigate('/');
     } catch {
-      toast.error('Неверный логин или пароль');
+      toast.error('Неверный email или пароль');
     } finally {
       setLoading(false);
     }
@@ -105,20 +105,20 @@ export default function Login() {
         >
           <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
 
-            {/* Логин */}
+            {/* Email */}
             <div>
               <label style={{
                 display: 'block', fontSize: '0.6875rem', fontWeight: 700,
                 color: '#555577', marginBottom: '0.4rem',
                 letterSpacing: '0.14em', textTransform: 'uppercase',
               }}>
-                Логин
+                Email
               </label>
               <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Введите логин"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="your@email.com"
                 required
                 style={inputStyle}
                 onFocus={(e) => {
@@ -199,6 +199,18 @@ export default function Login() {
           <p style={{
             textAlign: 'center', fontSize: '0.6875rem',
             color: '#555577', letterSpacing: '0.05em',
+          }}>
+            Нет аккаунта?{' '}
+            <Link
+              to="/register"
+              style={{ color: '#00f0ff', textDecoration: 'none', fontWeight: 700 }}
+            >
+              Зарегистрироваться
+            </Link>
+          </p>
+          <p style={{
+            textAlign: 'center', fontSize: '0.6875rem',
+            color: '#3a3a55', letterSpacing: '0.05em', marginTop: '0.5rem',
           }}>
             QUASAR-X © 2025 — Автоматический репрайсинг для WB
           </p>
