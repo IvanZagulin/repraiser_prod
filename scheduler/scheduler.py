@@ -1,0 +1,241 @@
+import asyncio
+import logging
+import sys
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
+import os
+
+# Добавляем путь к приложению
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'backend'))
+
+from app.config import settings
+from app.services.repricer_engine import RepricerEngine
+from app.services.telegram import telegram_notifier
+from app.services.proxy_pool import proxy_pool
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('/app/logs/scheduler.log')
+    ]
+)
+
+logger = logging.getLogger(__name__)
+
+# Database setup
+engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Глобальная ссылка на планировщик (для динамического перепланирования)
+_scheduler: AsyncIOScheduler = None
+_current_interval_minutes: int = 60
+
+
+def _read_interval_from_db() -> int:
+    """Читает интервал репрайсера из БД, возвращает 60 по умолчанию"""
+    try:
+        db = SessionLocal()
+        try:
+            row = db.execute(
+                text("SELECT value FROM app_settings WHERE key = 'repricer_interval_minutes'")
+            ).fetchone()
+            if row:
+                return max(1, int(row[0]))
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"Не удалось прочитать интервал из БД: {e}")
+    return 60
+
+
+async def repricer_job():
+    """
+    Задача репрайсера.
+    При каждом запуске проверяет актуальный интервал в БД
+    и перепланирует себя если он изменился.
+    """
+    global _scheduler, _current_interval_minutes
+
+    logger.info("=" * 70)
+    logger.info("Запуск автоматического репрайсера")
+    logger.info("=" * 70)
+
+    # Проверяем, не изменился ли интервал
+    new_interval = _read_interval_from_db()
+    if new_interval != _current_interval_minutes and _scheduler is not None:
+        logger.info(
+            f"Интервал изменён: {_current_interval_minutes} → {new_interval} мин. "
+            f"Перепланирование задачи..."
+        )
+        _current_interval_minutes = new_interval
+        _scheduler.reschedule_job(
+            'repricer_job',
+            trigger=IntervalTrigger(minutes=new_interval)
+        )
+
+    db = SessionLocal()
+
+    try:
+        # Инициализация прокси (если еще не инициализирован)
+        if not proxy_pool._initialized:
+            logger.info("Инициализация proxy pool...")
+            await proxy_pool.initialize()
+
+        # Запускаем репрайсер
+        engine_inst = RepricerEngine(db)
+        run = await engine_inst.run_repricer(
+            product_ids=None,  # Все активные товары
+            run_type="scheduled"
+        )
+
+        duration = (run.completed_at - run.started_at).total_seconds() if run.completed_at else 0
+
+        logger.info("=" * 70)
+        logger.info(f"Прогон завершен: ID={run.id}")
+        logger.info(f"  Всего товаров: {run.total_products}")
+        logger.info(f"  Обновлено: {run.updated_count}")
+        logger.info(f"  Пропущено: {run.skipped_count}")
+        logger.info(f"  Ошибок: {run.error_count}")
+        logger.info(f"  Время выполнения: {duration:.1f}s")
+        logger.info("=" * 70)
+
+    except Exception as e:
+        logger.error(f"Критическая ошибка в repricer_job: {e}", exc_info=True)
+        await telegram_notifier.notify_scheduler_error(str(e))
+
+    finally:
+        db.close()
+
+
+async def health_check_proxies():
+    """
+    Задача для периодической проверки прокси
+    
+    Запускается каждые 30 минут
+    """
+    logger.info("Запуск health check прокси...")
+    
+    try:
+        if not proxy_pool._initialized:
+            await proxy_pool.initialize()
+        else:
+            await proxy_pool.health_check_all()
+        
+        stats = proxy_pool.get_stats()
+        logger.info(f"Health check завершен: {stats}")
+        
+        # Если все прокси мертвы - уведомление
+        if stats['alive'] == 0 and stats['total'] > 0:
+            logger.critical("⚠️ ВСЕ ПРОКСИ МЕРТВЫ!")
+            await telegram_notifier.notify_all_proxies_dead()
+        
+    except Exception as e:
+        logger.error(f"Ошибка в health_check_proxies: {e}", exc_info=True)
+
+
+def setup_scheduler(interval_minutes: int) -> AsyncIOScheduler:
+    """Настройка и запуск планировщика"""
+    scheduler = AsyncIOScheduler(timezone="UTC")
+
+    # Задача #1: Репрайсер с настраиваемым интервалом
+    scheduler.add_job(
+        repricer_job,
+        trigger=IntervalTrigger(minutes=interval_minutes),
+        id="repricer_job",
+        name="Repricer Job",
+        replace_existing=True,
+        max_instances=1
+    )
+    logger.info(f"✓ Задача 'repricer_job' зарегистрирована (каждые {interval_minutes} мин.)")
+
+    # Задача #2: Health check прокси каждые 30 минут
+    scheduler.add_job(
+        health_check_proxies,
+        trigger=IntervalTrigger(minutes=30),
+        id="proxy_health_check",
+        name="Proxy Health Check",
+        replace_existing=True
+    )
+    logger.info("✓ Задача 'proxy_health_check' зарегистрирована (каждые 30 мин.)")
+
+    return scheduler
+
+
+async def startup():
+    """Startup процедуры"""
+    logger.info("=" * 70)
+    logger.info("WB Repricer Scheduler запускается...")
+    logger.info("=" * 70)
+    
+    # Инициализация прокси пула
+    logger.info("Инициализация proxy pool...")
+    await proxy_pool.initialize()
+    
+    stats = proxy_pool.get_stats()
+    logger.info(f"Proxy pool готов: {stats}")
+    
+    # Проверка подключения к БД
+    try:
+        db = SessionLocal()
+        db.execute(text("SELECT 1"))
+        db.close()
+        logger.info("✓ Подключение к БД успешно")
+    except Exception as e:
+        logger.error(f"✗ Ошибка подключения к БД: {e}")
+        raise
+    
+    logger.info("=" * 70)
+    logger.info("Scheduler готов к работе")
+    logger.info("=" * 70)
+
+
+async def main():
+    """Главная функция"""
+    global _scheduler, _current_interval_minutes
+
+    try:
+        await startup()
+
+        # Читаем интервал из БД
+        _current_interval_minutes = _read_interval_from_db()
+        logger.info(f"Интервал репрайсера из БД: {_current_interval_minutes} мин.")
+
+        # Настройка планировщика
+        _scheduler = setup_scheduler(_current_interval_minutes)
+
+        # Запуск планировщика
+        _scheduler.start()
+        logger.info("Планировщик запущен. Ожидание задач...")
+
+        # Бесконечный цикл — каждые 60 сек проверяем изменение интервала в БД
+        while True:
+            await asyncio.sleep(60)
+            new_interval = _read_interval_from_db()
+            if new_interval != _current_interval_minutes:
+                logger.info(
+                    f"Интервал изменён в БД: {_current_interval_minutes} → {new_interval} мин. "
+                    f"Немедленное перепланирование..."
+                )
+                _current_interval_minutes = new_interval
+                _scheduler.reschedule_job(
+                    'repricer_job',
+                    trigger=IntervalTrigger(minutes=new_interval)
+                )
+
+    except KeyboardInterrupt:
+        logger.info("Получен сигнал завершения (Ctrl+C)")
+    except Exception as e:
+        logger.error(f"Критическая ошибка: {e}", exc_info=True)
+        await telegram_notifier.notify_scheduler_error(str(e))
+        raise
+    finally:
+        logger.info("Scheduler остановлен")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

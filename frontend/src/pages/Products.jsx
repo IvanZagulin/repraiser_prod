@@ -1,0 +1,534 @@
+import { useEffect, useRef, useState } from 'react';
+import { Plus, Settings, Trash2, Play, Search, LayoutGrid, List, LineChart, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { getProducts, deleteProduct, runRepricer, getSettings, fetchPrices } from '../api/client';
+import { useProductsStore } from '../store';
+import ProductModal from '../components/ProductModal';
+import ConfigModal from '../components/ConfigModal';
+import PriceHistoryModal from '../components/PriceHistoryModal';
+
+const PAGE_SIZE = 50;
+
+const getWBImageUrl = (nmId) => {
+  const nm = parseInt(nmId);
+  const vol = Math.floor(nm / 100000);
+  const part = Math.floor(nm / 1000);
+  const baskets = [
+    [143,'01'],[287,'02'],[431,'03'],[719,'04'],[1007,'05'],
+    [1061,'06'],[1115,'07'],[1169,'08'],[1313,'09'],[1601,'10'],
+    [1655,'11'],[1919,'12'],[2045,'13'],[2189,'14'],[2405,'15'],
+    [2621,'16'],[2837,'17'],[3053,'18'],[3261,'19'],[3473,'20'],
+  ];
+  const basket = (baskets.find(([v]) => vol <= v) ?? [0,'21'])[1];
+  return `https://basket-${basket}.wbbasket.ru/vol${vol}/part${part}/${nm}/images/c246x328/1.webp`;
+};
+
+export default function Products() {
+  const { products, setProducts, loading, setLoading, removeProduct } = useProductsStore();
+  const [showProductModal, setShowProductModal] = useState(false);
+  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterStrategy, setFilterStrategy] = useState('all');
+  const [walletPct, setWalletPct] = useState(3.0);
+  const [viewMode, setViewMode] = useState('grid');
+  const [page, setPage] = useState(1);
+  const [totalProducts, setTotalProducts] = useState(0);
+  const [fetchingPrices, setFetchingPrices] = useState(false);
+  const isMounted = useRef(true);
+
+  useEffect(() => {
+    isMounted.current = true;
+    loadProducts(1);
+    getSettings()
+      .then((res) => { if (isMounted.current) setWalletPct(res.data.wb_wallet_discount_pct); })
+      .catch(() => {});
+    const interval = setInterval(() => refreshProductsSilent(), 30000);
+    return () => {
+      isMounted.current = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  const loadProducts = async (p = page) => {
+    setLoading(true);
+    try {
+      const response = await getProducts({ page: p, page_size: PAGE_SIZE });
+      setProducts(response.data.products);
+      setTotalProducts(response.data.total);
+      setPage(p);
+    } catch {
+      toast.error('Ошибка загрузки товаров');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const refreshProductsSilent = async () => {
+    try {
+      const response = await getProducts({ page, page_size: PAGE_SIZE });
+      if (isMounted.current) {
+        setProducts(response.data.products);
+        setTotalProducts(response.data.total);
+      }
+    } catch {}
+  };
+
+  const totalPages = Math.ceil(totalProducts / PAGE_SIZE);
+
+  const handlePageChange = (newPage) => {
+    if (newPage < 1 || newPage > totalPages) return;
+    loadProducts(newPage);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleDelete = async (id, sku) => {
+    if (!confirm(`Удалить товар ${sku}?`)) return;
+    try {
+      await deleteProduct(id);
+      removeProduct(id);
+      toast.success('Товар удален');
+    } catch {
+      toast.error('Ошибка удаления товара');
+    }
+  };
+
+  const handleRunRepricer = async (sku) => {
+    try {
+      toast.loading('Запуск репрайсера...', { id: 'repricer' });
+      await runRepricer([sku]);
+      toast.success('Репрайсер завершен', { id: 'repricer' });
+      setTimeout(loadProducts, 2000);
+    } catch {
+      toast.error('Ошибка запуска репрайсера', { id: 'repricer' });
+    }
+  };
+
+  const handleFetchPrices = async () => {
+    setFetchingPrices(true);
+    try {
+      const res = await fetchPrices();
+      toast.success(`Цены обновлены: ${res.data.updated} из ${res.data.total}`);
+      setTimeout(() => loadProducts(page), 1000);
+    } catch {
+      toast.error('Ошибка обновления цен');
+    } finally {
+      setFetchingPrices(false);
+    }
+  };
+
+  const handleConfigClick = (product) => {
+    setSelectedProduct(product);
+    setShowConfigModal(true);
+  };
+
+  const handleHistoryClick = (product) => {
+    setSelectedProduct(product);
+    setShowHistoryModal(true);
+  };
+
+  const filteredProducts = products.filter((p) => {
+    const sku  = (p.seller_sku || '').toLowerCase();
+    const name = (p.name || '').toLowerCase();
+    const term = searchTerm.toLowerCase();
+    const matchesSearch = sku.includes(term) || name.includes(term) || String(p.nm_id).includes(term);
+    const matchesStrategy = filterStrategy === 'all' || p.config?.strategy === filterStrategy;
+    return matchesSearch && matchesStrategy;
+  });
+
+  const getStatusBadge = (product) => {
+    if (!product.config) return <span className="badge badge-warning">Не настроен</span>;
+    if (!product.config.is_active) return <span className="badge">Отключен</span>;
+    return <span className="badge badge-success">Активен</span>;
+  };
+
+  const getStrategyLabel = (strategy) => {
+    if (strategy === 'rrp') return 'РРЦ';
+    if (strategy === 'competitor') return 'Конкурент';
+    return 'N/A';
+  };
+
+  const getMarginColor = (m) => {
+    if (m === null || m === undefined) return 'var(--text-3)';
+    if (m >= 30) return '#16a34a';
+    if (m >= 10) return '#d97706';
+    return '#dc2626';
+  };
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold" style={{ background: 'linear-gradient(135deg,#1e1b4b,#7c3aed)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent', backgroundClip:'text' }}>Товары</h1>
+          <p className="text-sm mt-1" style={{ color: 'var(--text-3)' }}>
+            Управление товарами и стратегиями ценообразования
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={handleFetchPrices}
+            disabled={fetchingPrices}
+            className="btn gap-2"
+            style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--text-2)' }}
+            title="Получить текущие цены с WB для всех товаров (без изменения цен)"
+          >
+            <RefreshCw className={`w-4 h-4 ${fetchingPrices ? 'animate-spin' : ''}`} />
+            {fetchingPrices ? 'Обновление...' : 'Обновить цены'}
+          </button>
+          <button onClick={() => setShowProductModal(true)} className="btn btn-primary gap-2">
+            <Plus className="w-4 h-4" />
+            Добавить товар
+          </button>
+        </div>
+      </div>
+
+      {/* Filters + View Toggle */}
+      <div className="card mb-4">
+        <div className="flex items-center gap-3">
+          <div className="flex-1 relative">
+            <Search
+              className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4"
+              style={{ color: 'var(--text-3)' }}
+            />
+            <input
+              type="text"
+              placeholder="Поиск по артикулу или названию..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="input pl-9"
+            />
+          </div>
+          <select
+            value={filterStrategy}
+            onChange={(e) => setFilterStrategy(e.target.value)}
+            className="input w-44"
+          >
+            <option value="all">Все стратегии</option>
+            <option value="rrp">РРЦ</option>
+            <option value="competitor">Конкурент</option>
+          </select>
+          <div className="flex rounded-xl overflow-hidden" style={{ border: '1px solid #e5e7eb', background: '#f9fafb' }}>
+            <button
+              onClick={() => setViewMode('grid')}
+              className="p-2 transition-colors"
+              style={{
+                background: viewMode === 'grid' ? '#ede9fe' : 'transparent',
+                color: viewMode === 'grid' ? '#6d28d9' : '#9ca3af',
+              }}
+              title="Карточки"
+            >
+              <LayoutGrid className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setViewMode('table')}
+              className="p-2 transition-colors"
+              style={{
+                background: viewMode === 'table' ? '#ede9fe' : 'transparent',
+                color: viewMode === 'table' ? '#6d28d9' : '#9ca3af',
+              }}
+              title="Таблица"
+            >
+              <List className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center h-64">
+          <div className="spinner" />
+        </div>
+      ) : filteredProducts.length === 0 ? (
+        <div className="card text-center py-12">
+          <p style={{ color: 'var(--text-3)' }}>Товары не найдены</p>
+          <button onClick={() => setShowProductModal(true)} className="btn btn-primary mt-4">
+            Добавить первый товар
+          </button>
+        </div>
+      ) : viewMode === 'grid' ? (
+        /* Card Grid */
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+          {filteredProducts.map((product) => (
+            <div key={product.id} className="product-card">
+              {/* Image container */}
+              <div className="relative overflow-hidden" style={{ paddingBottom: '133%', background: '#f3f4f6' }}>
+                <img
+                  src={product.image_url || getWBImageUrl(product.nm_id)}
+                  alt={product.name}
+                  className="absolute inset-0 w-full h-full object-cover"
+                  loading="lazy"
+                  onError={(e) => {
+                    e.target.style.display = 'none';
+                    const placeholder = e.target.nextElementSibling;
+                    if (placeholder) placeholder.style.display = 'flex';
+                  }}
+                />
+                {/* Placeholder when image fails */}
+                <div
+                  className="absolute inset-0 flex-col items-center justify-center"
+                  style={{ display: 'none', background: '#f3f4f6' }}
+                >
+                  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" style={{ color: '#d1d5db' }}>
+                    <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+                    <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/>
+                    <path d="M21 15l-5-5L5 21" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                  <span className="text-xs mt-1.5" style={{ color: '#9ca3af' }}>Нет фото</span>
+                </div>
+                {/* Hover overlay with actions */}
+                <div
+                  className="absolute inset-0 flex items-center justify-center gap-2 opacity-0 hover:opacity-100 transition-opacity"
+                  style={{ background: 'rgba(0,0,0,.65)' }}
+                >
+                  <button
+                    onClick={() => handleRunRepricer(product.seller_sku)}
+                    className="btn btn-sm btn-primary"
+                    title="Запустить"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => handleHistoryClick(product)}
+                    className="btn btn-sm btn-secondary"
+                    title="История цен"
+                  >
+                    <LineChart className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => handleConfigClick(product)}
+                    className="btn btn-sm btn-secondary"
+                    title="Настроить"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(product.id, product.seller_sku)}
+                    className="btn btn-sm btn-danger"
+                    title="Удалить"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                {/* Status badge */}
+                <div className="absolute top-2 left-2">{getStatusBadge(product)}</div>
+              </div>
+
+              {/* Info */}
+              <div className="p-3">
+                <p className="text-xs font-semibold text-gray-900 truncate">
+                  {product.seller_sku || <span className="text-gray-400">#{product.nm_id}</span>}
+                </p>
+                <p className="text-xs mt-0.5 line-clamp-2 leading-relaxed" style={{ color: 'var(--text-2)' }}>
+                  {product.name || '—'}
+                </p>
+                {product.current_seller_price && (
+                  <div className="mt-2 flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-bold text-gray-900">
+                        {Number(product.current_seller_price).toLocaleString('ru')}₽
+                      </div>
+                      {product.current_final_price && (
+                        <div className="text-xs" style={{ color: 'var(--text-3)' }}>
+                          СПП: {Number(product.current_final_price).toLocaleString('ru')}₽
+                        </div>
+                      )}
+                    </div>
+                    {product.config?.strategy && (
+                      <span className="badge badge-info">
+                        {getStrategyLabel(product.config.strategy)}
+                      </span>
+                    )}
+                  </div>
+                )}
+                <div className="mt-1 flex items-center justify-between">
+                  <span className="text-xs" style={{ color: 'var(--text-3)' }}>Маржа:</span>
+                  {product.margin !== null && product.margin !== undefined ? (
+                    <span className="text-xs font-bold" style={{ color: getMarginColor(product.margin) }}>
+                      {product.margin}%
+                    </span>
+                  ) : (
+                    <span className="text-xs" style={{ color: 'var(--text-3)' }}>нет данных</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        /* Table View */
+        <div className="card overflow-hidden p-0">
+          <div className="overflow-x-auto">
+            <table className="dark-table">
+              <thead>
+                <tr>
+                  <th>Артикул</th>
+                  <th>Название</th>
+                  <th>nmID</th>
+                  <th>Стратегия</th>
+                  <th>Цена (СПП)</th>
+                  <th>С кошельком</th>
+                  <th>Маржа</th>
+                  <th>Статус</th>
+                  <th style={{ textAlign: 'right' }}>Действия</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredProducts.map((product) => (
+                  <tr key={product.id}>
+                    <td>
+                      <span className="font-medium text-gray-900">
+                        {product.seller_sku || <span className="text-gray-400">#{product.nm_id}</span>}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="line-clamp-2">{product.name || '—'}</span>
+                    </td>
+                    <td style={{ color: 'var(--text-2)' }}>{product.nm_id}</td>
+                    <td>
+                      {product.config
+                        ? <span className="badge badge-info">{getStrategyLabel(product.config.strategy)}</span>
+                        : <span style={{ color: 'var(--text-3)' }}>—</span>}
+                    </td>
+                    <td>
+                      {product.current_seller_price ? (
+                        <div>
+                          <div className="font-medium text-gray-900">
+                            {Number(product.current_seller_price).toLocaleString('ru')}₽
+                          </div>
+                          <div className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
+                            СПП: {Number(product.current_final_price).toLocaleString('ru')}₽
+                          </div>
+                        </div>
+                      ) : <span style={{ color: 'var(--text-3)' }}>—</span>}
+                    </td>
+                    <td>
+                      {product.current_final_price ? (
+                        <div>
+                          <div className="font-medium text-green-600">
+                            {Math.round(Number(product.current_final_price) * (1 - walletPct / 100)).toLocaleString('ru')}₽
+                          </div>
+                          <div className="text-xs" style={{ color: 'var(--text-3)' }}>−{walletPct}%</div>
+                        </div>
+                      ) : <span style={{ color: 'var(--text-3)' }}>—</span>}
+                    </td>
+                    <td>
+                      {product.margin !== null && product.margin !== undefined ? (
+                        <span className="font-semibold text-sm" style={{ color: getMarginColor(product.margin) }}>
+                          {product.margin}%
+                        </span>
+                      ) : (
+                        <span style={{ color: 'var(--text-3)' }}>—</span>
+                      )}
+                    </td>
+                    <td>{getStatusBadge(product)}</td>
+                    <td>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          onClick={() => handleRunRepricer(product.seller_sku)}
+                          className="btn btn-xs btn-secondary"
+                          title="Запустить"
+                        >
+                          <Play className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleHistoryClick(product)}
+                          className="btn btn-xs btn-secondary"
+                          title="История цен"
+                        >
+                          <LineChart className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleConfigClick(product)}
+                          className="btn btn-xs btn-secondary"
+                          title="Настроить"
+                        >
+                          <Settings className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(product.id, product.seller_sku)}
+                          className="btn btn-xs btn-danger"
+                          title="Удалить"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && !loading && (
+        <div className="flex items-center justify-between mt-5">
+          <p className="text-xs" style={{ color: 'var(--text-3)' }}>
+            Показано {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, totalProducts)} из {totalProducts}
+          </p>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => handlePageChange(page - 1)}
+              disabled={page <= 1}
+              className="btn btn-sm btn-secondary p-1.5"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+              let p;
+              if (totalPages <= 7) {
+                p = i + 1;
+              } else if (page <= 4) {
+                p = i + 1;
+              } else if (page >= totalPages - 3) {
+                p = totalPages - 6 + i;
+              } else {
+                p = page - 3 + i;
+              }
+              return (
+                <button
+                  key={p}
+                  onClick={() => handlePageChange(p)}
+                  className="btn btn-sm min-w-[32px] text-xs"
+                  style={{
+                    background: p === page ? '#7c3aed' : 'transparent',
+                    color: p === page ? '#fff' : 'var(--text-2)',
+                    fontWeight: p === page ? 700 : 500,
+                  }}
+                >
+                  {p}
+                </button>
+              );
+            })}
+            <button
+              onClick={() => handlePageChange(page + 1)}
+              disabled={page >= totalPages}
+              className="btn btn-sm btn-secondary p-1.5"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showProductModal && (
+        <ProductModal onClose={() => { setShowProductModal(false); loadProducts(); }} />
+      )}
+      {showConfigModal && selectedProduct && (
+        <ConfigModal
+          product={selectedProduct}
+          onClose={() => { setShowConfigModal(false); setSelectedProduct(null); loadProducts(); }}
+        />
+      )}
+      {showHistoryModal && selectedProduct && (
+        <PriceHistoryModal
+          product={selectedProduct}
+          onClose={() => { setShowHistoryModal(false); setSelectedProduct(null); }}
+        />
+      )}
+    </div>
+  );
+}

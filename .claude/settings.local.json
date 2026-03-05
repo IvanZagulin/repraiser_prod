@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker exec:*)",
+      "Bash(docker restart:*)",
+      "Bash(docker compose up -d --build backend)",
+      "Bash(docker compose up -d frontend)",
+      "Bash(docker --version)",
+      "Bash(docker-compose --version)",
+      "Bash(docker-compose ps)",
+      "Bash(docker-compose up -d --build)",
+      "Bash(curl -s http://localhost:8000/api/health)",
+      "Bash(docker-compose logs --tail=20 frontend)",
+      "Bash(docker-compose logs --tail=10 frontend)",
+      "Bash(docker-compose logs --tail=10 backend)",
+      "Bash(docker-compose restart backend)",
+      "Bash(curl -sI http://localhost:8000/api/health)",
+      "Bash(curl -sD - http://localhost:8000/api/health)",
+      "Bash(docker-compose logs --tail=15 frontend)",
+      "WebFetch(domain:quasar-x.ru)",
+      "Bash(docker compose up -d --build)"
+    ]
+  }
+}

@@ -1,0 +1,482 @@
+import asyncio
+import logging
+from typing import Optional, List, Dict, Any
+from decimal import Decimal
+import httpx
+from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+
+class WBAPIError(Exception):
+    """Ошибка WB API"""
+    pass
+
+
+class RateLimitError(WBAPIError):
+    """Ошибка превышения лимита запросов (429)"""
+    pass
+
+
+class PriceData:
+    """Данные о цене товара из WB Prices API"""
+
+    def __init__(self, raw_data: dict):
+        self.nm_id = raw_data.get('nmID')
+        self.vendor_code = raw_data.get('vendorCode', '')
+
+        # discounts-prices-api возвращает цену в sizes[0], а не на верхнем уровне
+        sizes = raw_data.get('sizes', [])
+        if sizes:
+            first_size = sizes[0]
+            self.seller_price = Decimal(str(first_size.get('price', 0)))
+            self.discount = Decimal(str(first_size.get('discount', 0)))
+        else:
+            self.seller_price = Decimal(str(raw_data.get('price', 0)))
+            self.discount = Decimal(str(raw_data.get('discount', 0)))
+
+        self.sizes = sizes
+        
+    def to_dict(self) -> dict:
+        return {
+            'nm_id': self.nm_id,
+            'seller_price': float(self.seller_price),
+            'discount': float(self.discount),
+            'sizes': self.sizes
+        }
+    
+    def __repr__(self):
+        return f"<WBPrice nm={self.nm_id} price={self.seller_price}₽ discount={self.discount}%>"
+
+
+class WBAPIClient:
+    """
+    Клиент для работы с WB Prices API
+    
+    Документация: https://openapi.wildberries.ru/prices/api/ru/
+    """
+    
+    def __init__(self, api_token: str):
+        """
+        Args:
+            api_token: JWT токен WB API
+        """
+        self.base_url = settings.WB_API_BASE_URL
+        self.api_token = api_token
+        self.session: Optional[httpx.AsyncClient] = None
+    
+    def _get_headers(self) -> dict:
+        """Формирование заголовков для запросов"""
+        return {
+            'Authorization': self.api_token,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
+    
+    async def _init_session(self):
+        """Инициализация HTTP сессии"""
+        if self.session is None:
+            self.session = httpx.AsyncClient(
+                base_url=self.base_url,
+                headers=self._get_headers(),
+                timeout=30.0,
+                follow_redirects=True
+            )
+    
+    async def _close_session(self):
+        """Закрытие HTTP сессии"""
+        if self.session:
+            await self.session.aclose()
+            self.session = None
+    
+    async def _make_request(
+        self,
+        method: str,
+        endpoint: str,
+        json_data: Optional[dict] = None,
+        params: Optional[dict] = None,
+        retry_on_429: bool = True,
+        max_retries: int = 3
+    ) -> dict:
+        """
+        Выполнение HTTP запроса с обработкой ошибок
+        
+        Args:
+            method: HTTP метод (GET, POST, etc)
+            endpoint: Endpoint API
+            json_data: JSON данные для POST
+            params: Query параметры
+            retry_on_429: Повторять ли при 429 ошибке
+            max_retries: Максимум попыток при 429
+            
+        Returns:
+            JSON ответ
+            
+        Raises:
+            WBAPIError: При ошибках API
+            RateLimitError: При превышении лимита
+        """
+        await self._init_session()
+        
+        retry_count = 0
+        backoff_delay = 5  # Начальная задержка при 429
+        
+        while retry_count <= max_retries:
+            try:
+                response = await self.session.request(
+                    method=method,
+                    url=endpoint,
+                    json=json_data,
+                    params=params
+                )
+                
+                # Обработка кодов ответа
+                if response.status_code == 200:
+                    return response.json()
+                
+                elif response.status_code == 429:
+                    # Rate limit exceeded
+                    if not retry_on_429 or retry_count >= max_retries:
+                        raise RateLimitError(f"Rate limit exceeded (429) после {retry_count} попыток")
+                    
+                    logger.warning(f"Rate limit (429), ждем {backoff_delay}s перед retry {retry_count + 1}/{max_retries}")
+                    await asyncio.sleep(backoff_delay)
+                    backoff_delay *= 2  # Exponential backoff
+                    retry_count += 1
+                    continue
+                
+                elif response.status_code == 401:
+                    raise WBAPIError("Unauthorized (401) - неверный или истекший токен")
+                
+                elif response.status_code == 400:
+                    error_msg = response.text
+                    raise WBAPIError(f"Bad Request (400): {error_msg}")
+                
+                else:
+                    raise WBAPIError(f"API вернул код {response.status_code}: {response.text}")
+                    
+            except httpx.TimeoutException:
+                raise WBAPIError("Timeout при запросе к WB API")
+            except httpx.RequestError as e:
+                raise WBAPIError(f"Ошибка соединения с WB API: {e}")
+        
+        # Если вышли из цикла - значит превысили лимит попыток
+        raise RateLimitError(f"Rate limit (429) после {max_retries} попыток")
+    
+    async def get_prices(
+        self,
+        nm_ids: Optional[List[int]] = None,
+        limit: int = 1000,
+        offset: int = 0
+    ) -> List[PriceData]:
+        """
+        Получение цен товаров
+        
+        Endpoint: GET /api/v2/list/goods/filter
+        
+        Args:
+            nm_ids: Список артикулов (если None - все товары)
+            limit: Лимит товаров в ответе
+            offset: Смещение для пагинации
+            
+        Returns:
+            Список PriceData
+        """
+        params = {
+            'limit': limit,
+            'offset': offset
+        }
+        
+        # Фильтр по nmID (если указан)
+        if nm_ids:
+            # WB API принимает несколько nmID через запятую
+            params['filterNmID'] = ','.join(map(str, nm_ids))
+        
+        logger.info(f"Получаем цены из WB API (limit={limit}, offset={offset}, nm_ids={len(nm_ids) if nm_ids else 'all'})")
+        
+        try:
+            data = await self._make_request('GET', '/api/v2/list/goods/filter', params=params)
+            
+            # Парсим ответ
+            goods = data.get('data', {}).get('listGoods', [])
+            prices = [PriceData(item) for item in goods]
+            
+            logger.info(f"✓ Получено {len(prices)} цен из WB API")
+            return prices
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения цен из WB API: {e}")
+            raise
+    
+    async def update_prices(self, price_updates: List[Dict[str, Any]]) -> dict:
+        """
+        Пакетное обновление цен
+        
+        Endpoint: POST /api/v2/upload/task
+        
+        Args:
+            price_updates: Список обновлений формата:
+                [
+                    {
+                        "nmID": 123456,
+                        "price": 1500
+                    },
+                    ...
+                ]
+        
+        Returns:
+            Ответ API с ID задачи
+        """
+        if not price_updates:
+            raise ValueError("price_updates не может быть пустым")
+        
+        logger.info(f"Отправляем обновление {len(price_updates)} цен в WB API")
+        
+        try:
+            # Формируем payload
+            payload = {
+                "data": price_updates
+            }
+
+            data = await self._make_request('POST', '/api/v2/upload/task', json_data=payload)
+
+            task_id = data.get('data', {}).get('id')
+            logger.info(f"✓ Задача обновления создана: task_id={task_id}")
+
+            return data
+
+        except WBAPIError as e:
+            # "This task already exists" — задача уже в очереди WB, считаем успехом
+            if "This task already exists" in str(e):
+                logger.info(
+                    "Задача на обновление цены уже существует в очереди WB — "
+                    "считаем как успех, цена будет применена"
+                )
+                return {"data": {"id": None}, "_already_queued": True}
+            logger.error(f"Ошибка обновления цен в WB API: {e}")
+            raise
+    
+    async def verify_price_update(
+        self,
+        nm_id: int,
+        expected_price: Decimal,
+        max_attempts: int = None,
+        delay: int = None
+    ) -> bool:
+        """
+        Проверка применения обновленной цены
+        
+        Args:
+            nm_id: Артикул товара
+            expected_price: Ожидаемая цена
+            max_attempts: Максимум попыток проверки (default из config)
+            delay: Задержка между попытками в секундах (default из config)
+            
+        Returns:
+            True если цена применилась, False если нет
+        """
+        if max_attempts is None:
+            max_attempts = settings.PRICE_CHECK_ATTEMPTS
+        if delay is None:
+            delay = settings.PRICE_CHECK_DELAY
+        
+        logger.info(f"Проверка применения цены для nm_id={nm_id} (ожидается {expected_price}₽)")
+        
+        for attempt in range(1, max_attempts + 1):
+            await asyncio.sleep(delay)
+            
+            try:
+                prices = await self.get_prices(nm_ids=[nm_id])
+                
+                if not prices:
+                    logger.warning(f"Попытка {attempt}/{max_attempts}: товар nm_id={nm_id} не найден")
+                    continue
+                
+                current_price = prices[0].seller_price
+                
+                if current_price == expected_price:
+                    logger.info(f"✓ Цена применилась на попытке {attempt}/{max_attempts}: {current_price}₽")
+                    return True
+                else:
+                    logger.warning(
+                        f"Попытка {attempt}/{max_attempts}: текущая цена {current_price}₽, "
+                        f"ожидается {expected_price}₽"
+                    )
+                    
+            except Exception as e:
+                logger.error(f"Ошибка проверки цены на попытке {attempt}: {e}")
+                continue
+        
+        logger.error(f"✗ Цена не применилась после {max_attempts} попыток")
+        return False
+    
+    async def get_card_info(self, nm_id: int) -> dict:
+        """
+        Получение информации о карточке товара из WB Content API по nmID.
+
+        Возвращает словарь {seller_sku, name, image_url} или {} если не найдено.
+        """
+        try:
+            content_api_url = "https://content-api.wildberries.ru"
+            payload = {
+                "settings": {
+                    "sort": {"ascending": False},
+                    "filter": {
+                        "textSearch": str(nm_id),
+                        "withPhoto": -1
+                    },
+                    "cursor": {"limit": 10}
+                }
+            }
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(
+                    f"{content_api_url}/content/v2/get/cards/list",
+                    json=payload,
+                    headers=self._get_headers()
+                )
+                if response.status_code != 200:
+                    logger.warning(f"Content API вернул {response.status_code} для nm_id={nm_id}")
+                    return {}
+
+                cards = response.json().get("cards", [])
+
+            for card in cards:
+                if card.get("nmID") == nm_id:
+                    photos = card.get("photos", [])
+                    image_url = None
+                    if photos:
+                        photo = photos[0]
+                        image_url = photo.get("c246x328") or photo.get("big")
+                    info = {
+                        "seller_sku": card.get("vendorCode", ""),
+                        "name":       card.get("title", ""),
+                        "image_url":  image_url,
+                    }
+                    logger.info(f"✓ Информация о карточке получена для nm_id={nm_id}: {info['name']!r}")
+                    return info
+
+            logger.warning(f"Карточка не найдена для nm_id={nm_id} (карточек в ответе: {len(cards)})")
+            return {}
+
+        except Exception as e:
+            logger.error(f"Ошибка получения информации о карточке nm_id={nm_id}: {e}")
+            return {}
+
+    async def get_card_info_by_sku(self, seller_sku: str) -> dict:
+        """
+        Получение информации о карточке товара из WB Content API по артикулу продавца (vendorCode).
+
+        Возвращает словарь {nm_id, seller_sku, name, image_url} или {} если не найдено.
+        """
+        try:
+            content_api_url = "https://content-api.wildberries.ru"
+            payload = {
+                "settings": {
+                    "sort": {"ascending": False},
+                    "filter": {
+                        "textSearch": seller_sku,
+                        "withPhoto": -1
+                    },
+                    "cursor": {"limit": 20}
+                }
+            }
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(
+                    f"{content_api_url}/content/v2/get/cards/list",
+                    json=payload,
+                    headers=self._get_headers()
+                )
+                if response.status_code != 200:
+                    logger.warning(f"Content API вернул {response.status_code} при поиске по артикулу {seller_sku!r}")
+                    return {}
+                cards = response.json().get("cards", [])
+
+            # Ищем точное совпадение vendorCode
+            for card in cards:
+                if card.get("vendorCode") == seller_sku:
+                    photos = card.get("photos", [])
+                    image_url = None
+                    if photos:
+                        photo = photos[0]
+                        image_url = photo.get("c246x328") or photo.get("big")
+                    info = {
+                        "nm_id":      card.get("nmID"),
+                        "seller_sku": card.get("vendorCode", seller_sku),
+                        "name":       card.get("title", ""),
+                        "image_url":  image_url,
+                    }
+                    logger.info(f"✓ Карточка найдена по артикулу {seller_sku!r}: nm_id={info['nm_id']}")
+                    return info
+
+            logger.warning(f"Карточка с артикулом {seller_sku!r} не найдена (карточек в ответе: {len(cards)})")
+            return {}
+
+        except Exception as e:
+            logger.error(f"Ошибка поиска карточки по артикулу {seller_sku!r}: {e}")
+            return {}
+
+    async def get_card_photo(self, nm_id: int) -> Optional[str]:
+        """
+        Получение URL фото товара из WB Content API по nmID.
+        Обёртка над get_card_info для обратной совместимости.
+        """
+        info = await self.get_card_info(nm_id)
+        return info.get("image_url")
+
+    async def search_cards(self, text_search: str, limit: int = 100) -> List[dict]:
+        """
+        Поиск карточек товаров по nmID или артикулу продавца через Content API
+
+        Endpoint: POST https://content-api.wildberries.ru/content/v2/get/cards/list
+        """
+        content_api_url = "https://content-api.wildberries.ru"
+        payload = {
+            "settings": {
+                "sort": {"ascending": False},
+                "filter": {
+                    "textSearch": str(text_search),
+                    "withPhoto": -1
+                },
+                "cursor": {
+                    "limit": limit
+                }
+            }
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(
+                    f"{content_api_url}/content/v2/get/cards/list",
+                    json=payload,
+                    headers=self._get_headers()
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    return data.get("cards", [])
+                else:
+                    raise WBAPIError(
+                        f"Content API вернул код {response.status_code}: {response.text}"
+                    )
+        except httpx.RequestError as e:
+            raise WBAPIError(f"Ошибка соединения с WB Content API: {e}")
+
+    async def __aenter__(self):
+        """Context manager support"""
+        await self._init_session()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Context manager support"""
+        await self._close_session()
+
+
+def create_wb_client(api_token: str) -> WBAPIClient:
+    """
+    Фабрика для создания WB API клиента
+    
+    Args:
+        api_token: JWT токен WB API
+        
+    Returns:
+        WBAPIClient
+    """
+    return WBAPIClient(api_token)

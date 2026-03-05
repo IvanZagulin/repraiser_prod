@@ -1,0 +1,752 @@
+import asyncio
+import logging
+from typing import Optional, Dict, List, Tuple
+from decimal import Decimal, ROUND_UP
+from datetime import datetime
+from sqlalchemy.orm import Session
+from sqlalchemy import select
+
+from app.models import (
+    Product, ProductConfig, Account, PriceSnapshot,
+    RepricerRun, PriceChange
+)
+from app.models.app_setting import AppSetting
+from app.services import (
+    catalog_parser, create_wb_client, telegram_notifier
+)
+from app.utils.jwt import is_token_expired
+
+logger = logging.getLogger(__name__)
+
+
+class RepricerEngine:
+    """
+    Движок репрайсера с двумя стратегиями ценообразования
+    
+    Стратегии:
+    1. RRP - поддержание финальной цены в диапазоне [РРЦ - tolerance; РРЦ + tolerance]
+    2. Competitor - привязка к цене конкурента с заданным смещением
+    """
+    
+    def __init__(self, db: Session):
+        self.db = db
+    
+    def _round_up(self, value: Decimal) -> int:
+        """
+        Округление вверх до ближайшего целого рубля
+        
+        Args:
+            value: Значение для округления
+            
+        Returns:
+            Целое число рублей
+        """
+        return int(value.quantize(Decimal('1'), rounding=ROUND_UP))
+    
+    def _calculate_seller_price_from_final(
+        self,
+        final_price: Decimal,
+        spp: Decimal
+    ) -> Decimal:
+        """
+        Обратный расчет цены продавца из финальной цены
+        
+        final_price = seller_price * (1 - spp/100)
+        seller_price = final_price / (1 - spp/100)
+        
+        Args:
+            final_price: Желаемая финальная цена покупателя
+            spp: СПП в процентах
+            
+        Returns:
+            Цена продавца (округленная вверх)
+        """
+        if spp >= 100:
+            raise ValueError(f"СПП {spp}% >= 100%, невозможно рассчитать цену продавца")
+        
+        seller_price = final_price / (1 - spp / 100)
+        return Decimal(self._round_up(seller_price))
+    
+    async def _get_current_price_data(
+        self,
+        product: Product,
+        account: Account
+    ) -> Optional[Dict]:
+        """
+        Получение текущих данных о цене товара из WB API
+        
+        Returns:
+            dict с полями: seller_price, spp, is_in_promo или None
+        """
+        try:
+            async with create_wb_client(account.wb_api_token) as client:
+                prices = await client.get_prices(nm_ids=[product.nm_id])
+                
+                if not prices:
+                    logger.warning(f"Товар nm_id={product.nm_id} не найден в WB API")
+                    return None
+                
+                price_data = prices[0]
+                
+                # Парсим текущую цену через catalog для получения СПП
+                catalog_product = await catalog_parser.parse_product(product.nm_id)
+                
+                if not catalog_product:
+                    logger.warning(f"Не удалось спарсить nm_id={product.nm_id} из каталога")
+                    return None
+                
+                return {
+                    'seller_price': price_data.seller_price,
+                    'final_price': catalog_product.final_price,
+                    'spp': catalog_product.spp,
+                    'is_in_promo': catalog_product.is_in_promo,
+                    'total_quantity': catalog_product.total_quantity
+                }
+                
+        except Exception as e:
+            logger.error(f"Ошибка получения данных для nm_id={product.nm_id}: {e}")
+            return None
+    
+    async def _strategy_rrp(
+        self,
+        product: Product,
+        config: ProductConfig,
+        current_data: Dict,
+        wallet_pct: Decimal = Decimal(0)
+    ) -> Tuple[Optional[Decimal], str, Optional[str]]:
+        """
+        Стратегия РРЦ (Recommended Retail Price)
+
+        Цель: финальная цена покупателя (с учётом кошелька, если включено)
+        в диапазоне [РРЦ - tolerance; РРЦ + tolerance]
+
+        Args:
+            wallet_pct: Скидка кошелька WB в процентах (из глобальных настроек)
+
+        Returns:
+            Tuple (новая_цена_продавца, reason_code, reason_message)
+        """
+        if not config.rrp_price:
+            return None, "SKIPPED_INACTIVE", "РРЦ не настроен"
+
+        rrp = config.rrp_price
+        tolerance = config.rrp_tolerance or Decimal(5)
+        current_final = current_data['final_price']
+        spp = current_data['spp']
+
+        if spp is None:
+            return None, "PARSE_ERROR", "Не удалось определить СПП"
+
+        consider_wallet = bool(getattr(config, 'rrp_consider_wallet', False))
+
+        if consider_wallet and wallet_pct > 0:
+            # Эффективная цена с учётом кошелька WB
+            wallet_factor = 1 - wallet_pct / 100
+            current_effective = current_final * wallet_factor
+
+            min_effective = rrp - tolerance
+            max_effective = rrp + tolerance
+
+            logger.info(
+                f"RRP+кошелёк стратегия: текущая с кошельком={current_effective}₽, "
+                f"диапазон=[{min_effective}₽; {max_effective}₽], кошелёк={wallet_pct}%"
+            )
+
+            if min_effective <= current_effective <= max_effective:
+                return None, "NO_CHANGE", (
+                    f"Цена с кошельком в допуске РРЦ ({current_effective}₽)"
+                )
+
+            # Целевая финальная цена до применения кошелька
+            target_final = rrp / wallet_factor
+
+            try:
+                new_seller_price = self._calculate_seller_price_from_final(target_final, spp)
+                reason_msg = (
+                    f"РРЦ+кошелёк стратегия: РРЦ {rrp}₽, кошелёк {wallet_pct}%, "
+                    f"целевая до кошелька {target_final:.2f}₽, "
+                    f"новая цена продавца {new_seller_price}₽"
+                )
+                return new_seller_price, "CALCULATED", reason_msg
+            except ValueError as e:
+                return None, "PARSE_ERROR", f"Ошибка расчета: {e}"
+
+        else:
+            # Стандартное поведение без кошелька
+            min_final = rrp - tolerance
+            max_final = rrp + tolerance
+
+            logger.info(
+                f"RRP стратегия: текущая={current_final}₽, "
+                f"диапазон=[{min_final}₽; {max_final}₽]"
+            )
+
+            if min_final <= current_final <= max_final:
+                return None, "NO_CHANGE", f"Цена в допуске РРЦ ({current_final}₽)"
+
+            target_final = rrp
+
+            try:
+                new_seller_price = self._calculate_seller_price_from_final(target_final, spp)
+                reason_msg = (
+                    f"РРЦ стратегия: целевая финальная {target_final}₽, "
+                    f"новая цена продавца {new_seller_price}₽"
+                )
+                return new_seller_price, "CALCULATED", reason_msg
+            except ValueError as e:
+                return None, "PARSE_ERROR", f"Ошибка расчета: {e}"
+    
+    async def _get_competitor_price(
+        self,
+        config: ProductConfig
+    ) -> Tuple[Optional[Decimal], Optional[int]]:
+        """
+        Получение целевой цены конкурента с учётом MultiCompetitor.
+
+        Строит список nm_id конкурентов (из competitor_entries если есть,
+        иначе из legacy competitor_nm_id), получает цены и применяет правило выбора.
+
+        Returns:
+            Tuple (выбранная_цена_конкурента, winning_nm_id) или (None, None)
+        """
+        from app.models.competitor_entry import CompetitorEntry
+
+        # Собираем список nm_id
+        entries = self.db.query(CompetitorEntry).filter(
+            CompetitorEntry.product_config_id == config.id
+        ).all()
+
+        if entries:
+            nm_ids = [e.nm_id for e in entries]
+        elif config.competitor_nm_id:
+            nm_ids = [config.competitor_nm_id]
+        else:
+            return None, None
+
+        rule = config.competitor_select_rule or "min_price"
+
+        # Получаем данные по каждому конкуренту
+        prices: List[Tuple[int, Decimal, bool]] = []  # (nm_id, price, in_stock)
+        for nm_id in nm_ids:
+            try:
+                p = await catalog_parser.parse_product(nm_id)
+                if p:
+                    prices.append((nm_id, p.final_price, p.in_stock))
+            except Exception as e:
+                logger.warning(f"Не удалось получить цену конкурента nm_id={nm_id}: {e}")
+
+        if not prices:
+            return None, None
+
+        if rule == "cheapest_instock":
+            instock = [(nm, price, s) for nm, price, s in prices if s]
+            if not instock:
+                return None, None  # все out-of-stock → держим текущую цену
+            winner = min(instock, key=lambda x: x[1])
+        elif rule == "avg_price":
+            avg = sum(p for _, p, _ in prices) / len(prices)
+            # Возвращаем среднюю цену, winning_nm_id = None (агрегат)
+            return Decimal(str(avg)), None
+        else:  # min_price (по умолчанию) — минимальная среди всех (кто в наличии)
+            instock = [(nm, price, s) for nm, price, s in prices if s]
+            pool = instock if instock else prices
+            winner = min(pool, key=lambda x: x[1])
+
+        return winner[1], winner[0]
+
+    async def _strategy_competitor(
+        self,
+        product: Product,
+        config: ProductConfig,
+        current_data: Dict
+    ) -> Tuple[Optional[Decimal], str, Optional[str]]:
+        """
+        Стратегия Competitor (поддерживает несколько конкурентов).
+
+        Returns:
+            Tuple (новая_цена_продавца, reason_code, reason_message)
+        """
+        try:
+            competitor_price, winning_nm_id = await self._get_competitor_price(config)
+
+            if competitor_price is None:
+                # Нет конкурентов или все OOS при правиле cheapest_instock
+                from app.models.competitor_entry import CompetitorEntry
+                entries = self.db.query(CompetitorEntry).filter(
+                    CompetitorEntry.product_config_id == config.id
+                ).all()
+                if not entries and not config.competitor_nm_id:
+                    return None, "SKIPPED_INACTIVE", "Конкурент не настроен"
+                return None, "COMPETITOR_OOS", "Все конкуренты не в наличии"
+
+            spp = current_data['spp']
+            if spp is None:
+                return None, "PARSE_ERROR", "Не удалось определить СПП"
+
+            rule = config.competitor_select_rule or "min_price"
+            logger.info(
+                f"Competitor стратегия: правило={rule}, "
+                f"цена конкурента={competitor_price}₽, winning_nm_id={winning_nm_id}"
+            )
+
+            # Рассчитываем целевую финальную цену со смещением
+            offset_type = config.competitor_offset_type
+            offset_direction = config.competitor_offset_direction
+            offset_value = config.competitor_offset_value or Decimal(0)
+
+            if offset_type == 'rub':
+                if offset_direction == 'above':
+                    target_final = competitor_price + offset_value
+                else:
+                    target_final = competitor_price - offset_value
+            else:  # pct
+                if offset_direction == 'above':
+                    target_final = competitor_price * (1 + offset_value / 100)
+                else:
+                    target_final = competitor_price * (1 - offset_value / 100)
+
+            # Обратный расчет цены продавца
+            try:
+                new_seller_price = self._calculate_seller_price_from_final(target_final, spp)
+
+                reason_msg = (
+                    f"Competitor ({rule}): конкурент nm_id={winning_nm_id} цена={competitor_price}₽, "
+                    f"смещение {offset_direction} {offset_value}{offset_type}, "
+                    f"целевая {target_final}₽, новая цена продавца {new_seller_price}₽"
+                )
+
+                return new_seller_price, "CALCULATED", reason_msg
+
+            except ValueError as e:
+                return None, "PARSE_ERROR", f"Ошибка расчета: {e}"
+
+        except Exception as e:
+            logger.error(f"Ошибка стратегии Competitor: {e}")
+            return None, "PARSE_ERROR", f"Исключение при парсинге конкурента: {e}"
+    
+    def _apply_limits(
+        self,
+        new_price: Decimal,
+        config: ProductConfig
+    ) -> Tuple[Decimal, str]:
+        """
+        Применение защитных лимитов (min_price, max_price, min_margin_pct)
+
+        Returns:
+            Tuple (итоговая_цена, reason_code)
+        """
+        original_price = new_price
+        reason_code = "UPDATED"
+
+        # Проверка min_price (обязательно)
+        if new_price < config.min_price:
+            new_price = config.min_price
+            reason_code = "CLAMPED_TO_MIN"
+            logger.info(f"Цена ограничена минимумом: {original_price}₽ → {new_price}₽")
+
+        # Проверка max_price (опционально)
+        if config.max_price and new_price > config.max_price:
+            new_price = config.max_price
+            reason_code = "CLAMPED_TO_MAX"
+            logger.info(f"Цена ограничена максимумом: {original_price}₽ → {new_price}₽")
+
+        # Проверка минимальной маржи (Margin Guard)
+        min_margin_row = self.db.query(AppSetting).filter(AppSetting.key == "min_margin_pct").first()
+        min_margin_pct = float(min_margin_row.value) if min_margin_row else 0.0
+
+        if min_margin_pct > 0 and config.product and config.product.cost_price:
+            cost_price = float(config.product.cost_price)
+            if cost_price > 0:
+                # Читаем настройки комиссий
+                def _gs(key, default):
+                    row = self.db.query(AppSetting).filter(AppSetting.key == key).first()
+                    return row.value if row else default
+
+                commission_type  = _gs("commission_type",  "pct")
+                commission_value = float(_gs("commission_value", "0.0"))
+                logistics_type   = _gs("logistics_type",   "rub")
+                logistics_value  = float(_gs("logistics_value",  "0.0"))
+                acquiring_type   = _gs("acquiring_type",   "pct")
+                acquiring_value  = float(_gs("acquiring_value",  "0.0"))
+
+                sp = float(new_price)
+                fees = 0.0
+                for ftype, fval in [
+                    (commission_type, commission_value),
+                    (logistics_type,  logistics_value),
+                    (acquiring_type,  acquiring_value),
+                ]:
+                    fees += sp * fval / 100 if ftype == "pct" else fval
+
+                current_margin = (sp - cost_price - fees) / cost_price * 100
+
+                if current_margin < min_margin_pct:
+                    # Минимальная цена при которой маржа = min_margin_pct
+                    # fees = fixed_fees + sp * pct_rate
+                    # margin = (sp - cost - fees) / cost = min_margin_pct/100
+                    # sp*(1 - pct_rate) - cost - fixed_fees = cost * min_margin_pct/100
+                    # sp*(1 - pct_rate) = cost*(1 + min_margin_pct/100) + fixed_fees
+                    pct_rate = sum(
+                        fval / 100 if ftype == "pct" else 0
+                        for ftype, fval in [
+                            (commission_type, commission_value),
+                            (logistics_type,  logistics_value),
+                            (acquiring_type,  acquiring_value),
+                        ]
+                    )
+                    fixed_fees = sum(
+                        fval if ftype == "rub" else 0
+                        for ftype, fval in [
+                            (commission_type, commission_value),
+                            (logistics_type,  logistics_value),
+                            (acquiring_type,  acquiring_value),
+                        ]
+                    )
+                    denominator = 1 - pct_rate
+                    if denominator > 0:
+                        min_price_by_margin = Decimal(str(
+                            (cost_price * (1 + min_margin_pct / 100) + fixed_fees) / denominator
+                        ))
+                        # Округляем вверх до целого рубля
+                        min_price_by_margin = Decimal(self._round_up(min_price_by_margin))
+                        if new_price < min_price_by_margin:
+                            logger.info(
+                                f"Цена ограничена защитой маржи: {new_price}₽ → {min_price_by_margin}₽ "
+                                f"(маржа {current_margin:.1f}% < {min_margin_pct}%)"
+                            )
+                            new_price = min_price_by_margin
+                            reason_code = "CLAMPED_TO_MARGIN"
+
+        return new_price, reason_code
+    
+    async def _update_price_in_wb(
+        self,
+        product: Product,
+        account: Account,
+        new_price: Decimal
+    ) -> bool:
+        """
+        Обновление цены в WB API с проверкой применения
+        
+        Returns:
+            True если цена успешно применилась
+        """
+        try:
+            async with create_wb_client(account.wb_api_token) as client:
+                # Отправляем обновление
+                await client.update_prices([
+                    {
+                        "nmID": product.nm_id,
+                        "price": int(new_price)
+                    }
+                ])
+                
+                logger.info(f"Цена отправлена в WB API: nm_id={product.nm_id}, price={new_price}₽")
+                
+                # Проверка применения
+                verified = await client.verify_price_update(
+                    nm_id=product.nm_id,
+                    expected_price=new_price
+                )
+                
+                return verified
+                
+        except Exception as e:
+            logger.error(f"Ошибка обновления цены в WB API для nm_id={product.nm_id}: {e}")
+            return False
+    
+    def _save_price_snapshot(
+        self,
+        product: Product,
+        current_data: Dict,
+        competitor_nm_id: Optional[int] = None,
+        competitor_price: Optional[Decimal] = None,
+        competitor_in_stock: Optional[bool] = None
+    ):
+        """Сохранение снимка цены в БД"""
+        snapshot = PriceSnapshot(
+            product_id=product.id,
+            seller_price=current_data['seller_price'],
+            final_price=current_data['final_price'],
+            spp=current_data.get('spp'),
+            competitor_nm_id=competitor_nm_id,
+            competitor_price=competitor_price,
+            competitor_in_stock=competitor_in_stock,
+            is_in_promo=current_data.get('is_in_promo', False),
+            total_quantity=current_data.get('total_quantity'),
+            snapshot_at=datetime.utcnow()
+        )
+        self.db.add(snapshot)
+    
+    def _save_price_change(
+        self,
+        run: RepricerRun,
+        product: Product,
+        current_data: Dict,
+        new_price: Optional[Decimal],
+        new_final_price: Optional[Decimal],
+        reason_code: str,
+        reason_message: Optional[str]
+    ):
+        """Сохранение записи об изменении цены"""
+        change = PriceChange(
+            run_id=run.id,
+            product_id=product.id,
+            old_seller_price=current_data['seller_price'],
+            old_final_price=current_data['final_price'],
+            new_seller_price=new_price,
+            new_final_price=new_final_price,
+            reason_code=reason_code,
+            reason_message=reason_message,
+            changed_at=datetime.utcnow()
+        )
+        self.db.add(change)
+    
+    async def process_product(
+        self,
+        product: Product,
+        run: RepricerRun
+    ) -> str:
+        """
+        Обработка одного товара
+        
+        Returns:
+            reason_code (UPDATED, NO_CHANGE, SKIPPED_*, etc)
+        """
+        logger.info(f"Обработка товара: {product.seller_sku} (nm_id={product.nm_id})")
+        
+        # Получаем конфигурацию
+        config = product.config
+        if not config or not config.is_active:
+            logger.info(f"Репрайсер отключен для {product.seller_sku}")
+            return "SKIPPED_INACTIVE"
+        
+        # Проверка min_price (обязательное поле)
+        if config.min_price is None:
+            logger.error(f"min_price не установлен для {product.seller_sku}")
+            return "SKIPPED_INACTIVE"
+        
+        # Получаем аккаунт
+        account = product.account
+        if not account or not account.is_active:
+            logger.warning(f"Аккаунт неактивен для {product.seller_sku}")
+            return "SKIPPED_INACTIVE"
+        
+        # Проверяем токен
+        if is_token_expired(account.wb_api_token):
+            logger.error(f"Токен истек для аккаунта {account.name}")
+            await telegram_notifier.notify_token_expired(account.name, account.id)
+            return "WB_API_ERROR"
+        
+        # Получаем текущие данные
+        current_data = await self._get_current_price_data(product, account)
+        if not current_data:
+            return "PARSE_ERROR"
+        
+        # Загружаем скидку кошелька из глобальных настроек
+        wallet_row = self.db.query(AppSetting).filter(
+            AppSetting.key == "wb_wallet_discount_pct"
+        ).first()
+        wallet_pct = Decimal(str(wallet_row.value)) if wallet_row else Decimal(0)
+
+        # Выполняем стратегию
+        if config.strategy == 'rrp':
+            new_price, reason_code, reason_msg = await self._strategy_rrp(
+                product, config, current_data, wallet_pct
+            )
+        elif config.strategy == 'competitor':
+            new_price, reason_code, reason_msg = await self._strategy_competitor(
+                product, config, current_data
+            )
+        else:
+            logger.error(f"Неизвестная стратегия: {config.strategy}")
+            return "PARSE_ERROR"
+        
+        # Если цена не изменилась
+        if new_price is None:
+            self._save_price_snapshot(product, current_data)
+            self._save_price_change(
+                run, product, current_data, None, None,
+                reason_code, reason_msg
+            )
+            return reason_code
+        
+        # Применяем лимиты
+        final_new_price, limit_reason = self._apply_limits(new_price, config)
+        
+        # Если после лимитов цена не изменилась
+        if final_new_price == current_data['seller_price']:
+            self._save_price_snapshot(product, current_data)
+            self._save_price_change(
+                run, product, current_data, final_new_price, None,
+                "NO_CHANGE", f"После применения лимитов цена осталась прежней ({final_new_price}₽)"
+            )
+            return "NO_CHANGE"
+        
+        # Обновляем цену в WB
+        success = await self._update_price_in_wb(product, account, final_new_price)
+        
+        if success:
+            # Рассчитываем новую финальную цену
+            if current_data.get('spp'):
+                new_final = final_new_price * (1 - current_data['spp'] / 100)
+            else:
+                new_final = None
+
+            # Сохраняем снимок с НОВОЙ ценой, чтобы UI сразу отображал обновление
+            updated_data = dict(current_data)
+            updated_data['seller_price'] = final_new_price
+            if new_final:
+                updated_data['final_price'] = new_final
+            self._save_price_snapshot(product, updated_data)
+
+            self._save_price_change(
+                run, product, current_data, final_new_price, new_final,
+                limit_reason if limit_reason != "UPDATED" else "UPDATED",
+                f"{reason_msg}. Цена применена: {final_new_price}₽"
+            )
+            return limit_reason if limit_reason != "UPDATED" else "UPDATED"
+        else:
+            self._save_price_snapshot(product, current_data)
+            self._save_price_change(
+                run, product, current_data, final_new_price, None,
+                "WB_API_ERROR", "Не удалось применить цену в WB API"
+            )
+            return "WB_API_ERROR"
+    
+    async def fetch_price_snapshots(
+        self,
+        product_ids: Optional[List[int]] = None
+    ) -> Dict:
+        """
+        Получение текущих цен с WB и сохранение снимков без изменения цен.
+        Работает для всех товаров, независимо от наличия стратегии.
+        """
+        logger.info("Получение снимков цен для всех товаров")
+
+        query = select(Product)
+        if product_ids:
+            query = query.filter(Product.id.in_(product_ids))
+
+        products = self.db.execute(query).scalars().all()
+        logger.info(f"Товаров для обновления цен: {len(products)}")
+
+        results = {'updated': 0, 'errors': 0, 'total': len(products)}
+
+        for product in products:
+            try:
+                account = product.account
+                if not account or not account.is_active:
+                    results['errors'] += 1
+                    continue
+
+                if is_token_expired(account.wb_api_token):
+                    logger.warning(f"Токен истек для аккаунта {account.name}")
+                    results['errors'] += 1
+                    continue
+
+                current_data = await self._get_current_price_data(product, account)
+                if not current_data:
+                    results['errors'] += 1
+                    continue
+
+                self._save_price_snapshot(product, current_data)
+                self.db.commit()
+                results['updated'] += 1
+
+            except Exception as e:
+                logger.error(f"Ошибка получения цены для {product.seller_sku}: {e}")
+                results['errors'] += 1
+                self.db.rollback()
+
+        logger.info(f"Снимки цен: получено={results['updated']}, ошибок={results['errors']}")
+        return results
+
+    async def run_repricer(
+        self,
+        product_ids: Optional[List[int]] = None,
+        run_type: str = "scheduled"
+    ) -> RepricerRun:
+        """
+        Запуск репрайсера
+        
+        Args:
+            product_ids: Список ID товаров (None = все активные)
+            run_type: Тип запуска (scheduled или manual)
+            
+        Returns:
+            RepricerRun запись с результатами
+        """
+        logger.info(f"Запуск репрайсера (тип: {run_type})")
+        
+        # Создаем запись о прогоне
+        run = RepricerRun(
+            run_type=run_type,
+            status="running",
+            started_at=datetime.utcnow()
+        )
+        self.db.add(run)
+        self.db.commit()
+        
+        try:
+            # Получаем товары для обработки
+            query = select(Product).join(ProductConfig).filter(
+                ProductConfig.is_active == True
+            )
+            
+            if product_ids:
+                query = query.filter(Product.id.in_(product_ids))
+            
+            products = self.db.execute(query).scalars().all()
+            
+            logger.info(f"Найдено {len(products)} товаров для обработки")
+            run.total_products = len(products)
+            self.db.commit()
+            
+            # Обрабатываем товары
+            results = {'updated': 0, 'skipped': 0, 'errors': 0}
+            
+            for product in products:
+                try:
+                    reason_code = await self.process_product(product, run)
+                    
+                    if reason_code in ['UPDATED', 'CLAMPED_TO_MIN', 'CLAMPED_TO_MAX']:
+                        results['updated'] += 1
+                    elif reason_code in ['SKIPPED_PROMO', 'SKIPPED_INACTIVE', 'NO_CHANGE', 'COMPETITOR_OOS']:
+                        results['skipped'] += 1
+                    else:
+                        results['errors'] += 1
+                    
+                    self.db.commit()
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка обработки товара {product.seller_sku}: {e}", exc_info=True)
+                    results['errors'] += 1
+                    self.db.rollback()
+            
+            # Обновляем статус прогона
+            run.updated_count = results['updated']
+            run.skipped_count = results['skipped']
+            run.error_count = results['errors']
+            run.status = "completed"
+            run.completed_at = datetime.utcnow()
+            self.db.commit()
+            
+            logger.info(
+                f"Репрайсер завершен: обновлено={results['updated']}, "
+                f"пропущено={results['skipped']}, ошибок={results['errors']}"
+            )
+            
+            return run
+            
+        except Exception as e:
+            logger.error(f"Критическая ошибка в репрайсере: {e}", exc_info=True)
+            run.status = "failed"
+            run.error_message = str(e)
+            run.completed_at = datetime.utcnow()
+            self.db.commit()
+            
+            # Уведомление в Telegram
+            await telegram_notifier.notify_scheduler_error(str(e))
+            
+            raise
