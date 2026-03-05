@@ -128,5 +128,5 @@ def send_welcome_email(to_email: str) -> bool:
 
     except Exception as e:
         logger.warning(f"Не удалось отправить email на {to_email}: {e}")
-        print(f"[EMAIL] ❌ Ошибка отправки на {to_email}: {e}", flush=True)
-        return False
+        print(f"[EMAIL] FAIL {to_email}: {e}", flush=True)
+        return str(e)
