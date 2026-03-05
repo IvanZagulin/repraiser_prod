@@ -117,16 +117,33 @@ async def startup_db_migration():
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_app_settings_user_id ON app_settings(user_id)"
         ))
-        # Сносим старый уникальный индекс по одному key (если существует)
+        # Сносим старый уникальный индекс/constraint по одному key (любое из возможных имён)
         conn.execute(text("""
             DO $$
             BEGIN
+                -- вариант 1: constraint app_settings_key_key
                 IF EXISTS (
                     SELECT 1 FROM pg_constraint
                     WHERE conname = 'app_settings_key_key'
                       AND conrelid = 'app_settings'::regclass
                 ) THEN
                     ALTER TABLE app_settings DROP CONSTRAINT app_settings_key_key;
+                END IF;
+                -- вариант 2: constraint ix_app_settings_key
+                IF EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'ix_app_settings_key'
+                      AND conrelid = 'app_settings'::regclass
+                ) THEN
+                    ALTER TABLE app_settings DROP CONSTRAINT ix_app_settings_key;
+                END IF;
+                -- вариант 3: просто индекс ix_app_settings_key (не constraint)
+                IF EXISTS (
+                    SELECT 1 FROM pg_indexes
+                    WHERE indexname = 'ix_app_settings_key'
+                      AND tablename = 'app_settings'
+                ) THEN
+                    DROP INDEX ix_app_settings_key;
                 END IF;
             END$$;
         """))
