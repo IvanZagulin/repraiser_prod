@@ -94,9 +94,11 @@ async def register(
     # Копируем глобальные дефолтные настройки новому пользователю
     _copy_default_settings(db, user.id)
 
-    # Отправляем welcome email в фоне (не блокирует ответ)
+    # Отправляем welcome email (синхронно для диагностики)
     from app.services.email_service import send_welcome_email
-    background_tasks.add_task(send_welcome_email, user.email)
+    print(f"[REGISTER] Sending email to {user.email}...", flush=True)
+    result = send_welcome_email(user.email)
+    print(f"[REGISTER] Email result: {result}", flush=True)
 
     token = create_access_token(user)
     return TokenResponse(
