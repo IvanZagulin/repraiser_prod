@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from decimal import Decimal
 import httpx
 from app.config import settings
@@ -422,6 +422,84 @@ class WBAPIClient:
         """
         info = await self.get_card_info(nm_id)
         return info.get("image_url")
+
+    async def get_cards_batch(
+        self,
+        nm_ids: List[int],
+        concurrency: int = 10
+    ) -> Dict[int, dict]:
+        """
+        Batch-получение информации о карточках по списку nmID.
+        Запросы выполняются параллельно с ограничением concurrency.
+
+        Returns:
+            Словарь {nm_id: {seller_sku, name, image_url}}
+        """
+        if not nm_ids:
+            return {}
+
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def fetch_one(nm_id: int) -> Tuple[int, dict]:
+            async with semaphore:
+                info = await self.get_card_info(nm_id)
+                return nm_id, info
+
+        results_raw = await asyncio.gather(
+            *[fetch_one(nm_id) for nm_id in nm_ids],
+            return_exceptions=True
+        )
+
+        result: Dict[int, dict] = {}
+        for item in results_raw:
+            if isinstance(item, Exception):
+                logger.warning(f"Ошибка в batch-запросе карточки: {item}")
+                continue
+            nm_id, info = item
+            if info:
+                result[nm_id] = info
+
+        logger.info(f"get_cards_batch: запрошено {len(nm_ids)}, получено {len(result)}")
+        return result
+
+    async def get_cards_batch_by_skus(
+        self,
+        seller_skus: List[str],
+        concurrency: int = 10
+    ) -> Dict[str, dict]:
+        """
+        Batch-получение информации о карточках по списку артикулов продавца.
+        Запросы выполняются параллельно с ограничением concurrency.
+
+        Returns:
+            Словарь {seller_sku: {nm_id, seller_sku, name, image_url}}
+        """
+        if not seller_skus:
+            return {}
+
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def fetch_one(sku: str) -> Tuple[str, dict]:
+            async with semaphore:
+                info = await self.get_card_info_by_sku(sku)
+                return sku, info
+
+        results_raw = await asyncio.gather(
+            *[fetch_one(sku) for sku in seller_skus],
+            return_exceptions=True
+        )
+
+        result: Dict[str, dict] = {}
+        for item in results_raw:
+            if isinstance(item, Exception):
+                logger.warning(f"Ошибка в batch-запросе карточки по SKU: {item}")
+                continue
+            sku, info = item
+            if info:
+                result[sku] = info
+
+        logger.info(f"get_cards_batch_by_skus: запрошено {len(seller_skus)}, получено {len(result)}")
+        return result
 
     async def search_cards(self, text_search: str, limit: int = 100) -> List[dict]:
         """

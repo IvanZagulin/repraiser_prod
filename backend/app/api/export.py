@@ -1,6 +1,7 @@
 from typing import Annotated, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from datetime import datetime
@@ -21,9 +22,9 @@ async def download_costs_template(
     current_user: Annotated[TokenData, Depends(get_current_user)]
 ):
     """Скачать пустой шаблон Excel для загрузки себестоимостей"""
-    excel_file = excel_exporter.generate_costs_template()
-    return StreamingResponse(
-        excel_file,
+    excel_file = await run_in_threadpool(excel_exporter.generate_costs_template)
+    return Response(
+        content=excel_file.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=template_costs.xlsx"}
     )
@@ -34,12 +35,11 @@ async def download_products_template(
     current_user: Annotated[TokenData, Depends(get_current_user)]
 ):
     """Скачать пустой шаблон Excel для импорта товаров"""
-    excel_file = excel_exporter.generate_products_template()
-    filename = "template_products.xlsx"
-    return StreamingResponse(
-        excel_file,
+    excel_file = await run_in_threadpool(excel_exporter.generate_products_template)
+    return Response(
+        content=excel_file.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": "attachment; filename=template_products.xlsx"}
     )
 
 
@@ -48,12 +48,11 @@ async def download_strategy_template(
     current_user: Annotated[TokenData, Depends(get_current_user)]
 ):
     """Скачать пустой шаблон Excel для настройки стратегий"""
-    excel_file = excel_exporter.generate_strategy_template()
-    filename = "template_strategies.xlsx"
-    return StreamingResponse(
-        excel_file,
+    excel_file = await run_in_threadpool(excel_exporter.generate_strategy_template)
+    return Response(
+        content=excel_file.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": "attachment; filename=template_strategies.xlsx"}
     )
 
 
@@ -77,8 +76,12 @@ async def export_products(
     Строки раскрашены по статусу репрайсера.
     Поддерживает фильтры по статусу и стратегии.
     """
-    query = db.query(Product).join(
-        ProductConfig, Product.id == ProductConfig.product_id, isouter=True
+    # IDOR fix: фильтруем только товары текущего пользователя
+    query = (
+        db.query(Product)
+        .join(Account, Product.account_id == Account.id)
+        .filter(Account.user_id == current_user.user_id)
+        .join(ProductConfig, Product.id == ProductConfig.product_id, isouter=True)
     )
 
     # Фильтр по статусу
@@ -95,15 +98,32 @@ async def export_products(
 
     products = query.all()
 
+    # Batch-загрузка последних снимков цен (fix N+1)
+    product_ids = [p.id for p in products]
+    last_snapshots: dict = {}
+    if product_ids:
+        # Для каждого product_id берём последний снимок через subquery
+        from sqlalchemy import func
+        subq = (
+            db.query(
+                PriceSnapshot.product_id,
+                func.max(PriceSnapshot.snapshot_at).label("max_at")
+            )
+            .filter(PriceSnapshot.product_id.in_(product_ids))
+            .group_by(PriceSnapshot.product_id)
+            .subquery()
+        )
+        rows = (
+            db.query(PriceSnapshot)
+            .join(subq, (PriceSnapshot.product_id == subq.c.product_id) &
+                        (PriceSnapshot.snapshot_at == subq.c.max_at))
+            .all()
+        )
+        last_snapshots = {s.product_id: s for s in rows}
+
     products_data = []
     for product in products:
-        # Последний снимок цены
-        last_snapshot = (
-            db.query(PriceSnapshot)
-            .filter(PriceSnapshot.product_id == product.id)
-            .order_by(desc(PriceSnapshot.snapshot_at))
-            .first()
-        )
+        last_snapshot = last_snapshots.get(product.id)
 
         cfg = product.config
         cfg_dict = {}
@@ -133,11 +153,11 @@ async def export_products(
             "last_updated":         last_snapshot.snapshot_at.strftime('%Y-%m-%d %H:%M:%S') if last_snapshot else "",
         })
 
-    excel_file = excel_exporter.export_products_with_config(products_data)
+    excel_file = await run_in_threadpool(excel_exporter.export_products_with_config, products_data)
     filename = f"products_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
-    return StreamingResponse(
-        excel_file,
+    return Response(
+        content=excel_file.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
@@ -152,35 +172,51 @@ async def export_history(
 ):
     """
     Экспорт истории цен в Excel
-    
+
     Параметры:
     - seller_skus: Артикулы через запятую (если не указано - все товары)
     - limit: Максимум записей на товар
     """
-    
-    # Получаем товары
-    query = db.query(Product)
-    
+    # IDOR fix: только товары текущего пользователя
+    query = (
+        db.query(Product)
+        .join(Account, Product.account_id == Account.id)
+        .filter(Account.user_id == current_user.user_id)
+    )
+
     if seller_skus:
         sku_list = [sku.strip() for sku in seller_skus.split(',')]
         query = query.filter(Product.seller_sku.in_(sku_list))
-    
+
     products = query.all()
-    
+
     if not products:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No products found"
         )
-    
-    # Собираем данные
+
+    # Batch-загрузка снимков (fix N+1)
+    product_ids = [p.id for p in products]
+    from sqlalchemy import and_
+    all_snapshots = (
+        db.query(PriceSnapshot)
+        .filter(PriceSnapshot.product_id.in_(product_ids))
+        .order_by(desc(PriceSnapshot.snapshot_at))
+        .all()
+    )
+    # Группируем по product_id с лимитом
+    from collections import defaultdict
+    snap_by_product: dict = defaultdict(list)
+    for s in all_snapshots:
+        if len(snap_by_product[s.product_id]) < limit:
+            snap_by_product[s.product_id].append(s)
+
+    product_map = {p.id: p for p in products}
+
     history_data = []
-    
-    for product in products:
-        snapshots = db.query(PriceSnapshot).filter(
-            PriceSnapshot.product_id == product.id
-        ).order_by(desc(PriceSnapshot.snapshot_at)).limit(limit).all()
-        
+    for pid, snapshots in snap_by_product.items():
+        product = product_map[pid]
         for snapshot in snapshots:
             history_data.append({
                 'seller_sku': product.seller_sku,
@@ -193,15 +229,12 @@ async def export_history(
                 'is_in_promo': snapshot.is_in_promo,
                 'snapshot_at': snapshot.snapshot_at.strftime('%Y-%m-%d %H:%M:%S')
             })
-    
-    # Генерируем Excel
-    excel_file = excel_exporter.export_price_history(history_data)
-    
-    # Возвращаем файл
+
+    excel_file = await run_in_threadpool(excel_exporter.export_price_history, history_data)
     filename = f"price_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    
-    return StreamingResponse(
-        excel_file,
+
+    return Response(
+        content=excel_file.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
@@ -214,21 +247,26 @@ async def export_run(
     current_user: Annotated[TokenData, Depends(get_current_user)]
 ):
     """Экспорт прогона репрайсера в Excel"""
-    
-    # Получаем прогон
+
+    # IDOR fix: проверяем что прогон принадлежит пользователю (через user_id если есть, иначе через товары)
     run = db.query(RepricerRun).filter(RepricerRun.id == run_id).first()
-    
+
     if not run:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Run {run_id} not found"
         )
-    
+
+    # Если в прогоне есть user_id — проверяем напрямую
+    if hasattr(run, 'user_id') and run.user_id is not None:
+        if run.user_id != current_user.user_id:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
     # Получаем изменения
     changes = db.query(PriceChange).filter(
         PriceChange.run_id == run_id
     ).all()
-    
+
     # Формируем данные
     run_data = {
         'id': run.id,
@@ -241,13 +279,19 @@ async def export_run(
         'skipped_count': run.skipped_count,
         'error_count': run.error_count
     }
-    
+
+    # Batch-загрузка товаров (fix N+1)
+    product_ids = list({c.product_id for c in changes})
+    product_map = {
+        p.id: p for p in db.query(Product).filter(Product.id.in_(product_ids)).all()
+    } if product_ids else {}
+
     changes_data = []
     for change in changes:
-        product = db.query(Product).filter(Product.id == change.product_id).first()
+        product = product_map.get(change.product_id)
         changes_data.append({
-            'seller_sku': product.seller_sku,
-            'product_name': product.name,
+            'seller_sku': product.seller_sku if product else '',
+            'product_name': product.name if product else '',
             'old_seller_price': change.old_seller_price,
             'new_seller_price': change.new_seller_price,
             'old_final_price': change.old_final_price,
@@ -256,14 +300,12 @@ async def export_run(
             'reason_message': change.reason_message,
             'changed_at': change.changed_at.strftime('%Y-%m-%d %H:%M:%S')
         })
-    
-    # Генерируем Excel
-    excel_file = excel_exporter.export_repricer_run(run_data, changes_data)
-    
+
+    excel_file = await run_in_threadpool(excel_exporter.export_repricer_run, run_data, changes_data)
     filename = f"repricer_run_{run_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    
-    return StreamingResponse(
-        excel_file,
+
+    return Response(
+        content=excel_file.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
@@ -289,27 +331,35 @@ async def import_costs(
     content = await file.read()
 
     try:
-        costs_data = excel_importer.import_costs(content)
+        costs_data = await run_in_threadpool(excel_importer.import_costs, content)
     except ExcelImportError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     results = {'updated': 0, 'errors': []}
 
     for item in costs_data:
-        try:
-            product = db.query(Product).filter(
-                Product.seller_sku == item['seller_sku']
-            ).first()
-            if not product:
-                results['errors'].append(f"Товар {item['seller_sku']!r} не найден в системе")
-                continue
-            product.cost_price = item['cost_price']
-            results['updated'] += 1
-        except Exception as e:
-            db.rollback()
-            results['errors'].append(f"{item['seller_sku']}: {str(e)}")
+        # IDOR fix: ищем товар только среди товаров текущего пользователя
+        product = (
+            db.query(Product)
+            .join(Account, Product.account_id == Account.id)
+            .filter(
+                Product.seller_sku == item['seller_sku'],
+                Account.user_id == current_user.user_id
+            )
+            .first()
+        )
+        if not product:
+            results['errors'].append(f"Товар {item['seller_sku']!r} не найден в системе")
+            continue
+        product.cost_price = item['cost_price']
+        results['updated'] += 1
 
-    db.commit()
+    # Один коммит в конце (fix: commit в цикле)
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Ошибка сохранения: {e}")
 
     return {
         "success": True,
@@ -327,71 +377,71 @@ async def import_strategy(
 ):
     """
     Импорт конфигураций стратегий из Excel
-    
+
     Формат файла (заголовки в первой строке):
-    - seller_sku | strategy | is_active | min_price | max_price | 
+    - seller_sku | strategy | is_active | min_price | max_price |
       rrp_price | rrp_tolerance | competitor_nm_id | competitor_offset_type |
       competitor_offset_direction | competitor_offset_value
     """
-    
-    # Проверка типа файла
+
     if not file.filename.endswith(('.xlsx', '.xls')):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="File must be Excel (.xlsx or .xls)"
         )
-    
-    # Читаем файл
+
     content = await file.read()
-    
+
     try:
-        configs = excel_importer.import_strategy_config(content)
+        configs = await run_in_threadpool(excel_importer.import_strategy_config, content)
     except ExcelImportError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    
-    # Применяем конфигурации
+
     results = {
         'created': 0,
         'updated': 0,
         'errors': []
     }
-    
+
     for config_data in configs:
-        try:
-            # Находим товар по seller_sku
-            product = db.query(Product).filter(
-                Product.seller_sku == config_data['seller_sku']
-            ).first()
-            
-            if not product:
-                results['errors'].append(f"Товар {config_data['seller_sku']} не найден")
-                continue
-            
-            # Создаем или обновляем конфиг
-            if product.config:
-                # Обновляем существующий
-                for key, value in config_data.items():
-                    if key != 'seller_sku' and value is not None:
-                        setattr(product.config, key, value)
-                results['updated'] += 1
-            else:
-                # Создаем новый
-                config = ProductConfig(
-                    product_id=product.id,
-                    **{k: v for k, v in config_data.items() if k != 'seller_sku'}
-                )
-                db.add(config)
-                results['created'] += 1
-            
-            db.commit()
-            
-        except Exception as e:
-            db.rollback()
-            results['errors'].append(f"Ошибка для {config_data['seller_sku']}: {str(e)}")
-    
+        # IDOR fix: ищем товар только среди товаров текущего пользователя
+        product = (
+            db.query(Product)
+            .join(Account, Product.account_id == Account.id)
+            .filter(
+                Product.seller_sku == config_data['seller_sku'],
+                Account.user_id == current_user.user_id
+            )
+            .first()
+        )
+
+        if not product:
+            results['errors'].append(f"Товар {config_data['seller_sku']} не найден")
+            continue
+
+        if product.config:
+            for key, value in config_data.items():
+                if key != 'seller_sku' and value is not None:
+                    setattr(product.config, key, value)
+            results['updated'] += 1
+        else:
+            config = ProductConfig(
+                product_id=product.id,
+                **{k: v for k, v in config_data.items() if k != 'seller_sku'}
+            )
+            db.add(config)
+            results['created'] += 1
+
+    # Один коммит в конце (fix: commit в цикле)
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Ошибка сохранения: {e}")
+
     return {
         "success": True,
         "total": len(configs),
@@ -425,7 +475,8 @@ async def import_products(
     content = await file.read()
 
     try:
-        products_data = excel_importer.import_products(content)
+        # run_in_threadpool: openpyxl синхронный, не блокируем event loop
+        products_data = await run_in_threadpool(excel_importer.import_products, content)
     except ExcelImportError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -438,93 +489,160 @@ async def import_products(
         'errors': []
     }
 
-    # Кэш WB клиентов по account_id
+    # ── Проверяем аккаунты и IDOR ──────────────────────────────────────────────
+    # Кэш аккаунтов по account_id (проверяем принадлежность пользователю)
+    account_cache: dict = {}
+
+    def _get_account(account_id: int):
+        if account_id in account_cache:
+            return account_cache[account_id]
+        acc = (
+            db.query(Account)
+            .filter(
+                Account.id == account_id,
+                Account.user_id == current_user.user_id  # IDOR fix
+            )
+            .first()
+        )
+        account_cache[account_id] = acc
+        return acc
+
+    # ── Группируем товары по тому, что нужно получить из WB ───────────────────
+    # nm_ids у которых нет seller_sku или нет name → нужна карточка из WB
+    # seller_skus у которых нет nm_id → нужен поиск в WB
+    nm_ids_need_info: dict = defaultdict(list)   # account_id → [nm_id, ...]
+    skus_need_nm_id:  dict = defaultdict(list)   # account_id → [seller_sku, ...]
+
+    for pd in products_data:
+        nm_id      = pd.get('nm_id')
+        seller_sku = pd.get('seller_sku')
+        name       = pd.get('name')
+        account_id = pd.get('account_id')
+        if not account_id:
+            continue
+        if not nm_id and seller_sku:
+            skus_need_nm_id[account_id].append(seller_sku)
+        elif nm_id and (not seller_sku or not name):
+            nm_ids_need_info[account_id].append(nm_id)
+
+    # ── Batch-запросы в WB API (один клиент на аккаунт) ───────────────────────
+    # card_cache[account_id][nm_id]      → {seller_sku, name, image_url}
+    # sku_cache[account_id][seller_sku]  → {nm_id, seller_sku, name, image_url}
+    card_cache: dict = defaultdict(dict)
+    sku_cache:  dict = defaultdict(dict)
+
     wb_clients: dict = {}
 
+    def _get_wb_client(account_id: int):
+        if account_id not in wb_clients:
+            acc = _get_account(account_id)
+            if acc:
+                wb_clients[account_id] = create_wb_client(acc.wb_api_token)
+        return wb_clients.get(account_id)
+
+    # Батч-запросы для nm_ids (нужен seller_sku/name)
+    for account_id, nm_ids in nm_ids_need_info.items():
+        wb = _get_wb_client(account_id)
+        if not wb:
+            continue
+        # get_cards_batch: параллельные запросы с semaphore
+        batch_result = await wb.get_cards_batch(nm_ids)
+        card_cache[account_id].update(batch_result)
+
+    # Батч-запросы для seller_skus (нужен nm_id)
+    for account_id, skus in skus_need_nm_id.items():
+        wb = _get_wb_client(account_id)
+        if not wb:
+            continue
+        batch_result = await wb.get_cards_batch_by_skus(skus)
+        sku_cache[account_id].update(batch_result)
+
+    # ── Создаём товары ────────────────────────────────────────────────────────
     for product_data in products_data:
-        nm_id      = product_data.get('nm_id')       # может быть None
-        seller_sku = product_data.get('seller_sku')   # может быть None
-        account_id = product_data['account_id']
+        nm_id      = product_data.get('nm_id')
+        seller_sku = product_data.get('seller_sku')
+        account_id = product_data.get('account_id')
         name       = product_data.get('name')
 
-        # Метка для сообщений об ошибках
         label = f"nmID={nm_id}" if nm_id else f"артикул={seller_sku!r}"
 
-        try:
-            # Проверяем аккаунт (один раз на account_id через кэш)
-            account = db.query(Account).filter(Account.id == account_id).first()
-            if not account:
-                results['errors'].append(f"{label}: аккаунт {account_id} не найден")
-                continue
+        if not account_id:
+            results['errors'].append(f"{label}: не указан ID аккаунта")
+            continue
 
-            # Инициализируем WB клиент для этого аккаунта
-            if account_id not in wb_clients:
-                wb_clients[account_id] = create_wb_client(account.wb_api_token)
-            wb = wb_clients[account_id]
-
-            image_url = None
-
-            # ── Случай 1: есть только seller_sku → ищем nm_id через WB API ──
-            if not nm_id and seller_sku:
-                try:
-                    card_info = await wb.get_card_info_by_sku(seller_sku)
-                    if card_info:
-                        nm_id = card_info.get("nm_id")
-                        if not name:
-                            name = card_info.get("name")
-                        image_url = card_info.get("image_url")
-                except Exception:
-                    pass
-
-                if not nm_id:
-                    results['errors'].append(
-                        f"артикул={seller_sku!r}: nmID не найден в WB — проверьте артикул и аккаунт"
-                    )
-                    continue
-
-            # ── Случай 2: есть nm_id, но нет seller_sku или name → получаем из WB ──
-            elif nm_id and (not seller_sku or not name):
-                try:
-                    card_info = await wb.get_card_info(nm_id)
-                    if card_info:
-                        if not seller_sku:
-                            seller_sku = card_info.get("seller_sku")
-                        if not name:
-                            name = card_info.get("name")
-                        image_url = card_info.get("image_url")
-                except Exception:
-                    pass
-
-            # Проверяем существование по nm_id + account_id
-            existing = db.query(Product).filter(
-                Product.nm_id == nm_id,
-                Product.account_id == account_id,
-            ).first()
-
-            if existing:
-                results['skipped'] += 1
-                continue
-
-            # Финальные заглушки
-            if not seller_sku:
-                seller_sku = str(nm_id)
-            if not name:
-                name = f"Товар {nm_id}"
-
-            product = Product(
-                nm_id=nm_id,
-                account_id=account_id,
-                seller_sku=seller_sku,
-                name=name,
-                image_url=image_url,
+        account = _get_account(account_id)
+        if not account:
+            results['errors'].append(
+                f"{label}: аккаунт {account_id} не найден или не принадлежит вам"
             )
-            db.add(product)
-            db.commit()
-            results['created'] += 1
+            continue
 
+        image_url = None
+
+        # Случай 1: есть seller_sku, нет nm_id → берём из sku_cache
+        if not nm_id and seller_sku:
+            card_info = sku_cache[account_id].get(seller_sku, {})
+            if card_info:
+                nm_id = card_info.get("nm_id")
+                if not name:
+                    name = card_info.get("name")
+                image_url = card_info.get("image_url")
+            if not nm_id:
+                results['errors'].append(
+                    f"артикул={seller_sku!r}: nmID не найден в WB — проверьте артикул и аккаунт"
+                )
+                continue
+
+        # Случай 2: есть nm_id, нужна доп. инфо → берём из card_cache
+        elif nm_id and (not seller_sku or not name):
+            card_info = card_cache[account_id].get(nm_id, {})
+            if card_info:
+                if not seller_sku:
+                    seller_sku = card_info.get("seller_sku")
+                if not name:
+                    name = card_info.get("name")
+                image_url = card_info.get("image_url")
+
+        # Проверяем дубликат
+        existing = db.query(Product).filter(
+            Product.nm_id == nm_id,
+            Product.account_id == account_id,
+        ).first()
+
+        if existing:
+            results['skipped'] += 1
+            continue
+
+        # Финальные заглушки
+        if not seller_sku:
+            seller_sku = str(nm_id)
+        if not name:
+            name = f"Товар {nm_id}"
+
+        product = Product(
+            nm_id=nm_id,
+            account_id=account_id,
+            seller_sku=seller_sku,
+            name=name,
+            image_url=image_url,
+        )
+        db.add(product)
+        results['created'] += 1
+
+    # Один коммит в конце для всех товаров
+    if results['created'] > 0:
+        try:
+            db.commit()
         except Exception as e:
             db.rollback()
-            results['errors'].append(f"{label}: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Ошибка сохранения товаров: {e}")
+
+    # Закрываем WB клиенты
+    for wb in wb_clients.values():
+        try:
+            await wb._close_session()
+        except Exception:
+            pass
 
     return {
         "success": True,

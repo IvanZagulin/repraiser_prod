@@ -62,25 +62,28 @@ async def manual_run(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Ручной запуск репрайсера (через Celery — не блокирует API)"""
+    from datetime import datetime as _dt
     product_ids = _user_product_ids(db, current_user.id, request.seller_skus or None)
 
     if not product_ids:
         raise HTTPException(status_code=404, detail="No products found")
 
-    from app.tasks.repricer_task import run_repricer_for_user
-    run_repricer_for_user.delay(current_user.id, product_ids, "manual")
+    # Создаём запись в БД заранее — чтобы вернуть реальный ID на фронт
+    run = RepricerRun(
+        user_id=current_user.id,
+        run_type="manual",
+        status="queued",
+        total_products=len(product_ids),
+        started_at=_dt.utcnow(),
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
 
-    return {
-        "id": 0,
-        "run_type": "manual",
-        "total_products": len(product_ids),
-        "updated_count": 0,
-        "skipped_count": 0,
-        "error_count": 0,
-        "status": "queued",
-        "started_at": None,
-        "completed_at": None,
-    }
+    from app.tasks.repricer_task import run_repricer_for_user
+    run_repricer_for_user.delay(current_user.id, product_ids, "manual", run.id)
+
+    return RepricerRunResponse.model_validate(run)
 
 
 @router.post("/run-sync", response_model=RepricerRunResponse)
@@ -121,10 +124,11 @@ async def list_runs(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
     run_type: Optional[str] = Query(None, regex="^(scheduled|manual)$"),
-    status: Optional[str] = Query(None, regex="^(running|completed|failed)$"),
+    status: Optional[str] = Query(None, regex="^(running|completed|failed|queued)$"),
     limit: int = Query(50, ge=1, le=100),
 ):
-    query = db.query(RepricerRun)
+    # Фильтруем по user_id — каждый видит только свои прогоны
+    query = db.query(RepricerRun).filter(RepricerRun.user_id == current_user.id)
     if run_type:
         query = query.filter(RepricerRun.run_type == run_type)
     if status:
@@ -145,7 +149,11 @@ async def get_run(
     current_user: Annotated[User, Depends(get_current_user)],
     include_changes: bool = Query(False),
 ):
-    run = db.query(RepricerRun).filter(RepricerRun.id == run_id).first()
+    # IDOR fix: прогон должен принадлежать текущему пользователю
+    run = db.query(RepricerRun).filter(
+        RepricerRun.id == run_id,
+        RepricerRun.user_id == current_user.id,
+    ).first()
     if not run:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 

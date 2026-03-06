@@ -563,11 +563,9 @@ class RepricerEngine:
         if not current_data:
             return "PARSE_ERROR"
         
-        # Загружаем скидку кошелька из глобальных настроек
-        wallet_row = self.db.query(AppSetting).filter(
-            AppSetting.key == "wb_wallet_discount_pct"
-        ).first()
-        wallet_pct = Decimal(str(wallet_row.value)) if wallet_row else Decimal(0)
+        # Загружаем скидку кошелька (per-user, с fallback на глобальную)
+        from app.api.settings import _get_setting as _gs
+        wallet_pct = Decimal(_gs(self.db, "wb_wallet_discount_pct", "0", self.user_id))
 
         # Выполняем стратегию
         if config.strategy == 'rrp':
@@ -685,7 +683,8 @@ class RepricerEngine:
     async def run_repricer(
         self,
         product_ids: Optional[List[int]] = None,
-        run_type: str = "scheduled"
+        run_type: str = "scheduled",
+        existing_run_id: Optional[int] = None,
     ) -> RepricerRun:
         """
         Запуск репрайсера
@@ -699,14 +698,24 @@ class RepricerEngine:
         """
         logger.info(f"Запуск репрайсера (тип: {run_type})")
         
-        # Создаем запись о прогоне
-        run = RepricerRun(
-            run_type=run_type,
-            status="running",
-            started_at=datetime.utcnow()
-        )
-        self.db.add(run)
-        self.db.commit()
+        # Используем существующую запись (из API) или создаём новую
+        if existing_run_id:
+            run = self.db.query(RepricerRun).filter(RepricerRun.id == existing_run_id).first()
+            if run:
+                run.status = "running"
+                self.db.commit()
+            else:
+                existing_run_id = None
+
+        if not existing_run_id:
+            run = RepricerRun(
+                user_id=self.user_id,
+                run_type=run_type,
+                status="running",
+                started_at=datetime.utcnow()
+            )
+            self.db.add(run)
+            self.db.commit()
         
         try:
             # Получаем товары для обработки

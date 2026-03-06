@@ -93,6 +93,16 @@ export default function Accounts() {
 
                   <div className="mt-4 flex items-center gap-6 pl-12">
                     <div>
+                      <p className="text-xs mb-1" style={{ color: 'var(--text-3)' }}>ID аккаунта</p>
+                      <span
+                        className="font-mono text-sm font-semibold px-2 py-0.5 rounded"
+                        style={{ background: '#ede9fe', color: '#7c3aed' }}
+                        title="Используйте этот ID при загрузке товаров через Excel"
+                      >
+                        {account.id}
+                      </span>
+                    </div>
+                    <div>
                       <p className="text-xs mb-1" style={{ color: 'var(--text-3)' }}>Срок токена</p>
                       {getTokenStatus(account)}
                     </div>

@@ -33,7 +33,7 @@ services:
       - wb_network
     volumes:
       - redis_data:/data
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: redis-server --maxmemory 256mb --maxmemory-policy noeviction
 
   backend:
     build:
