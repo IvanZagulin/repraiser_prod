@@ -32,6 +32,7 @@ export default function Products() {
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [filterStrategy, setFilterStrategy] = useState('all');
   const [walletPct, setWalletPct] = useState(3.0);
   const [viewMode, setViewMode] = useState('grid');
@@ -40,9 +41,19 @@ export default function Products() {
   const [fetchingPrices, setFetchingPrices] = useState(false);
   const isMounted = useRef(true);
 
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchTerm), 350);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  // Reload when debounced search or strategy changes
+  useEffect(() => {
+    loadProducts(1);
+  }, [debouncedSearch, filterStrategy]);
+
   useEffect(() => {
     isMounted.current = true;
-    loadProducts(1);
     getSettings()
       .then((res) => { if (isMounted.current) setWalletPct(res.data.wb_wallet_discount_pct); })
       .catch(() => {});
@@ -56,7 +67,10 @@ export default function Products() {
   const loadProducts = async (p = page) => {
     setLoading(true);
     try {
-      const response = await getProducts({ page: p, page_size: PAGE_SIZE });
+      const params = { page: p, page_size: PAGE_SIZE };
+      if (debouncedSearch) params.search = debouncedSearch;
+      if (filterStrategy !== 'all') params.strategy = filterStrategy;
+      const response = await getProducts(params);
       setProducts(response.data.products);
       setTotalProducts(response.data.total);
       setPage(p);
@@ -70,9 +84,17 @@ export default function Products() {
   const pageRef = useRef(page);
   useEffect(() => { pageRef.current = page; }, [page]);
 
+  const searchRef = useRef(debouncedSearch);
+  const strategyRef = useRef(filterStrategy);
+  useEffect(() => { searchRef.current = debouncedSearch; }, [debouncedSearch]);
+  useEffect(() => { strategyRef.current = filterStrategy; }, [filterStrategy]);
+
   const refreshProductsSilent = async () => {
     try {
-      const response = await getProducts({ page: pageRef.current, page_size: PAGE_SIZE });
+      const params = { page: pageRef.current, page_size: PAGE_SIZE };
+      if (searchRef.current) params.search = searchRef.current;
+      if (strategyRef.current !== 'all') params.strategy = strategyRef.current;
+      const response = await getProducts(params);
       if (isMounted.current) {
         setProducts(response.data.products);
         setTotalProducts(response.data.total);
@@ -133,14 +155,8 @@ export default function Products() {
     setShowHistoryModal(true);
   };
 
-  const filteredProducts = products.filter((p) => {
-    const sku  = (p.seller_sku || '').toLowerCase();
-    const name = (p.name || '').toLowerCase();
-    const term = searchTerm.toLowerCase();
-    const matchesSearch = sku.includes(term) || name.includes(term) || String(p.nm_id).includes(term);
-    const matchesStrategy = filterStrategy === 'all' || p.config?.strategy === filterStrategy;
-    return matchesSearch && matchesStrategy;
-  });
+  // Filtering is now done server-side via search & strategy params
+  const filteredProducts = products;
 
   const getStatusBadge = (product) => {
     if (!product.config) return <span className="badge badge-warning">Не настроен</span>;

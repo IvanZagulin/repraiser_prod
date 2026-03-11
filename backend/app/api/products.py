@@ -1,7 +1,7 @@
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, or_, cast, String
 from slowapi import Limiter
 
 from app.database import get_db
@@ -42,6 +42,7 @@ async def list_products(
     account_id: Optional[int] = None,
     strategy: Optional[str] = Query(None, regex="^(rrp|competitor)$"),
     is_active: Optional[bool] = None,
+    search: Optional[str] = Query(None, min_length=1, max_length=200),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=1000),
 ):
@@ -58,6 +59,13 @@ async def list_products(
         query = query.filter(ProductConfig.strategy == strategy)
     if is_active is not None:
         query = query.filter(ProductConfig.is_active == is_active)
+    if search:
+        term = f"%{search.strip()}%"
+        query = query.filter(or_(
+            Product.seller_sku.ilike(term),
+            Product.name.ilike(term),
+            cast(Product.nm_id, String).ilike(term),
+        ))
 
     total = query.count()
     products = query.offset((page - 1) * page_size).limit(page_size).all()

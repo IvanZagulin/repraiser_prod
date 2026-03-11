@@ -54,7 +54,7 @@ def _get_setting(db: Session, key: str, default: str, user_id: Optional[int] = N
     return row.value if row else default
 
 
-def _set_setting(db: Session, key: str, value: str, user_id: Optional[int] = None):
+def _set_setting(db: Session, key: str, value: str, user_id: Optional[int] = None, *, auto_commit: bool = True):
     """Upsert настройки для конкретного user_id."""
     row = db.query(AppSetting).filter(
         AppSetting.key == key, AppSetting.user_id == user_id
@@ -63,7 +63,8 @@ def _set_setting(db: Session, key: str, value: str, user_id: Optional[int] = Non
         row.value = value
     else:
         db.add(AppSetting(key=key, value=value, user_id=user_id))
-    db.commit()
+    if auto_commit:
+        db.commit()
 
 
 # ─── endpoints ────────────────────────────────────────────────────────────────
@@ -94,15 +95,16 @@ async def update_settings(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     uid = current_user.id
-    _set_setting(db, "repricer_interval_minutes", str(data.repricer_interval_minutes), uid)
-    _set_setting(db, "wb_wallet_discount_pct",    str(data.wb_wallet_discount_pct),    uid)
-    _set_setting(db, "commission_type",            data.commission_type,                uid)
-    _set_setting(db, "commission_value",           str(data.commission_value),          uid)
-    _set_setting(db, "logistics_type",             data.logistics_type,                 uid)
-    _set_setting(db, "logistics_value",            str(data.logistics_value),           uid)
-    _set_setting(db, "acquiring_type",             data.acquiring_type,                 uid)
-    _set_setting(db, "acquiring_value",            str(data.acquiring_value),           uid)
-    _set_setting(db, "min_margin_pct",             str(data.min_margin_pct),            uid)
+    _set_setting(db, "repricer_interval_minutes", str(data.repricer_interval_minutes), uid, auto_commit=False)
+    _set_setting(db, "wb_wallet_discount_pct",    str(data.wb_wallet_discount_pct),    uid, auto_commit=False)
+    _set_setting(db, "commission_type",            data.commission_type,                uid, auto_commit=False)
+    _set_setting(db, "commission_value",           str(data.commission_value),          uid, auto_commit=False)
+    _set_setting(db, "logistics_type",             data.logistics_type,                 uid, auto_commit=False)
+    _set_setting(db, "logistics_value",            str(data.logistics_value),           uid, auto_commit=False)
+    _set_setting(db, "acquiring_type",             data.acquiring_type,                 uid, auto_commit=False)
+    _set_setting(db, "acquiring_value",            str(data.acquiring_value),           uid, auto_commit=False)
+    _set_setting(db, "min_margin_pct",             str(data.min_margin_pct),            uid, auto_commit=False)
+    db.commit()
     return SettingsResponse(
         repricer_interval_minutes=data.repricer_interval_minutes,
         wb_wallet_discount_pct=data.wb_wallet_discount_pct,

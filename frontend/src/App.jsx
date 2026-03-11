@@ -14,13 +14,27 @@ import ImportExport from './pages/ImportExport';
 import SettingsPage from './pages/SettingsPage';
 import Analytics from './pages/Analytics';
 
+function isTokenExpired(token) {
+  try {
+    const base64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(base64));
+    if (!payload.exp) return false;
+    // 60s buffer to avoid edge-case race
+    return payload.exp * 1000 < Date.now() - 60000;
+  } catch {
+    return true;
+  }
+}
+
 function ProtectedRoute({ children }) {
   const token = useAuthStore((state) => state.token);
-  
-  if (!token) {
+  const logout = useAuthStore((state) => state.logout);
+
+  if (!token || isTokenExpired(token)) {
+    if (token) logout();
     return <Navigate to="/login" replace />;
   }
-  
+
   return children;
 }
 
