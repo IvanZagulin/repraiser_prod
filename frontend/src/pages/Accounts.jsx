@@ -91,7 +91,7 @@ export default function Accounts() {
                       <KeyRound className="w-4 h-4 text-primary" />
                     </div>
                     <div>
-                      <h3 className="font-semibold text-gray-900">{account.name}</h3>
+                      <h3 className="font-semibold text-foreground">{account.name}</h3>
                       <p className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
                         Создан {format(new Date(account.created_at), 'dd.MM.yyyy')}
                       </p>
@@ -179,7 +179,7 @@ function AccountModal({ onClose }) {
     <div className="modal-overlay">
       <div className="modal-box max-w-md">
         <div className="modal-header">
-          <h2 className="text-base font-semibold text-gray-900">Добавить аккаунт</h2>
+          <h2 className="text-base font-semibold text-foreground">Добавить аккаунт</h2>
           <button onClick={onClose} className="btn btn-ghost btn-sm p-1">
             <X className="w-5 h-5" />
           </button>

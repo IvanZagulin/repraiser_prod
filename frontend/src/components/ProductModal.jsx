@@ -70,7 +70,7 @@ export default function ProductModal({ onClose }) {
     <div className="modal-overlay">
       <div className="modal-box max-w-md">
         <div className="modal-header">
-          <h2 className="text-base font-semibold text-gray-900">Добавить товар</h2>
+          <h2 className="text-base font-semibold text-foreground">Добавить товар</h2>
           <button onClick={onClose} className="btn btn-ghost btn-sm p-1">
             <X className="w-5 h-5" />
           </button>

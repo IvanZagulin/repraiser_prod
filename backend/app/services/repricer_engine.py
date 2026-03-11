@@ -35,6 +35,35 @@ class RepricerEngine:
     def __init__(self, db: Session, user_id: Optional[int] = None):
         self.db = db
         self.user_id = user_id  # None → глобальные/дефолтные настройки
+        self._user_settings: Optional[Dict] = None  # loaded once per run
+
+    def _load_user_settings(self) -> Dict:
+        """Load all repricer settings in 2 queries to avoid N+1 per product."""
+        from app.models.app_setting import AppSetting
+        keys = [
+            "min_margin_pct", "wb_wallet_discount_pct",
+            "commission_type", "commission_value",
+            "logistics_type", "logistics_value",
+            "acquiring_type", "acquiring_value",
+        ]
+        result: Dict = {
+            "min_margin_pct": "0.0", "wb_wallet_discount_pct": "0",
+            "commission_type": "pct", "commission_value": "0.0",
+            "logistics_type": "rub", "logistics_value": "0.0",
+            "acquiring_type": "pct", "acquiring_value": "0.0",
+        }
+        # Global defaults (user_id=None)
+        for row in self.db.query(AppSetting).filter(
+            AppSetting.key.in_(keys), AppSetting.user_id == None
+        ).all():
+            result[row.key] = row.value
+        # User-specific overrides
+        if self.user_id is not None:
+            for row in self.db.query(AppSetting).filter(
+                AppSetting.key.in_(keys), AppSetting.user_id == self.user_id
+            ).all():
+                result[row.key] = row.value
+        return result
 
     def _round_up(self, value: Decimal) -> int:
         """
@@ -376,20 +405,19 @@ class RepricerEngine:
             reason_code = "CLAMPED_TO_MAX"
             logger.info(f"Цена ограничена максимумом: {original_price}₽ → {new_price}₽")
 
-        # Проверка минимальной маржи (Margin Guard) — per-user настройки
-        from app.api.settings import _get_setting as _gs_setting
-        uid = self.user_id
-        min_margin_pct = float(_gs_setting(self.db, "min_margin_pct", "0.0", uid))
+        # Проверка минимальной маржи (Margin Guard) — per-user настройки (из кеша)
+        s = self._user_settings or {}
+        min_margin_pct = float(s.get("min_margin_pct", "0.0"))
 
         if min_margin_pct > 0 and config.product and config.product.cost_price:
             cost_price = float(config.product.cost_price)
             if cost_price > 0:
-                commission_type  = _gs_setting(self.db, "commission_type",  "pct", uid)
-                commission_value = float(_gs_setting(self.db, "commission_value", "0.0", uid))
-                logistics_type   = _gs_setting(self.db, "logistics_type",   "rub", uid)
-                logistics_value  = float(_gs_setting(self.db, "logistics_value",  "0.0", uid))
-                acquiring_type   = _gs_setting(self.db, "acquiring_type",   "pct", uid)
-                acquiring_value  = float(_gs_setting(self.db, "acquiring_value",  "0.0", uid))
+                commission_type  = s.get("commission_type",  "pct")
+                commission_value = float(s.get("commission_value", "0.0"))
+                logistics_type   = s.get("logistics_type",   "rub")
+                logistics_value  = float(s.get("logistics_value",  "0.0"))
+                acquiring_type   = s.get("acquiring_type",   "pct")
+                acquiring_value  = float(s.get("acquiring_value",  "0.0"))
 
                 sp = float(new_price)
                 fees = 0.0
@@ -587,9 +615,8 @@ class RepricerEngine:
                 logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": _reason, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
                 return _reason
         
-        # Загружаем скидку кошелька (per-user, с fallback на глобальную — Fix 7)
-        from app.api.settings import _get_setting as _gs
-        wallet_pct = Decimal(_gs(self.db, "wb_wallet_discount_pct", "0", self.user_id))
+        # Загружаем скидку кошелька из кеша (загружается один раз на прогон)
+        wallet_pct = Decimal((self._user_settings or {}).get("wb_wallet_discount_pct", "0"))
 
         # Выполняем стратегию
         if config.strategy == 'rrp':
@@ -699,12 +726,19 @@ class RepricerEngine:
                     continue
 
                 self._save_price_snapshot(product, current_data)
-                self.db.commit()
                 results['updated'] += 1
+                if results['updated'] % 50 == 0:
+                    self.db.commit()
 
             except Exception as e:
                 logger.error(f"Ошибка получения цены для {product.seller_sku}: {e}")
                 results['errors'] += 1
+                self.db.rollback()
+
+        if results['updated'] % 50 != 0:
+            try:
+                self.db.commit()
+            except Exception:
                 self.db.rollback()
 
         logger.info(f"Снимки цен: получено={results['updated']}, ошибок={results['errors']}")
@@ -730,6 +764,9 @@ class RepricerEngine:
         """
         _run_start = time.monotonic()
         logger.info(f"Запуск репрайсера (тип: {run_type}, dry_run={dry_run})")
+
+        # Предзагружаем настройки пользователя один раз (избегаем N+1 запросов в цикле)
+        self._user_settings = self._load_user_settings()
 
         # Используем существующую запись (из API) или создаём новую (Fix 6)
         if existing_run_id:

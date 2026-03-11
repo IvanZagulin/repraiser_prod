@@ -33,7 +33,7 @@ async def download_costs_template(
     return Response(
         content=excel_file.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=template_costs.xlsx"}
+        headers={"Content-Disposition": "attachment; filename="template_costs.xlsx""}
     )
 
 
@@ -46,7 +46,7 @@ async def download_products_template(
     return Response(
         content=excel_file.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=template_products.xlsx"}
+        headers={"Content-Disposition": "attachment; filename="template_products.xlsx""}
     )
 
 
@@ -59,7 +59,7 @@ async def download_strategy_template(
     return Response(
         content=excel_file.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=template_strategies.xlsx"}
+        headers={"Content-Disposition": "attachment; filename="template_strategies.xlsx""}
     )
 
 
@@ -166,7 +166,7 @@ async def export_products(
     return Response(
         content=excel_file.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
 
@@ -243,7 +243,7 @@ async def export_history(
     return Response(
         content=excel_file.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
 
@@ -312,7 +312,7 @@ async def export_run(
     return Response(
         content=excel_file.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
 

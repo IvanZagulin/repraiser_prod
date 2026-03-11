@@ -22,7 +22,7 @@ const INTERVAL_OPTIONS = [
 function FeeRow({ label, type, value, onTypeChange, onValueChange }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="text-sm text-gray-700 w-28 flex-shrink-0">{label}</span>
+      <span className="text-sm text-foreground w-28 flex-shrink-0">{label}</span>
       <select
         value={type}
         onChange={e => onTypeChange(e.target.value)}
@@ -101,35 +101,35 @@ function ChangePasswordBlock({ userEmail }) {
   return (
     <div className="card mb-6">
       <div className="flex items-center space-x-3 mb-5">
-        <div className="bg-violet-50 p-2 rounded-lg">
-          <User className="w-5 h-5 text-violet-600" />
+        <div className="bg-primary/10 p-2 rounded-lg">
+          <User className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">Профиль</h2>
-          <p className="text-sm text-gray-500">Данные вашего аккаунта</p>
+          <h2 className="text-lg font-semibold text-foreground">Профиль</h2>
+          <p className="text-sm text-muted-foreground">Данные вашего аккаунта</p>
         </div>
       </div>
 
       {/* Email */}
       <div className="mb-5">
-        <label className="block text-sm font-medium text-gray-500 mb-1">Почта</label>
+        <label className="block text-sm font-medium text-muted-foreground mb-1">Почта</label>
         <div className="px-3 py-2 rounded-lg text-sm font-medium text-foreground bg-muted border border-border">
           {userEmail}
         </div>
       </div>
 
       {/* Separator */}
-      <div className="border-t border-gray-100 mb-5" />
+      <div className="border-t border-border mb-5" />
 
       {/* Смена пароля */}
       <div className="flex items-center space-x-2 mb-4">
-        <KeyRound className="w-4 h-4 text-gray-400" />
-        <span className="text-sm font-medium text-gray-700">Смена пароля</span>
+        <KeyRound className="w-4 h-4 text-muted-foreground" />
+        <span className="text-sm font-medium text-foreground">Смена пароля</span>
       </div>
 
       {step === 'idle' && (
         <div>
-          <p className="text-sm text-gray-500 mb-3">
+          <p className="text-sm text-muted-foreground mb-3">
             На вашу почту будет отправлен 6-значный код подтверждения.
           </p>
           <button
@@ -145,13 +145,13 @@ function ChangePasswordBlock({ userEmail }) {
 
       {step === 'code_sent' && (
         <div className="space-y-3">
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-muted-foreground">
             Код отправлен на <b>{userEmail}</b>. Введите его и новый пароль:
           </p>
 
           {/* Код */}
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Код из письма</label>
+            <label className="block text-xs font-medium text-muted-foreground mb-1">Код из письма</label>
             <input
               type="text"
               maxLength={6}
@@ -165,7 +165,7 @@ function ChangePasswordBlock({ userEmail }) {
 
           {/* Новый пароль */}
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Новый пароль</label>
+            <label className="block text-xs font-medium text-muted-foreground mb-1">Новый пароль</label>
             <div className="relative" style={{ maxWidth: 300 }}>
               <input
                 type={showPass ? 'text' : 'password'}
@@ -177,7 +177,7 @@ function ChangePasswordBlock({ userEmail }) {
               <button
                 type="button"
                 onClick={() => setShowPass(v => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
               >
                 {showPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
@@ -196,7 +196,7 @@ function ChangePasswordBlock({ userEmail }) {
             <button
               onClick={handleSendCode}
               disabled={sending}
-              className="text-sm text-gray-400 hover:text-gray-600 underline"
+              className="text-sm text-muted-foreground hover:text-foreground underline"
             >
               {sending ? 'Отправка...' : 'Отправить код снова'}
             </button>
@@ -206,13 +206,10 @@ function ChangePasswordBlock({ userEmail }) {
 
       {step === 'done' && (
         <div className="flex items-center gap-3">
-          <div
-            className="text-sm font-medium px-4 py-2 rounded-lg"
-            style={{ background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0' }}
-          >
+          <div className="text-sm font-medium px-4 py-2 rounded-lg bg-green-50 text-green-700 border border-green-200 dark:bg-green-950/20 dark:text-green-400 dark:border-green-900">
             ✅ Пароль успешно изменён
           </div>
-          <button onClick={handleReset} className="text-sm text-gray-400 hover:text-gray-600 underline">
+          <button onClick={handleReset} className="text-sm text-muted-foreground hover:text-foreground underline">
             Сменить ещё раз
           </button>
         </div>
@@ -300,7 +297,7 @@ export default function SettingsPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="text-gray-600">Загрузка...</div>
+        <div className="text-muted-foreground">Загрузка...</div>
       </div>
     );
   }
@@ -308,8 +305,8 @@ export default function SettingsPage() {
   return (
     <div>
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Настройки</h1>
-        <p className="text-gray-600 mt-2">Параметры работы репрайсера</p>
+        <h1 className="text-3xl font-bold text-foreground">Настройки</h1>
+        <p className="text-muted-foreground mt-2">Параметры работы репрайсера</p>
       </div>
 
       <div className="max-w-4xl">
@@ -328,12 +325,12 @@ export default function SettingsPage() {
               <Clock className="w-5 h-5 text-primary" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-gray-900">Интервал обновления цен</h2>
-              <p className="text-sm text-gray-500">Как часто репрайсер будет проверять и менять цены</p>
+              <h2 className="text-lg font-semibold text-foreground">Интервал обновления цен</h2>
+              <p className="text-sm text-muted-foreground">Как часто репрайсер будет проверять и менять цены</p>
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-foreground mb-1">
               Периодичность запуска
             </label>
             <select
@@ -347,7 +344,7 @@ export default function SettingsPage() {
                 </option>
               ))}
             </select>
-            <p className="text-xs text-gray-500 mt-2">
+            <p className="text-xs text-muted-foreground mt-2">
               Изменение вступает в силу в течение 1 минуты без перезапуска.
             </p>
           </div>
@@ -360,12 +357,12 @@ export default function SettingsPage() {
               <Wallet className="w-5 h-5 text-green-600" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-gray-900">Скидка WB Кошелька</h2>
-              <p className="text-sm text-gray-500">Дополнительная скидка для владельцев WB Кошелька</p>
+              <h2 className="text-lg font-semibold text-foreground">Скидка WB Кошелька</h2>
+              <p className="text-sm text-muted-foreground">Дополнительная скидка для владельцев WB Кошелька</p>
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-foreground mb-1">
               Процент скидки (%)
             </label>
             <input
@@ -377,11 +374,11 @@ export default function SettingsPage() {
               onChange={(e) => setWalletPct(parseFloat(e.target.value) || 0)}
               className="input w-full"
             />
-            <p className="text-xs text-gray-500 mt-2">
+            <p className="text-xs text-muted-foreground mt-2">
               Пример: цена после СПП {exampleFinal.toLocaleString('ru')}₽ → с кошельком{' '}
               <span className="font-medium text-green-600">{exampleWallet.toLocaleString('ru')}₽</span>
             </p>
-            <p className="text-xs text-gray-400 mt-1">
+            <p className="text-xs text-muted-foreground mt-1">
               Используется только для отображения в таблице товаров. На расчёт РРЦ не влияет.
             </p>
           </div>
@@ -396,8 +393,8 @@ export default function SettingsPage() {
               <TrendingUp className="w-5 h-5 text-cyan-600" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-gray-900">Расходы для расчёта маржи</h2>
-              <p className="text-sm text-gray-500">
+              <h2 className="text-lg font-semibold text-foreground">Расходы для расчёта маржи</h2>
+              <p className="text-sm text-muted-foreground">
                 Маржа = (Цена − Расходы) / Себестоимость × 100%
               </p>
             </div>
@@ -428,24 +425,21 @@ export default function SettingsPage() {
           </div>
 
           {/* Живой пример */}
-          <div
-            className="p-3 rounded-xl text-xs space-y-1"
-            style={{ background: '#f0fdf4', border: '1px solid #bbf7d0' }}
-          >
-            <p className="font-semibold text-gray-700">Пример (цена {examplePrice.toLocaleString('ru')}₽, себестоимость {exampleCost.toLocaleString('ru')}₽):</p>
-            <p className="text-gray-500">
+          <div className="p-3 rounded-xl text-xs space-y-1 bg-green-50 border border-green-200 dark:bg-green-950/20 dark:border-green-900">
+            <p className="font-semibold text-foreground">Пример (цена {examplePrice.toLocaleString('ru')}₽, себестоимость {exampleCost.toLocaleString('ru')}₽):</p>
+            <p className="text-muted-foreground">
               Осн. цена (продавца): <b>{examplePrice.toLocaleString('ru')}₽</b>
             </p>
-            <p className="text-gray-500">
+            <p className="text-muted-foreground">
               − Себестоимость: <b>{exampleCost.toLocaleString('ru')}₽</b>
             </p>
-            <p className="text-gray-500">
+            <p className="text-muted-foreground">
               − Расходы: <b>{totalFees.toFixed(2)}₽</b>
             </p>
-            <p className="text-gray-500 border-t border-green-200 pt-1">
+            <p className="text-muted-foreground border-t border-green-200 pt-1">
               Остаток: <b>{(examplePrice - exampleCost - totalFees).toFixed(2)}₽</b>
             </p>
-            <p className="text-gray-500">
+            <p className="text-muted-foreground">
               ÷ Себестоимость: <b>{exampleCost.toLocaleString('ru')}₽</b>
             </p>
             <p className="font-bold pt-0.5" style={{ color: Number(exampleMargin) >= 0 ? '#16a34a' : '#dc2626' }}>
@@ -453,13 +447,13 @@ export default function SettingsPage() {
             </p>
           </div>
 
-          <p className="text-xs text-gray-400 mt-3">
+          <p className="text-xs text-muted-foreground mt-3">
             Себестоимость товаров загружается через раздел Импорт / Экспорт.
           </p>
 
           {/* Мин. маржа */}
-          <div className="mt-4 pt-4" style={{ borderTop: '1px solid #bbf7d0' }}>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+          <div className="mt-4 pt-4 border-t border-green-200 dark:border-green-900">
+            <label className="block text-sm font-medium text-foreground mb-1">
               Мин. маржа — Margin Guard (%)
             </label>
             <input
@@ -471,7 +465,7 @@ export default function SettingsPage() {
               className="input w-full text-sm"
               placeholder="0"
             />
-            <p className="text-xs text-gray-400 mt-1">
+            <p className="text-xs text-muted-foreground mt-1">
               Репрайсер не опустит цену ниже уровня при котором маржа меньше этого порога.
               0 = выключено.
             </p>

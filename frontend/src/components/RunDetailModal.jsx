@@ -29,14 +29,14 @@ const ReasonBadge = ({ code }) => {
 };
 
 const PriceDiff = ({ oldP, newP }) => {
-  if (!newP || oldP === newP) return <Minus className="w-3.5 h-3.5 text-gray-400" />;
+  if (!newP || oldP === newP) return <Minus className="w-3.5 h-3.5 text-muted-foreground" />;
   const diff = newP - oldP;
   const pct = ((diff / oldP) * 100).toFixed(1);
   return (
     <div className={`flex items-center gap-1 text-xs font-semibold ${diff > 0 ? 'text-red-500' : 'text-green-600'}`}>
       {diff > 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
       {diff > 0 ? '+' : ''}{diff.toLocaleString('ru')}₽
-      <span className="text-gray-400 font-normal">({diff > 0 ? '+' : ''}{pct}%)</span>
+      <span className="text-muted-foreground font-normal">({diff > 0 ? '+' : ''}{pct}%)</span>
     </div>
   );
 };
@@ -63,13 +63,14 @@ export default function RunDetailModal({ run, onClose }) {
       document.body.appendChild(a);
       a.click();
       a.remove();
+      URL.revokeObjectURL(url);
       toast.success('Файл загружен');
     } catch {
       toast.error('Ошибка экспорта');
     }
   };
 
-  const changes = detail?.price_changes || [];
+  const changes = detail?.changes || [];
   const filtered = filter === 'all' ? changes : changes.filter((c) => c.reason_code === filter || (filter === 'updated' && ['UPDATED', 'CLAMPED_TO_MIN', 'CLAMPED_TO_MAX'].includes(c.reason_code)) || (filter === 'errors' && ['PARSE_ERROR', 'WB_API_ERROR'].includes(c.reason_code)));
 
   // Unique reason codes for filter tabs
@@ -121,8 +122,7 @@ export default function RunDetailModal({ run, onClose }) {
             ].map((s) => (
               <div
                 key={s.label}
-                className="rounded-xl p-3 text-center"
-                style={{ background: '#f9fafb', border: '1px solid #f0f0f4' }}
+                className="rounded-xl p-3 text-center bg-muted/50 border border-border"
               >
                 <p className="text-xs mb-1" style={{ color: 'var(--text-3)' }}>{s.label}</p>
                 <p className="text-xl font-bold" style={{ color: s.color }}>{s.value}</p>
@@ -140,8 +140,8 @@ export default function RunDetailModal({ run, onClose }) {
                 onClick={() => setFilter(g.key)}
                 className="text-xs font-semibold px-3 py-1 rounded-full transition-all"
                 style={{
-                  background: filter === g.key ? '#7c3aed' : '#f3f4f6',
-                  color: filter === g.key ? '#fff' : 'var(--text-2)',
+                  background: filter === g.key ? 'hsl(var(--primary))' : 'hsl(var(--muted))',
+                  color: filter === g.key ? 'hsl(var(--primary-foreground))' : 'var(--text-2)',
                 }}
               >
                 {g.label}
@@ -160,7 +160,7 @@ export default function RunDetailModal({ run, onClose }) {
             <p className="text-sm" style={{ color: 'var(--text-3)' }}>Нет данных об изменениях</p>
           </div>
         ) : (
-          <div className="overflow-auto" style={{ maxHeight: 420, borderRadius: 12, border: '1px solid #f0f0f4' }}>
+          <div className="overflow-auto border border-border rounded-xl" style={{ maxHeight: 420 }}>
             <table className="dark-table" style={{ minWidth: 640 }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
                 <tr>

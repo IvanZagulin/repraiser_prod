@@ -4,8 +4,12 @@ from typing import Optional
 
 from app.celery_app import celery_app
 from app.database import SessionLocal
+from app.redis_client import acquire_run_lock, release_run_lock
 
 logger = logging.getLogger(__name__)
+
+# Ошибки соединения/сети — допускают retry; логические ошибки — нет
+_NETWORK_ERRORS = (ConnectionError, TimeoutError, OSError)
 
 
 @celery_app.task(
@@ -24,6 +28,11 @@ def run_repricer_for_user(
     dry_run: bool = False,
 ):
     """Запускает репрайсер для одного пользователя в Celery-воркере."""
+    # Защита от двойного запуска для одного пользователя
+    if not acquire_run_lock(user_id):
+        logger.warning(f"[Celery] user={user_id}: прогон уже идёт, пропускаем дублирующийся запуск")
+        return {"status": "skipped", "reason": "already running"}
+
     db = SessionLocal()
     try:
         # Проверяем что пользователь существует и активен — защита от
@@ -49,6 +58,10 @@ def run_repricer_for_user(
         return {"run_id": run.id, "status": run.status, "updated": run.updated_count}
     except Exception as exc:
         logger.error(f"[Celery] user={user_id} repricer failed: {exc}", exc_info=True)
-        raise self.retry(exc=exc)
+        # Retry только при сетевых/connection ошибках
+        if isinstance(exc, _NETWORK_ERRORS):
+            raise self.retry(exc=exc)
+        raise
     finally:
         db.close()
+        release_run_lock(user_id)

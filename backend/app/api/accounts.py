@@ -84,10 +84,11 @@ async def get_account(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ):
-    account = db.query(Account).filter(Account.id == account_id).first()
+    account = db.query(Account).filter(
+        Account.id == account_id, Account.user_id == current_user.id
+    ).first()
     if not account:
-        raise HTTPException(status_code=404, detail=f"Account {account_id} not found")
-    _check_ownership(account, current_user)
+        raise HTTPException(status_code=404, detail="Account not found")
     return _build_response(account)
 
 
@@ -98,10 +99,11 @@ async def update_account(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ):
-    account = db.query(Account).filter(Account.id == account_id).first()
+    account = db.query(Account).filter(
+        Account.id == account_id, Account.user_id == current_user.id
+    ).first()
     if not account:
-        raise HTTPException(status_code=404, detail=f"Account {account_id} not found")
-    _check_ownership(account, current_user)
+        raise HTTPException(status_code=404, detail="Account not found")
 
     update_data = account_data.model_dump(exclude_unset=True)
     token_changed = "wb_api_token" in update_data
@@ -131,10 +133,11 @@ async def sync_catalog(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Запустить синхронизацию каталога WB (все карточки + фото) для аккаунта"""
-    account = db.query(Account).filter(Account.id == account_id).first()
+    account = db.query(Account).filter(
+        Account.id == account_id, Account.user_id == current_user.id
+    ).first()
     if not account:
-        raise HTTPException(status_code=404, detail=f"Account {account_id} not found")
-    _check_ownership(account, current_user)
+        raise HTTPException(status_code=404, detail="Account not found")
 
     try:
         from app.tasks.catalog_sync import sync_wb_catalog_task
@@ -150,10 +153,11 @@ async def delete_account(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ):
-    account = db.query(Account).filter(Account.id == account_id).first()
+    account = db.query(Account).filter(
+        Account.id == account_id, Account.user_id == current_user.id
+    ).first()
     if not account:
-        raise HTTPException(status_code=404, detail=f"Account {account_id} not found")
-    _check_ownership(account, current_user)
+        raise HTTPException(status_code=404, detail="Account not found")
     db.delete(account)
     db.commit()
     return None

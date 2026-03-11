@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { X, TrendingUp, TrendingDown, Minus, Tag } from 'lucide-react';
+import toast from 'react-hot-toast';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, ReferenceDot,
@@ -12,8 +13,8 @@ const CustomTooltip = ({ active, payload, label }) => {
   const d = payload[0]?.payload;
   return (
     <div style={{
-      background: '#fff',
-      border: '1px solid #e8eaf0',
+      background: 'hsl(var(--card))',
+      border: '1px solid hsl(var(--border))',
       borderRadius: 10,
       padding: '10px 14px',
       fontSize: 12,
@@ -71,7 +72,7 @@ export default function PriceHistoryModal({ product, onClose }) {
         }));
         setHistory(data);
       })
-      .catch(() => {})
+      .catch(() => toast.error('Ошибка загрузки истории цен'))
       .finally(() => setLoading(false));
   }, [product.id]);
 
@@ -93,7 +94,7 @@ export default function PriceHistoryModal({ product, onClose }) {
             <h2 className="text-base font-semibold" style={{ color: 'var(--text)' }}>
               История цен
             </h2>
-            <p className="text-sm mt-0.5 font-medium" style={{ color: '#7c3aed' }}>
+            <p className="text-sm mt-0.5 font-medium text-primary">
               {product.seller_sku || `#${product.nm_id}`}
             </p>
             {product.name && (
@@ -156,8 +157,7 @@ export default function PriceHistoryModal({ product, onClose }) {
               ].map((s, i) => (
                 <div
                   key={i}
-                  className="rounded-xl p-3"
-                  style={{ background: '#f9fafb', border: '1px solid #f0f0f4' }}
+                  className="rounded-xl p-3 bg-muted/50 border border-border"
                 >
                   <p className="text-xs mb-1" style={{ color: 'var(--text-3)' }}>
                     {s.label}
@@ -176,15 +176,15 @@ export default function PriceHistoryModal({ product, onClose }) {
             {/* Chart */}
             <ResponsiveContainer width="100%" height={270}>
               <LineChart data={history} margin={{ top: 5, right: 16, left: 0, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f4" />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.15)" />
                 <XAxis
                   dataKey="date"
-                  tick={{ fontSize: 10, fill: '#9ca3af' }}
+                  tick={{ fontSize: 10, fill: 'var(--text-3)' }}
                   tickLine={false}
                   interval="preserveStartEnd"
                 />
                 <YAxis
-                  tick={{ fontSize: 10, fill: '#9ca3af' }}
+                  tick={{ fontSize: 10, fill: 'var(--text-3)' }}
                   tickLine={false}
                   axisLine={false}
                   tickFormatter={(v) => `${v.toLocaleString('ru')}₽`}

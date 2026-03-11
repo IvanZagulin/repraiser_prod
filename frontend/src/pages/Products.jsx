@@ -362,8 +362,8 @@ export default function Products() {
                 {filteredProducts.map((product) => (
                   <tr key={product.id}>
                     <td>
-                      <span className="font-medium text-gray-900">
-                        {product.seller_sku || <span className="text-gray-400">#{product.nm_id}</span>}
+                      <span className="font-medium text-foreground">
+                        {product.seller_sku || <span className="text-muted-foreground">#{product.nm_id}</span>}
                       </span>
                     </td>
                     <td>
@@ -378,7 +378,7 @@ export default function Products() {
                     <td>
                       {product.current_seller_price ? (
                         <div>
-                          <div className="font-medium text-gray-900">
+                          <div className="font-medium text-foreground">
                             {Number(product.current_seller_price).toLocaleString('ru')}₽
                           </div>
                           <div className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>

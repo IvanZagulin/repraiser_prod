@@ -33,8 +33,8 @@ function SectionTitle({ icon: Icon, color, title, subtitle }) {
         <Icon className="w-5 h-5" style={{ color }} />
       </div>
       <div>
-        <h2 className="text-base font-semibold text-gray-900">{title}</h2>
-        <p className="text-xs text-gray-500 mt-0.5">{subtitle}</p>
+        <h2 className="text-base font-semibold text-foreground">{title}</h2>
+        <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>
       </div>
     </div>
   );
@@ -56,7 +56,7 @@ function ImportResult({ result }) {
         {hasErrors ? <AlertCircle className="w-3.5 h-3.5" /> : <CheckCircle className="w-3.5 h-3.5" />}
         {hasErrors ? 'Импорт завершён с ошибками' : 'Импорт успешен'}
       </div>
-      <div className="space-y-0.5 text-gray-600">
+      <div className="space-y-0.5 text-muted-foreground">
         {result.created  !== undefined && <div>Создано: <b>{result.created}</b></div>}
         {result.updated  !== undefined && <div>Обновлено: <b>{result.updated}</b></div>}
         {result.skipped  !== undefined && <div>Пропущено (уже есть): <b>{result.skipped}</b></div>}
@@ -81,7 +81,7 @@ function ImportResult({ result }) {
 function FilterSelect({ label, value, onChange, options }) {
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-xs font-medium text-gray-500">{label}</label>
+      <label className="text-xs font-medium text-muted-foreground">{label}</label>
       <div className="relative">
         <select
           value={value}
@@ -93,7 +93,7 @@ function FilterSelect({ label, value, onChange, options }) {
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
-        <ChevronDown className="w-3.5 h-3.5 text-gray-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+        <ChevronDown className="w-3.5 h-3.5 text-muted-foreground absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
       </div>
     </div>
   );
@@ -262,8 +262,8 @@ export default function ImportExport() {
     <div>
       {/* Header */}
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900">Импорт / Экспорт</h1>
-        <p className="text-gray-500 mt-1 text-sm">
+        <h1 className="text-2xl font-bold text-foreground">Импорт / Экспорт</h1>
+        <p className="text-muted-foreground mt-1 text-sm">
           Массовая загрузка товаров и стратегий, выгрузка данных в Excel
         </p>
       </div>
@@ -290,8 +290,8 @@ export default function ImportExport() {
                   <Package className="w-4 h-4 text-primary" />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-sm font-medium text-gray-900">Шаблон товаров</p>
-                  <p className="text-xs text-gray-400">nmID + ID кабинета обязательны</p>
+                  <p className="text-sm font-medium text-foreground">Шаблон товаров</p>
+                  <p className="text-xs text-muted-foreground">nmID + ID кабинета обязательны</p>
                 </div>
               </div>
               <button
@@ -315,8 +315,8 @@ export default function ImportExport() {
                   <Settings2 className="w-4 h-4" style={{ color: '#6366f1' }} />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-sm font-medium text-gray-900">Шаблон стратегий</p>
-                  <p className="text-xs text-gray-400">12 колонок: МРЦ, РРЦ, конкурент…</p>
+                  <p className="text-sm font-medium text-foreground">Шаблон стратегий</p>
+                  <p className="text-xs text-muted-foreground">12 колонок: МРЦ, РРЦ, конкурент…</p>
                 </div>
               </div>
               <button
@@ -340,8 +340,8 @@ export default function ImportExport() {
                   <TrendingUp className="w-4 h-4" style={{ color: '#00b8c8' }} />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-sm font-medium text-gray-900">Шаблон себестоимостей</p>
-                  <p className="text-xs text-gray-400">Артикул + закупочная цена</p>
+                  <p className="text-sm font-medium text-foreground">Шаблон себестоимостей</p>
+                  <p className="text-xs text-muted-foreground">Артикул + закупочная цена</p>
                 </div>
               </div>
               <button
@@ -361,8 +361,8 @@ export default function ImportExport() {
               <summary className="cursor-pointer text-xs text-primary font-medium select-none list-none flex items-center gap-1">
                 <ChevronDown className="w-3 h-3" /> Колонки шаблона товаров
               </summary>
-              <div className="mt-2 p-3 rounded-lg bg-gray-50 border border-gray-100 text-xs text-gray-600 space-y-1.5">
-                <div className="font-semibold text-gray-700 mb-1">Хотя бы одно из A или B обязательно:</div>
+              <div className="mt-2 p-3 rounded-lg bg-muted/50 border border-border text-xs text-muted-foreground space-y-1.5">
+                <div className="font-semibold text-foreground mb-1">Хотя бы одно из A или B обязательно:</div>
                 <div><b>A — nmID</b> — числовой артикул WB (если есть)</div>
                 <div><b>B — Артикул продавца</b> — vendorCode (если нет nmID, система найдёт его сама)</div>
                 <div className="pt-1 border-t border-gray-200 mt-1"><b>C — ID аккаунта *</b> — из раздела Аккаунты (обязательно)</div>
@@ -373,7 +373,7 @@ export default function ImportExport() {
               <summary className="cursor-pointer text-xs text-primary font-medium select-none list-none flex items-center gap-1">
                 <ChevronDown className="w-3 h-3" /> Колонки шаблона стратегий
               </summary>
-              <div className="mt-2 p-3 rounded-lg bg-gray-50 border border-gray-100 text-xs text-gray-600 space-y-1">
+              <div className="mt-2 p-3 rounded-lg bg-muted/50 border border-border text-xs text-muted-foreground space-y-1">
                 <div><b>A</b> — Артикул продавца *</div>
                 <div><b>B</b> — Стратегия: <code>rrp</code> / <code>competitor</code> *</div>
                 <div><b>C</b> — Активен: <code>да</code> / <code>нет</code></div>
@@ -402,10 +402,10 @@ export default function ImportExport() {
             >
               <div className="flex items-center gap-2 mb-1">
                 <Package className="w-4 h-4 text-emerald-600" />
-                <span className="text-sm font-medium text-gray-900">Товары</span>
+                <span className="text-sm font-medium text-foreground">Товары</span>
                 {uploadingProducts && <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600 ml-auto" />}
               </div>
-              <p className="text-xs text-gray-500 mb-3">
+              <p className="text-xs text-muted-foreground mb-3">
                 Достаточно nmID <b>или</b> артикула продавца + ID кабинета. Название и фото подтянутся автоматически.
               </p>
               <input ref={fileInputProducts} type="file" accept=".xlsx,.xls"
@@ -426,10 +426,10 @@ export default function ImportExport() {
             <div className="p-4 rounded-xl border-2 border-dashed border-primary/30 bg-primary/5">
               <div className="flex items-center gap-2 mb-1">
                 <Settings2 className="w-4 h-4 text-primary" />
-                <span className="text-sm font-medium text-gray-900">Стратегии</span>
+                <span className="text-sm font-medium text-foreground">Стратегии</span>
                 {uploadingStrategy && <Loader2 className="w-3.5 h-3.5 animate-spin text-primary ml-auto" />}
               </div>
-              <p className="text-xs text-gray-500 mb-3">
+              <p className="text-xs text-muted-foreground mb-3">
                 Обновить параметры репрайсера по артикулу продавца
               </p>
               <input ref={fileInputStrategy} type="file" accept=".xlsx,.xls"
@@ -452,10 +452,10 @@ export default function ImportExport() {
             >
               <div className="flex items-center gap-2 mb-1">
                 <TrendingUp className="w-4 h-4" style={{ color: '#0891b2' }} />
-                <span className="text-sm font-medium text-gray-900">Себестоимости</span>
+                <span className="text-sm font-medium text-foreground">Себестоимости</span>
                 {uploadingCosts && <Loader2 className="w-3.5 h-3.5 animate-spin ml-auto" style={{ color: '#0891b2' }} />}
               </div>
-              <p className="text-xs text-gray-500 mb-3">
+              <p className="text-xs text-muted-foreground mb-3">
                 Загрузить закупочные цены для расчёта маржи по артикулу продавца
               </p>
               <input ref={fileInputCosts} type="file" accept=".xlsx,.xls"
@@ -490,9 +490,9 @@ export default function ImportExport() {
           >
             <div className="flex items-center gap-2 mb-2">
               <FileSpreadsheet className="w-4 h-4 text-blue-600" />
-              <span className="text-sm font-medium text-gray-900">Все товары + стратегии</span>
+              <span className="text-sm font-medium text-foreground">Все товары + стратегии</span>
             </div>
-            <p className="text-xs text-gray-500 mb-3">
+            <p className="text-xs text-muted-foreground mb-3">
               18 колонок: аккаунт, цены, МРЦ, РРЦ, стратегия. Строки раскрашены по статусу.
             </p>
 
@@ -552,9 +552,9 @@ export default function ImportExport() {
           >
             <div className="flex items-center gap-2 mb-1">
               <FileText className="w-4 h-4 text-amber-600" />
-              <span className="text-sm font-medium text-gray-900">История цен</span>
+              <span className="text-sm font-medium text-foreground">История цен</span>
             </div>
-            <p className="text-xs text-gray-500 mb-3">
+            <p className="text-xs text-muted-foreground mb-3">
               Все снимки цен: цена продавца, финальная цена, СПП, дата
             </p>
             <button
@@ -570,7 +570,7 @@ export default function ImportExport() {
 
           {/* Status legend */}
           <div className="mt-4 pt-4 border-t border-gray-100">
-            <p className="text-xs font-medium text-gray-400 mb-2">Цвета строк в экспорте:</p>
+            <p className="text-xs font-medium text-muted-foreground mb-2">Цвета строк в экспорте:</p>
             <div className="space-y-1.5">
               {[
                 { bg: '#dcfce7', border: '#bbf7d0', label: 'Активен' },
@@ -580,7 +580,7 @@ export default function ImportExport() {
                 <div key={label} className="flex items-center gap-2">
                   <div className="w-4 h-4 rounded border flex-shrink-0"
                        style={{ background: bg, borderColor: border }} />
-                  <span className="text-xs text-gray-500">{label}</span>
+                  <span className="text-xs text-muted-foreground">{label}</span>
                 </div>
               ))}
             </div>

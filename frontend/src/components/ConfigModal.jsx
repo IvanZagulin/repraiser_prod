@@ -131,7 +131,7 @@ export default function ConfigModal({ product, onClose }) {
       <div className="modal-box max-w-2xl">
         <div className="modal-header">
           <div>
-            <h2 className="text-base font-semibold text-gray-900">Настройка репрайсера</h2>
+            <h2 className="text-base font-semibold text-foreground">Настройка репрайсера</h2>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
               {product.seller_sku} — {product.name}
             </p>
@@ -150,7 +150,7 @@ export default function ConfigModal({ product, onClose }) {
               onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
               className="w-4 h-4 accent-violet-500"
             />
-            <span className="text-sm font-medium text-gray-900">Репрайсер активен</span>
+            <span className="text-sm font-medium text-foreground">Репрайсер активен</span>
           </label>
 
           {/* Strategy selector */}
@@ -168,12 +168,11 @@ export default function ConfigModal({ product, onClose }) {
                   type="button"
                   onClick={() => setStrategy(s.id)}
                   className="p-3.5 rounded-lg text-left transition-all"
-                  style={{
-                    border: strategy === s.id ? '1px solid #c4b5fd' : '1px solid #e5e7eb',
-                    background: strategy === s.id ? '#f5f3ff' : '#fafafa',
-                  }}
+                  className={strategy === s.id
+                    ? 'border border-primary/40 bg-primary/5'
+                    : 'border border-border bg-muted/30'}
                 >
-                  <div className="font-medium text-sm text-gray-900">{s.label}</div>
+                  <div className="font-medium text-sm text-foreground">{s.label}</div>
                   <div className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>{s.desc}</div>
                 </button>
               ))}
@@ -217,8 +216,8 @@ export default function ConfigModal({ product, onClose }) {
 
           {/* RRP params */}
           {strategy === 'rrp' && (
-            <div className="p-4 rounded-lg space-y-4" style={{ background: '#fafafa', border: '1px solid #e5e7eb' }}>
-              <p className="text-sm font-medium text-gray-900">Параметры РРЦ</p>
+            <div className="p-4 rounded-lg space-y-4 bg-muted/30 border border-border">
+              <p className="text-sm font-medium text-foreground">Параметры РРЦ</p>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm mb-1.5" style={{ color: 'var(--text-2)' }}>
@@ -265,7 +264,7 @@ export default function ConfigModal({ product, onClose }) {
                   className="w-4 h-4 mt-0.5 accent-violet-500 flex-shrink-0"
                 />
                 <div>
-                  <span className="text-sm font-medium text-gray-900">
+                  <span className="text-sm font-medium text-foreground">
                     Учитывать скидку кошелька WB ({walletPct}%)
                   </span>
                   <p className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
@@ -277,25 +276,24 @@ export default function ConfigModal({ product, onClose }) {
               {/* Wallet-aware example */}
               {formData.rrp_price && (
                 <div
-                  className="text-xs p-3 rounded"
-                  style={{ background: '#f5f3ff', color: 'var(--text-2)', border: '1px solid #ddd6fe' }}
+                  className="text-xs p-3 rounded bg-primary/5 border border-primary/20 text-muted-foreground"
                 >
                   {formData.rrp_consider_wallet ? (
                     <>
-                      <strong className="text-gray-900">Расчёт с кошельком:</strong>{' '}
+                      <strong className="text-foreground">Расчёт с кошельком:</strong>{' '}
                       РРЦ {parseFloat(formData.rrp_price)}₽ = цена после СПП и кошелька.
                       {' '}Целевая цена до кошелька:{' '}
-                      <strong className="text-violet-700">
+                      <strong className="text-primary">
                         {(parseFloat(formData.rrp_price) / (1 - walletPct / 100)).toFixed(2)}₽
                       </strong>
                       {' '}(кошелёк {walletPct}% уже учтён)
                     </>
                   ) : (
                     <>
-                      <strong className="text-gray-900">Расчёт без кошелька:</strong>{' '}
+                      <strong className="text-foreground">Расчёт без кошелька:</strong>{' '}
                       РРЦ {parseFloat(formData.rrp_price)}₽ = цена после СПП.
                       {' '}Фактическая цена с кошельком:{' '}
-                      <strong className="text-violet-700">
+                      <strong className="text-primary">
                         {(parseFloat(formData.rrp_price) * (1 - walletPct / 100)).toFixed(2)}₽
                       </strong>
                       {' '}(кошелёк {walletPct}% сверху)
@@ -308,8 +306,8 @@ export default function ConfigModal({ product, onClose }) {
 
           {/* Competitor params */}
           {strategy === 'competitor' && (
-            <div className="p-4 rounded-lg space-y-4" style={{ background: '#fafafa', border: '1px solid #e5e7eb' }}>
-              <p className="text-sm font-medium text-gray-900">Конкуренты</p>
+            <div className="p-4 rounded-lg space-y-4 bg-muted/30 border border-border">
+              <p className="text-sm font-medium text-foreground">Конкуренты</p>
 
               {/* Список конкурентов */}
               <div className="space-y-2">
@@ -416,12 +414,9 @@ export default function ConfigModal({ product, onClose }) {
                 </div>
               </div>
 
-              <div
-                className="text-xs p-3 rounded"
-                style={{ background: '#f5f3ff', color: 'var(--text-2)', border: '1px solid #ddd6fe' }}
-              >
-                <strong className="text-gray-900">Пример:</strong> Если цена конкурента 1000₽, наша цена будет{' '}
-                <strong className="text-violet-700">
+              <div className="text-xs p-3 rounded bg-primary/5 border border-primary/20 text-muted-foreground">
+                <strong className="text-foreground">Пример:</strong> Если цена конкурента 1000₽, наша цена будет{' '}
+                <strong className="text-primary">
                   {formData.competitor_offset_value
                     ? formData.competitor_offset_type === 'rub'
                       ? formData.competitor_offset_direction === 'below'
@@ -436,10 +431,7 @@ export default function ConfigModal({ product, onClose }) {
             </div>
           )}
 
-          <div
-            className="flex justify-end gap-2 pt-4"
-            style={{ borderTop: '1px solid #f3f4f6' }}
-          >
+          <div className="flex justify-end gap-2 pt-4 border-t border-border">
             <button type="button" onClick={onClose} className="btn btn-secondary">
               Отмена
             </button>

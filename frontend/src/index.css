@@ -36,6 +36,7 @@
     --sidebar-accent-foreground:    240 5.9% 10%;
     --sidebar-border:               220 13% 91%;
     /* legacy aliases */
+    --text:     hsl(222.2 84% 4.9%);
     --text-1:   hsl(222.2 84% 4.9%);
     --text-2:   hsl(215.4 16.3% 46.9%);
     --text-3:   hsl(215.4 16.3% 56.9%);
@@ -71,6 +72,7 @@
     --sidebar-accent-foreground:   240 4.8% 95.9%;
     --sidebar-border:              240 3.7% 15.9%;
     /* legacy aliases */
+    --text:     hsl(210 40% 98%);
     --text-1:   hsl(210 40% 98%);
     --text-2:   hsl(215 20.2% 65.1%);
     --text-3:   hsl(215 20.2% 55.1%);

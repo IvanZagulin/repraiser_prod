@@ -35,3 +35,25 @@ def cache_set(key: str, value: dict, ttl: int = 180) -> None:
         _get_client().setex(key, ttl, json.dumps(value))
     except Exception as e:
         logger.warning(f"Redis cache_set({key!r}) error: {e}")
+
+
+def acquire_run_lock(user_id: int, ttl: int = 3900) -> bool:
+    """
+    Попытка захватить эксклюзивную блокировку прогона для пользователя.
+    Возвращает True если блокировка получена, False если прогон уже идёт.
+    TTL = 65 мин (чуть больше жёсткого лимита Celery-задачи).
+    """
+    try:
+        key = f"repricer:run_lock:{user_id}"
+        return bool(_get_client().set(key, "1", nx=True, ex=ttl))
+    except Exception as e:
+        logger.warning(f"Redis acquire_run_lock(user={user_id}) error: {e}")
+        return True  # если Redis недоступен — разрешаем запуск
+
+
+def release_run_lock(user_id: int) -> None:
+    """Освободить блокировку прогона для пользователя."""
+    try:
+        _get_client().delete(f"repricer:run_lock:{user_id}")
+    except Exception as e:
+        logger.warning(f"Redis release_run_lock(user={user_id}) error: {e}")

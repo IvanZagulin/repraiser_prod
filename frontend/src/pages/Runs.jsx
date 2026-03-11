@@ -103,13 +103,13 @@ export default function Runs() {
                     style={{ cursor: 'pointer' }}
                   >
                     <td>
-                      <span className="font-semibold text-gray-900">#{run.id}</span>
+                      <span className="font-semibold text-foreground">#{run.id}</span>
                     </td>
                     <td>{getTypeLabel(run.run_type)}</td>
                     <td>{getStatusBadge(run.status)}</td>
-                    <td className="font-medium text-gray-700">{run.total_products}</td>
+                    <td className="font-medium text-foreground">{run.total_products}</td>
                     <td className="font-semibold text-green-600">{run.updated_count}</td>
-                    <td className="text-gray-500">{run.skipped_count}</td>
+                    <td className="text-muted-foreground">{run.skipped_count}</td>
                     <td className="font-medium text-red-500">{run.error_count}</td>
                     <td>{formatMsk(run.started_at, 'dd.MM.yyyy HH:mm')}</td>
                     <td>
