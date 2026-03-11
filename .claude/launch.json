@@ -3,8 +3,16 @@
   "configurations": [
     {
       "name": "frontend",
-      "runtimeExecutable": "C:/Program Files/nodejs/node.exe",
-      "runtimeArgs": ["C:/с диска д/репрайсер новый итоговый тест/frontend/node_modules/vite/bin/vite.js", "C:/с диска д/репрайсер новый итоговый тест/frontend", "--port", "5173"],
+      "runtimeExecutable": "docker",
+      "runtimeArgs": [
+        "run", "--rm",
+        "--name", "repraiser-frontend-preview",
+        "-v", "E:\\репрайсер\\repraiser_prod\\.claude\\worktrees\\quizzical-heyrovsky\\frontend:/app",
+        "-w", "/app",
+        "-p", "5173:5173",
+        "node:18-alpine",
+        "sh", "-c", "npm install --silent && npm run dev -- --host 0.0.0.0 --port 5173"
+      ],
       "port": 5173
     }
   ]

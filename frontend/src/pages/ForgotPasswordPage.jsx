@@ -1,91 +1,26 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { Loader2, Zap, ArrowLeft } from 'lucide-react';
 import { forgotPassword, resetPassword } from '../api/client';
 import { useAuthStore } from '../store';
-
-const cardStyle = {
-  minHeight: '100vh',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  background: 'linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 50%, #16213e 100%)',
-  padding: '1rem',
-};
-
-const glassStyle = {
-  background: 'rgba(255,255,255,0.03)',
-  backdropFilter: 'blur(20px)',
-  borderRadius: '1.5rem',
-  border: '1px solid rgba(0,240,255,0.15)',
-  padding: '2.5rem',
-  width: '100%',
-  maxWidth: '420px',
-  boxShadow: '0 25px 50px rgba(0,0,0,0.5)',
-};
-
-const inputStyle = {
-  width: '100%',
-  padding: '0.75rem 1rem',
-  background: 'rgba(255,255,255,0.05)',
-  border: '1.5px solid rgba(0,240,255,0.15)',
-  borderRadius: '0.75rem',
-  color: '#f9fafb',
-  fontSize: '0.9375rem',
-  outline: 'none',
-  boxSizing: 'border-box',
-};
-
-const digitInputStyle = {
-  width: '48px',
-  height: '56px',
-  textAlign: 'center',
-  fontSize: '1.5rem',
-  fontWeight: '700',
-  fontFamily: 'monospace',
-  background: 'rgba(255,255,255,0.05)',
-  border: '1.5px solid rgba(0,240,255,0.2)',
-  borderRadius: '0.75rem',
-  color: '#f9fafb',
-  outline: 'none',
-  caretColor: '#00f0ff',
-};
-
-const labelStyle = {
-  display: 'block',
-  color: '#9ca3af',
-  fontSize: '0.8125rem',
-  marginBottom: '0.5rem',
-  fontWeight: '500',
-};
-
-const btnStyle = (disabled) => ({
-  width: '100%',
-  padding: '0.875rem',
-  background: disabled
-    ? 'rgba(124,58,237,0.3)'
-    : 'linear-gradient(135deg, #00f0ff, #7c3aed)',
-  color: '#fff',
-  fontWeight: '700',
-  fontSize: '0.9375rem',
-  border: 'none',
-  borderRadius: '0.75rem',
-  cursor: disabled ? 'not-allowed' : 'pointer',
-  letterSpacing: '0.5px',
-  marginTop: '1.5rem',
-});
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Card, CardContent } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
 
 export default function ForgotPasswordPage() {
-  const navigate = useNavigate();
+  const navigate   = useNavigate();
   const loginStore = useAuthStore((state) => state.login);
 
-  const [step, setStep] = useState('email'); // 'email' | 'reset'
-  const [email, setEmail] = useState('');
-  const [code, setCode] = useState(['', '', '', '', '', '']);
-  const [newPassword, setNewPassword] = useState('');
+  const [step,            setStep]            = useState('email');
+  const [email,           setEmail]           = useState('');
+  const [code,            setCode]            = useState(['', '', '', '', '', '']);
+  const [newPassword,     setNewPassword]     = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [resendTimer, setResendTimer] = useState(0);
+  const [loading,         setLoading]         = useState(false);
+  const [resendTimer,     setResendTimer]     = useState(0);
   const inputRefs = useRef([]);
 
   useEffect(() => {
@@ -95,8 +30,6 @@ export default function ForgotPasswordPage() {
     }
   }, [resendTimer]);
 
-  // ── Step 1: send code ──────────────────────────────────────────────────────
-
   const handleSendCode = async (e) => {
     e.preventDefault();
     if (!email.trim()) { toast.error('Введите email'); return; }
@@ -104,32 +37,21 @@ export default function ForgotPasswordPage() {
     try {
       await forgotPassword(email.trim().toLowerCase());
       toast.success('Код отправлен на ' + email);
-      setStep('reset');
-      setResendTimer(60);
+      setStep('reset'); setResendTimer(60);
       setTimeout(() => inputRefs.current[0]?.focus(), 100);
-    } catch {
-      toast.error('Ошибка отправки. Попробуйте позже.');
-    } finally {
-      setLoading(false);
-    }
+    } catch { toast.error('Ошибка отправки. Попробуйте позже.'); }
+    finally { setLoading(false); }
   };
-
-  // ── Step 2: code digits ────────────────────────────────────────────────────
 
   const handleChange = (index, value) => {
     const digit = value.replace(/\D/g, '').slice(-1);
-    const next = [...code];
-    next[index] = digit;
-    setCode(next);
+    const next = [...code]; next[index] = digit; setCode(next);
     if (digit && index < 5) inputRefs.current[index + 1]?.focus();
   };
-
   const handleKeyDown = (index, e) => {
-    if (e.key === 'Backspace' && !code[index] && index > 0) {
+    if (e.key === 'Backspace' && !code[index] && index > 0)
       inputRefs.current[index - 1]?.focus();
-    }
   };
-
   const handlePaste = (e) => {
     e.preventDefault();
     const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
@@ -137,31 +59,23 @@ export default function ForgotPasswordPage() {
     const next = [...code];
     for (let i = 0; i < 6; i++) next[i] = pasted[i] || '';
     setCode(next);
-    const lastFilled = Math.min(pasted.length, 5);
-    inputRefs.current[lastFilled]?.focus();
+    inputRefs.current[Math.min(pasted.length, 5)]?.focus();
   };
-
   const handleResend = async () => {
     try {
       await forgotPassword(email);
       toast.success('Новый код отправлен');
-      setResendTimer(60);
-      setCode(['', '', '', '', '', '']);
+      setResendTimer(60); setCode(['', '', '', '', '', '']);
       inputRefs.current[0]?.focus();
-    } catch {
-      toast.error('Ошибка отправки кода');
-    }
+    } catch { toast.error('Ошибка отправки кода'); }
   };
-
-  // ── Step 2: reset password ─────────────────────────────────────────────────
 
   const handleReset = async (e) => {
     e.preventDefault();
     const fullCode = code.join('');
-    if (fullCode.length !== 6) { toast.error('Введите все 6 цифр кода'); return; }
-    if (newPassword.length < 8) { toast.error('Пароль минимум 8 символов'); return; }
+    if (fullCode.length !== 6)    { toast.error('Введите все 6 цифр кода'); return; }
+    if (newPassword.length < 8)   { toast.error('Пароль минимум 8 символов'); return; }
     if (newPassword !== confirmPassword) { toast.error('Пароли не совпадают'); return; }
-
     setLoading(true);
     try {
       const response = await resetPassword(email, fullCode, newPassword);
@@ -169,157 +83,126 @@ export default function ForgotPasswordPage() {
       toast.success('Пароль успешно изменён!');
       navigate('/');
     } catch (err) {
-      const detail = err.response?.data?.detail;
-      toast.error(detail || 'Неверный или истёкший код');
+      toast.error(err.response?.data?.detail || 'Неверный или истёкший код');
       setCode(['', '', '', '', '', '']);
       inputRefs.current[0]?.focus();
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
-  // ── Render ─────────────────────────────────────────────────────────────────
-
   return (
-    <div style={cardStyle}>
-      <div style={glassStyle}>
-        {/* Logo */}
-        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <div style={{
-            fontSize: '1.75rem', fontWeight: '900', letterSpacing: '3px',
-            background: 'linear-gradient(135deg, #00f0ff, #7c3aed)',
-            WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-          }}>
-            QUASAR-X
+    <div className="flex min-h-screen items-center justify-center bg-background p-4">
+      <div className="w-full max-w-sm animate-fade-in-up">
+
+        {/* Brand */}
+        <div className="mb-8 text-center">
+          <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-primary">
+            <Zap className="h-5 w-5 text-primary-foreground" />
           </div>
-          <div style={{ color: '#6b7280', fontSize: '0.6875rem', letterSpacing: '4px', marginTop: '4px' }}>
-            REPRICER
-          </div>
+          <h1 className="text-2xl font-semibold tracking-tight">Repraiser</h1>
+          <p className="mt-1.5 text-sm text-muted-foreground">
+            {step === 'email' ? 'Восстановление пароля' : 'Новый пароль'}
+          </p>
         </div>
 
-        {step === 'email' ? (
-          <>
-            <h2 style={{ color: '#f9fafb', fontSize: '1.25rem', fontWeight: '700', margin: '0 0 0.5rem', textAlign: 'center' }}>
-              Восстановление пароля
-            </h2>
-            <p style={{ color: '#6b7280', fontSize: '0.875rem', textAlign: 'center', margin: '0 0 2rem' }}>
-              Введите email — пришлём код для сброса
-            </p>
-
-            <form onSubmit={handleSendCode}>
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={labelStyle}>Email</label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="your@email.com"
-                  required
-                  autoFocus
-                  style={inputStyle}
-                />
-              </div>
-              <button type="submit" style={btnStyle(loading)} disabled={loading}>
-                {loading ? 'Отправляем...' : 'Отправить код'}
-              </button>
-            </form>
-          </>
-        ) : (
-          <>
-            <h2 style={{ color: '#f9fafb', fontSize: '1.25rem', fontWeight: '700', margin: '0 0 0.5rem', textAlign: 'center' }}>
-              Новый пароль
-            </h2>
-            <p style={{ color: '#6b7280', fontSize: '0.875rem', textAlign: 'center', margin: '0 0 1.5rem' }}>
-              Код отправлен на <span style={{ color: '#00f0ff' }}>{email}</span>
-            </p>
-
-            <form onSubmit={handleReset}>
-              {/* Code digits */}
-              <div style={{ marginBottom: '1.5rem' }}>
-                <label style={labelStyle}>Код из письма</label>
-                <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                  {code.map((digit, i) => (
-                    <input
-                      key={i}
-                      ref={(el) => (inputRefs.current[i] = el)}
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={1}
-                      value={digit}
-                      onChange={(e) => handleChange(i, e.target.value)}
-                      onKeyDown={(e) => handleKeyDown(i, e)}
-                      onPaste={handlePaste}
-                      style={{
-                        ...digitInputStyle,
-                        borderColor: digit ? 'rgba(0,240,255,0.6)' : 'rgba(0,240,255,0.2)',
-                        boxShadow: digit ? '0 0 8px rgba(0,240,255,0.2)' : 'none',
-                      }}
-                    />
-                  ))}
+        <Card>
+          <CardContent className="pt-6">
+            {step === 'email' ? (
+              <form onSubmit={handleSendCode} className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  Введите email — пришлём код для сброса пароля
+                </p>
+                <div className="space-y-1.5">
+                  <Label htmlFor="email">Email</Label>
+                  <Input
+                    id="email" type="email" value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="your@email.com" required autoFocus
+                  />
                 </div>
-              </div>
+                <Button type="submit" disabled={loading} className="w-full">
+                  {loading ? <><Loader2 className="h-4 w-4 animate-spin" /> Отправляем...</> : 'Отправить код'}
+                </Button>
+              </form>
+            ) : (
+              <form onSubmit={handleReset} className="space-y-4">
+                <p className="text-sm text-muted-foreground text-center">
+                  Код отправлен на <span className="text-foreground font-medium">{email}</span>
+                </p>
 
-              {/* New password */}
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={labelStyle}>Новый пароль</label>
-                <input
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Минимум 6 символов"
-                  required
-                  style={inputStyle}
-                />
-              </div>
+                {/* Digit inputs */}
+                <div className="space-y-1.5">
+                  <Label>Код из письма</Label>
+                  <div className="flex gap-2 justify-center">
+                    {code.map((digit, i) => (
+                      <input
+                        key={i}
+                        ref={(el) => (inputRefs.current[i] = el)}
+                        type="text" inputMode="numeric" maxLength={1}
+                        value={digit}
+                        onChange={(e) => handleChange(i, e.target.value)}
+                        onKeyDown={(e) => handleKeyDown(i, e)}
+                        onPaste={handlePaste}
+                        className={cn(
+                          'h-12 w-10 rounded-md border text-center text-lg font-bold font-mono',
+                          'bg-background text-foreground transition-colors',
+                          'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                          digit ? 'border-primary' : 'border-input'
+                        )}
+                      />
+                    ))}
+                  </div>
+                </div>
 
-              {/* Confirm */}
-              <div style={{ marginBottom: '0.5rem' }}>
-                <label style={labelStyle}>Подтверждение пароля</label>
-                <input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Повторите пароль"
-                  required
-                  style={inputStyle}
-                />
-              </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="newpw">Новый пароль</Label>
+                  <Input
+                    id="newpw" type="password" value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Минимум 8 символов" required
+                  />
+                </div>
 
-              <button type="submit" style={btnStyle(loading)} disabled={loading}>
-                {loading ? 'Сохраняем...' : 'Сохранить новый пароль'}
-              </button>
-            </form>
+                <div className="space-y-1.5">
+                  <Label htmlFor="confirmpw">Подтвердите пароль</Label>
+                  <Input
+                    id="confirmpw" type="password" value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Повторите пароль" required
+                  />
+                </div>
 
-            {/* Resend */}
-            <div style={{ textAlign: 'center', marginTop: '1.25rem' }}>
-              {resendTimer > 0 ? (
-                <span style={{ color: '#4b5563', fontSize: '0.8125rem' }}>
-                  Отправить повторно через {resendTimer} сек.
-                </span>
-              ) : (
-                <button
-                  onClick={handleResend}
-                  style={{
-                    background: 'none', border: 'none', color: '#7c3aed',
-                    fontSize: '0.8125rem', cursor: 'pointer', fontWeight: '600',
-                  }}
-                >
-                  Отправить код повторно
-                </button>
-              )}
-            </div>
-          </>
-        )}
+                <Button type="submit" disabled={loading} className="w-full">
+                  {loading
+                    ? <><Loader2 className="h-4 w-4 animate-spin" /> Сохраняем...</>
+                    : 'Сохранить новый пароль'
+                  }
+                </Button>
 
-        <div style={{
-          borderTop: '1px solid rgba(255,255,255,0.06)',
-          marginTop: '1.5rem', paddingTop: '1.5rem',
-          textAlign: 'center', fontSize: '0.8125rem', color: '#4b5563',
-        }}>
-          <Link to="/login" style={{ color: '#6b7280', textDecoration: 'none' }}>
-            Вернуться ко входу
+                {/* Resend */}
+                <p className="text-center text-xs text-muted-foreground">
+                  {resendTimer > 0
+                    ? `Отправить повторно через ${resendTimer} сек.`
+                    : (
+                      <button
+                        type="button" onClick={handleResend}
+                        className="text-primary hover:underline underline-offset-4"
+                      >
+                        Отправить код повторно
+                      </button>
+                    )
+                  }
+                </p>
+              </form>
+            )}
+          </CardContent>
+        </Card>
+
+        <p className="mt-5 text-center text-sm">
+          <Link to="/login" className="flex items-center justify-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors">
+            <ArrowLeft className="h-3.5 w-3.5" /> Вернуться ко входу
           </Link>
-        </div>
+        </p>
+
       </div>
     </div>
   );

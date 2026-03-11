@@ -60,8 +60,8 @@ export default function Runs() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold" style={{ background: 'linear-gradient(135deg,#1e1b4b,#7c3aed)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent', backgroundClip:'text' }}>Прогоны репрайсера</h1>
-          <p className="text-sm mt-1" style={{ color: 'var(--text-3)' }}>История запусков и результаты</p>
+          <h1 className="page-h1">Прогоны репрайсера</h1>
+          <p className="text-sm mt-1 text-muted-foreground">История запусков и результаты</p>
         </div>
         <button onClick={loadRuns} className="btn btn-secondary gap-2">
           <RefreshCw className="w-4 h-4" />

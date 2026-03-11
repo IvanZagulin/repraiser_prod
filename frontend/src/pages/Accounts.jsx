@@ -60,8 +60,8 @@ export default function Accounts() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold" style={{ background: 'linear-gradient(135deg,#1e1b4b,#7c3aed)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent', backgroundClip:'text' }}>Аккаунты WB</h1>
-          <p className="text-sm mt-1" style={{ color: 'var(--text-3)' }}>Управление аккаунтами продавцов</p>
+          <h1 className="page-h1">Аккаунты WB</h1>
+          <p className="text-sm mt-1 text-muted-foreground">Управление аккаунтами продавцов</p>
         </div>
         <button onClick={() => setShowModal(true)} className="btn btn-primary gap-2">
           <Plus className="w-4 h-4" />
@@ -87,11 +87,8 @@ export default function Accounts() {
               <div className="flex items-start justify-between">
                 <div className="flex-1">
                   <div className="flex items-center gap-3">
-                    <div
-                      className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
-                      style={{ background: '#ede9fe' }}
-                    >
-                      <KeyRound className="w-4 h-4" style={{ color: '#7c3aed' }} />
+                    <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 bg-primary/10">
+                      <KeyRound className="w-4 h-4 text-primary" />
                     </div>
                     <div>
                       <h3 className="font-semibold text-gray-900">{account.name}</h3>
@@ -108,8 +105,7 @@ export default function Accounts() {
                     <div>
                       <p className="text-xs mb-1" style={{ color: 'var(--text-3)' }}>ID аккаунта</p>
                       <span
-                        className="font-mono text-sm font-semibold px-2 py-0.5 rounded"
-                        style={{ background: '#ede9fe', color: '#7c3aed' }}
+                        className="font-mono text-sm font-semibold px-2 py-0.5 rounded bg-primary/10 text-primary"
                         title="Используйте этот ID при загрузке товаров через Excel"
                       >
                         {account.id}
@@ -122,12 +118,9 @@ export default function Accounts() {
                   </div>
 
                   {account.token_ttl_days !== null && account.token_ttl_days <= 7 && (
-                    <div
-                      className="mt-3 ml-12 flex items-start gap-2 p-3 rounded-lg"
-                      style={{ background: '#fefce8', border: '1px solid #fde68a' }}
-                    >
-                      <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: '#d97706' }} />
-                      <p className="text-sm" style={{ color: '#92400e' }}>
+                    <div className="mt-3 ml-12 flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 dark:bg-amber-950/20 dark:border-amber-800">
+                      <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-600" />
+                      <p className="text-sm text-amber-800 dark:text-amber-300">
                         <strong>Внимание!</strong> Токен скоро истечет. Обновите его в настройках аккаунта WB.
                       </p>
                     </div>
@@ -194,7 +187,7 @@ function AccountModal({ onClose }) {
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-2)' }}>
+            <label className="block text-sm font-medium mb-1.5 text-muted-foreground">
               Название аккаунта
             </label>
             <input
@@ -208,7 +201,7 @@ function AccountModal({ onClose }) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-2)' }}>
+            <label className="block text-sm font-medium mb-1.5 text-muted-foreground">
               WB API Токен (JWT)
             </label>
             <textarea
