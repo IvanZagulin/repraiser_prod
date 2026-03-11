@@ -27,7 +27,9 @@ def _get_fernet():
         if settings.FERNET_KEY:
             from cryptography.fernet import Fernet
             _fernet = Fernet(settings.FERNET_KEY.encode())
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Fernet init failed (check FERNET_KEY): {e}")
         _fernet = None
     _fernet_initialized = True
     return _fernet
@@ -60,11 +62,15 @@ def decrypt_field(value: Optional[str]) -> Optional[str]:
         return value  # Не зашифровано (legacy) — вернуть как есть
     f = _get_fernet()
     if f is None:
-        return value  # Нет ключа — не можем расшифровать
+        import logging
+        logging.getLogger(__name__).error("Cannot decrypt: FERNET_KEY not configured")
+        return None
     try:
         return f.decrypt(value[4:].encode()).decode()
-    except Exception:
-        return value  # Fallback при ошибке расшифровки
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Decryption failed: {e}")
+        return None
 
 
 class EncryptedText(TypeDecorator):

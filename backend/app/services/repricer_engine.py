@@ -633,7 +633,7 @@ class RepricerEngine:
 
         if success:
             # Рассчитываем новую финальную цену
-            if current_data.get('spp'):
+            if current_data.get('spp') is not None:
                 new_final = final_new_price * (1 - current_data['spp'] / 100)
             else:
                 new_final = None

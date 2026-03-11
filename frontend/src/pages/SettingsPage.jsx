@@ -174,7 +174,7 @@ function ChangePasswordBlock({ userEmail }) {
                 type={showPass ? 'text' : 'password'}
                 value={newPassword}
                 onChange={e => setNewPassword(e.target.value)}
-                placeholder="Минимум 6 символов"
+                placeholder="Минимум 8 символов"
                 className="input w-full pr-10"
               />
               <button
@@ -227,7 +227,7 @@ function ChangePasswordBlock({ userEmail }) {
 // ─── Основная страница настроек ────────────────────────────────────────────────
 export default function SettingsPage() {
   const { user } = useAuthStore();
-  const [interval, setInterval] = useState(60);
+  const [intervalMins, setIntervalMins] = useState(60);
   const [walletPct, setWalletPct] = useState(3.0);
   const [commissionType,  setCommissionType]  = useState('pct');
   const [commissionValue, setCommissionValue] = useState(0.0);
@@ -247,7 +247,7 @@ export default function SettingsPage() {
     try {
       const res = await getSettings();
       const d = res.data;
-      setInterval(d.repricer_interval_minutes);
+      setIntervalMins(d.repricer_interval_minutes);
       setWalletPct(d.wb_wallet_discount_pct);
       setCommissionType(d.commission_type  || 'pct');
       setCommissionValue(d.commission_value ?? 0);
@@ -267,7 +267,7 @@ export default function SettingsPage() {
     setSaving(true);
     try {
       await updateSettings({
-        repricer_interval_minutes: interval,
+        repricer_interval_minutes: intervalMins,
         wb_wallet_discount_pct: walletPct,
         commission_type:  commissionType,
         commission_value: commissionValue,
@@ -340,8 +340,8 @@ export default function SettingsPage() {
               Периодичность запуска
             </label>
             <select
-              value={interval}
-              onChange={(e) => setInterval(Number(e.target.value))}
+              value={intervalMins}
+              onChange={(e) => setIntervalMins(Number(e.target.value))}
               className="input w-full"
             >
               {INTERVAL_OPTIONS.map((opt) => (

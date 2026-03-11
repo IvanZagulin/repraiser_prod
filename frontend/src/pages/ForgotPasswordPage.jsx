@@ -159,7 +159,7 @@ export default function ForgotPasswordPage() {
     e.preventDefault();
     const fullCode = code.join('');
     if (fullCode.length !== 6) { toast.error('Введите все 6 цифр кода'); return; }
-    if (newPassword.length < 6) { toast.error('Пароль минимум 6 символов'); return; }
+    if (newPassword.length < 8) { toast.error('Пароль минимум 8 символов'); return; }
     if (newPassword !== confirmPassword) { toast.error('Пароли не совпадают'); return; }
 
     setLoading(true);

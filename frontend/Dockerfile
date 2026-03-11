@@ -6,11 +6,13 @@ WORKDIR /app
 COPY package*.json ./
 
 # Установка зависимостей
-RUN npm install
+RUN npm ci
 
 # Копирование исходников
 COPY . .
 
 EXPOSE 5173
 
-CMD ["npm", "run", "dev"]
+# По умолчанию — build + preview (production)
+# docker-compose может переопределить command если нужно
+CMD ["sh", "-c", "npm run build && npm run preview -- --host 0.0.0.0 --port 5173"]

@@ -369,7 +369,7 @@ async def import_costs(
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Ошибка сохранения: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка сохранения данных")
 
     return {
         "success": True,
@@ -455,7 +455,7 @@ async def import_strategy(
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Ошибка сохранения: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка сохранения данных")
 
     return {
         "success": True,
@@ -588,7 +588,7 @@ async def import_products(
             db.commit()
         except Exception as e:
             db.rollback()
-            raise HTTPException(status_code=500, detail=f"Ошибка сохранения: {e}")
+            raise HTTPException(status_code=500, detail="Ошибка сохранения данных")
 
     return {
         "success": True,

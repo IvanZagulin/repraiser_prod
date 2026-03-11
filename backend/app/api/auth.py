@@ -162,7 +162,7 @@ async def verify_email(
     if user.verification_code_expires_at and user.verification_code_expires_at < datetime.utcnow():
         raise HTTPException(status_code=400, detail="Код истёк. Запросите новый")
 
-    if not user.verification_code or user.verification_code != body.code:
+    if not user.verification_code or not secrets.compare_digest(user.verification_code, body.code):
         user.verification_attempts = (user.verification_attempts or 0) + 1
         if user.verification_attempts >= MAX_CODE_ATTEMPTS:
             user.verification_code = None
@@ -285,7 +285,10 @@ async def reset_password(
     if not user:
         raise HTTPException(status_code=400, detail="Неверный email или код")
 
-    if not user.reset_code or user.reset_code != body.code:
+    if not user.reset_code_expires_at or user.reset_code_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Код истёк. Запросите новый")
+
+    if not user.reset_code or not secrets.compare_digest(user.reset_code, body.code):
         user.reset_attempts = (user.reset_attempts or 0) + 1
         if user.reset_attempts >= MAX_CODE_ATTEMPTS:
             user.reset_code = None
@@ -295,9 +298,6 @@ async def reset_password(
             raise HTTPException(status_code=400, detail="Превышено число попыток. Запросите новый код")
         db.commit()
         raise HTTPException(status_code=400, detail=f"Неверный код. Осталось попыток: {MAX_CODE_ATTEMPTS - user.reset_attempts}")
-
-    if not user.reset_code_expires_at or user.reset_code_expires_at < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="Код истёк. Запросите новый")
 
     user.password_hash = hash_password(body.new_password)
     user.reset_code = None
@@ -349,7 +349,10 @@ async def change_password_confirm(
     db: Annotated[Session, Depends(get_db)],
 ):
     """Подтверждает смену пароля по коду из email."""
-    if not current_user.reset_code or current_user.reset_code != body.code:
+    if not current_user.reset_code_expires_at or current_user.reset_code_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Код истёк. Запросите новый")
+
+    if not current_user.reset_code or not secrets.compare_digest(current_user.reset_code, body.code):
         current_user.reset_attempts = (current_user.reset_attempts or 0) + 1
         if current_user.reset_attempts >= MAX_CODE_ATTEMPTS:
             current_user.reset_code = None
@@ -362,9 +365,6 @@ async def change_password_confirm(
             status_code=400,
             detail=f"Неверный код. Осталось попыток: {MAX_CODE_ATTEMPTS - current_user.reset_attempts}"
         )
-
-    if not current_user.reset_code_expires_at or current_user.reset_code_expires_at < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="Код истёк. Запросите новый")
 
     current_user.password_hash = hash_password(body.new_password)
     current_user.reset_code = None

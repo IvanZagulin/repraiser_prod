@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import jwt
 
@@ -64,7 +64,7 @@ def get_token_expiration(token: str) -> Optional[datetime]:
         return None
     
     try:
-        return datetime.fromtimestamp(exp_timestamp)
+        return datetime.utcfromtimestamp(exp_timestamp)
     except (ValueError, OSError) as e:
         logger.error(f"Ошибка конвертации timestamp: {e}")
         return None

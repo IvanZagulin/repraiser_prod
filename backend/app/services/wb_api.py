@@ -272,8 +272,11 @@ class WBAPIClient:
         logger.info(f"Проверка применения цены для nm_id={nm_id} (ожидается {expected_price}₽)")
         
         for attempt in range(1, max_attempts + 1):
-            await asyncio.sleep(delay)
-            
+            if attempt > 1:
+                await asyncio.sleep(delay)
+            else:
+                await asyncio.sleep(delay // 2)  # Первая проверка — ждём меньше
+
             try:
                 prices = await self.get_prices(nm_ids=[nm_id])
                 

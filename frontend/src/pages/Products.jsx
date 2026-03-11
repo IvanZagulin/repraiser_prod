@@ -67,9 +67,12 @@ export default function Products() {
     }
   };
 
+  const pageRef = useRef(page);
+  useEffect(() => { pageRef.current = page; }, [page]);
+
   const refreshProductsSilent = async () => {
     try {
-      const response = await getProducts({ page, page_size: PAGE_SIZE });
+      const response = await getProducts({ page: pageRef.current, page_size: PAGE_SIZE });
       if (isMounted.current) {
         setProducts(response.data.products);
         setTotalProducts(response.data.total);

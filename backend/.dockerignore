@@ -1,0 +1,11 @@
+__pycache__
+*.pyc
+*.pyo
+.git
+.env
+.env.*
+.vscode
+.idea
+*.log
+alembic/versions/*.pyc
+test_*.py
