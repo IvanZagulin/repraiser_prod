@@ -1,5 +1,9 @@
 # Utility Functions
-from fastapi import Request
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fastapi import Request
 
 
 def get_real_ip(request: Request) -> str:
