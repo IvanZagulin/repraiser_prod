@@ -1,13 +1,18 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { Loader2, Zap } from 'lucide-react';
 import { login } from '../api/client';
 import { useAuthStore } from '../store';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Card, CardContent } from '@/components/ui/card';
 
 export default function Login() {
-  const [email, setEmail]     = useState('');
+  const [email,    setEmail]    = useState('');
   const [password, setPassword] = useState('');
-  const [loading, setLoading]   = useState(false);
+  const [loading,  setLoading]  = useState(false);
 
   const navigate   = useNavigate();
   const loginStore = useAuthStore((state) => state.login);
@@ -33,205 +38,74 @@ export default function Login() {
     }
   };
 
-  const inputStyle = {
-    display: 'block', width: '100%',
-    padding: '.65rem 1rem',
-    background: 'rgba(10,10,18,0.9)',
-    border: '1px solid rgba(0,240,255,0.18)',
-    borderRadius: '.625rem',
-    color: '#e8e8f0', fontSize: '.9rem',
-    outline: 'none', fontFamily: 'Inter, system-ui, sans-serif',
-    transition: 'border-color .18s, box-shadow .18s',
-  };
-
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: '#0a0a12',
-        backgroundImage:
-          'radial-gradient(ellipse at 15% 60%, rgba(0,240,255,0.07) 0%, transparent 50%),' +
-          'radial-gradient(ellipse at 85% 20%, rgba(255,0,212,0.07) 0%, transparent 50%),' +
-          'radial-gradient(ellipse at 50% 100%, rgba(0,102,255,0.05) 0%, transparent 50%)',
-        padding: '1rem',
-        fontFamily: 'Inter, system-ui, sans-serif',
-      }}
-    >
-      {/* Scanlines overlay */}
-      <div
-        style={{
-          position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 0,
-          backgroundImage:
-            'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.06) 2px, rgba(0,0,0,0.06) 4px)',
-        }}
-      />
-
-      <div style={{ maxWidth: '400px', width: '100%', position: 'relative', zIndex: 1 }}>
+    <div className="flex min-h-screen items-center justify-center bg-background p-4">
+      <div className="w-full max-w-sm animate-fade-in-up">
 
         {/* Brand */}
-        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <h1
-            style={{
-              fontFamily: "'Orbitron', sans-serif",
-              fontSize: '2.5rem', fontWeight: 900,
-              letterSpacing: '0.12em', textTransform: 'uppercase',
-              background: 'linear-gradient(135deg, #00f0ff 0%, #0066ff 50%, #ff00d4 100%)',
-              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
-              margin: 0, lineHeight: 1.1,
-              filter: 'drop-shadow(0 0 28px rgba(0,240,255,0.4))',
-            }}
-          >
-            QUASAR-X
-          </h1>
-          <p
-            style={{
-              color: '#555577', fontSize: '0.6875rem', fontWeight: 600,
-              letterSpacing: '0.28em', textTransform: 'uppercase', marginTop: '0.625rem',
-            }}
-          >
-            Личный кабинет
-          </p>
+        <div className="mb-8 text-center">
+          <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-primary">
+            <Zap className="h-5 w-5 text-primary-foreground" />
+          </div>
+          <h1 className="text-2xl font-semibold tracking-tight">Repraiser</h1>
+          <p className="mt-1.5 text-sm text-muted-foreground">Войдите в свой аккаунт</p>
         </div>
 
-        {/* Card */}
-        <div
-          style={{
-            background: 'rgba(26,26,46,0.85)',
-            border: '1px solid rgba(0,240,255,0.12)',
-            borderRadius: '1.375rem',
-            padding: '2rem',
-            backdropFilter: 'blur(28px)',
-            WebkitBackdropFilter: 'blur(28px)',
-            boxShadow:
-              '0 0 40px rgba(0,240,255,0.04),' +
-              '0 24px 64px rgba(0,0,0,0.7),' +
-              'inset 0 1px 0 rgba(0,240,255,0.08)',
-          }}
-        >
-          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+        {/* Form card */}
+        <Card>
+          <CardContent className="pt-6">
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="your@email.com"
+                  required
+                  autoComplete="email"
+                />
+              </div>
 
-            {/* Email */}
-            <div>
-              <label style={{
-                display: 'block', fontSize: '0.6875rem', fontWeight: 700,
-                color: '#555577', marginBottom: '0.4rem',
-                letterSpacing: '0.14em', textTransform: 'uppercase',
-              }}>
-                Email
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="your@email.com"
-                required
-                style={inputStyle}
-                onFocus={(e) => {
-                  e.target.style.borderColor = '#00f0ff';
-                  e.target.style.boxShadow = '0 0 0 3px rgba(0,240,255,0.1), 0 0 14px rgba(0,240,255,0.15)';
-                }}
-                onBlur={(e) => {
-                  e.target.style.borderColor = 'rgba(0,240,255,0.18)';
-                  e.target.style.boxShadow = 'none';
-                }}
-              />
-            </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="password">Пароль</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  required
+                  autoComplete="current-password"
+                />
+              </div>
 
-            {/* Пароль */}
-            <div>
-              <label style={{
-                display: 'block', fontSize: '0.6875rem', fontWeight: 700,
-                color: '#555577', marginBottom: '0.4rem',
-                letterSpacing: '0.14em', textTransform: 'uppercase',
-              }}>
-                Пароль
-              </label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                required
-                style={inputStyle}
-                onFocus={(e) => {
-                  e.target.style.borderColor = '#00f0ff';
-                  e.target.style.boxShadow = '0 0 0 3px rgba(0,240,255,0.1), 0 0 14px rgba(0,240,255,0.15)';
-                }}
-                onBlur={(e) => {
-                  e.target.style.borderColor = 'rgba(0,240,255,0.18)';
-                  e.target.style.boxShadow = 'none';
-                }}
-              />
-            </div>
+              <Button type="submit" disabled={loading} className="w-full mt-2">
+                {loading
+                  ? <><Loader2 className="h-4 w-4 animate-spin" /> Вход...</>
+                  : 'Войти'
+                }
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
 
-            {/* Submit */}
-            <button
-              type="submit"
-              disabled={loading}
-              style={{
-                marginTop: '0.25rem',
-                width: '100%', padding: '.8rem',
-                border: 'none', borderRadius: '.875rem',
-                cursor: loading ? 'not-allowed' : 'pointer',
-                background: loading
-                  ? 'rgba(0,240,255,0.08)'
-                  : 'linear-gradient(135deg, #00f0ff 0%, #0066ff 55%, #ff00d4 100%)',
-                color: loading ? '#555577' : '#0a0a12',
-                fontWeight: 800, fontSize: '.9375rem',
-                letterSpacing: '0.1em', textTransform: 'uppercase',
-                fontFamily: 'Inter, system-ui, sans-serif',
-                boxShadow: loading ? 'none' : '0 4px 24px rgba(0,240,255,0.4)',
-                transition: 'all .2s',
-              }}
-              onMouseEnter={(e) => {
-                if (!loading) e.target.style.boxShadow = '0 6px 36px rgba(0,240,255,0.55)';
-              }}
-              onMouseLeave={(e) => {
-                if (!loading) e.target.style.boxShadow = '0 4px 24px rgba(0,240,255,0.4)';
-              }}
-            >
-              {loading ? 'Авторизация...' : 'Войти'}
-            </button>
-          </form>
-
-          {/* Divider */}
-          <div style={{
-            margin: '1.5rem 0 1rem',
-            height: '1px',
-            background: 'linear-gradient(90deg, transparent, rgba(0,240,255,0.18), transparent)',
-          }} />
-
-          <p style={{
-            textAlign: 'center', fontSize: '0.6875rem',
-            color: '#555577', letterSpacing: '0.05em',
-          }}>
-            <Link
-              to="/forgot-password"
-              style={{ color: '#7c3aed', textDecoration: 'none', fontWeight: 600 }}
-            >
+        {/* Links */}
+        <div className="mt-5 space-y-2 text-center text-sm text-muted-foreground">
+          <p>
+            <Link to="/forgot-password" className="text-primary hover:underline underline-offset-4">
               Забыли пароль?
             </Link>
           </p>
-          <p style={{
-            textAlign: 'center', fontSize: '0.6875rem',
-            color: '#555577', letterSpacing: '0.05em', marginTop: '0.5rem',
-          }}>
+          <p>
             Нет аккаунта?{' '}
-            <Link
-              to="/register"
-              style={{ color: '#00f0ff', textDecoration: 'none', fontWeight: 700 }}
-            >
+            <Link to="/register" className="font-medium text-primary hover:underline underline-offset-4">
               Зарегистрироваться
             </Link>
           </p>
-          <p style={{
-            textAlign: 'center', fontSize: '0.6875rem',
-            color: '#3a3a55', letterSpacing: '0.05em', marginTop: '0.5rem',
-          }}>
-            QUASAR-X © 2025 — Автоматический репрайсинг для WB
-          </p>
         </div>
+
       </div>
     </div>
   );

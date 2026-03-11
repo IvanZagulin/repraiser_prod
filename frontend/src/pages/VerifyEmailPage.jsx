@@ -1,68 +1,22 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { Loader2, Zap, ArrowLeft } from 'lucide-react';
 import { verifyEmail, resendCode } from '../api/client';
 import { useAuthStore } from '../store';
-
-const cardStyle = {
-  minHeight: '100vh',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  background: 'linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 50%, #16213e 100%)',
-  padding: '1rem',
-};
-
-const glassStyle = {
-  background: 'rgba(255,255,255,0.03)',
-  backdropFilter: 'blur(20px)',
-  borderRadius: '1.5rem',
-  border: '1px solid rgba(0,240,255,0.15)',
-  padding: '2.5rem',
-  width: '100%',
-  maxWidth: '420px',
-  boxShadow: '0 25px 50px rgba(0,0,0,0.5)',
-};
-
-const digitInputStyle = {
-  width: '48px',
-  height: '56px',
-  textAlign: 'center',
-  fontSize: '1.5rem',
-  fontWeight: '700',
-  fontFamily: 'monospace',
-  background: 'rgba(255,255,255,0.05)',
-  border: '1.5px solid rgba(0,240,255,0.2)',
-  borderRadius: '0.75rem',
-  color: '#f9fafb',
-  outline: 'none',
-  caretColor: '#00f0ff',
-};
-
-const btnStyle = (disabled) => ({
-  width: '100%',
-  padding: '0.875rem',
-  background: disabled
-    ? 'rgba(124,58,237,0.3)'
-    : 'linear-gradient(135deg, #00f0ff, #7c3aed)',
-  color: '#fff',
-  fontWeight: '700',
-  fontSize: '0.9375rem',
-  border: 'none',
-  borderRadius: '0.75rem',
-  cursor: disabled ? 'not-allowed' : 'pointer',
-  letterSpacing: '0.5px',
-  marginTop: '1.5rem',
-});
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
+import { cn } from '@/lib/utils';
 
 export default function VerifyEmailPage() {
-  const location = useLocation();
-  const navigate = useNavigate();
+  const location   = useLocation();
+  const navigate   = useNavigate();
   const loginStore = useAuthStore((state) => state.login);
 
   const email = location.state?.email;
-  const [code, setCode] = useState(['', '', '', '', '', '']);
-  const [loading, setLoading] = useState(false);
+  const [code,        setCode]        = useState(['', '', '', '', '', '']);
+  const [loading,     setLoading]     = useState(false);
   const [resendTimer, setResendTimer] = useState(60);
   const inputRefs = useRef([]);
 
@@ -79,20 +33,13 @@ export default function VerifyEmailPage() {
 
   const handleChange = (index, value) => {
     const digit = value.replace(/\D/g, '').slice(-1);
-    const next = [...code];
-    next[index] = digit;
-    setCode(next);
-    if (digit && index < 5) {
-      inputRefs.current[index + 1]?.focus();
-    }
+    const next = [...code]; next[index] = digit; setCode(next);
+    if (digit && index < 5) inputRefs.current[index + 1]?.focus();
   };
-
   const handleKeyDown = (index, e) => {
-    if (e.key === 'Backspace' && !code[index] && index > 0) {
+    if (e.key === 'Backspace' && !code[index] && index > 0)
       inputRefs.current[index - 1]?.focus();
-    }
   };
-
   const handlePaste = (e) => {
     e.preventDefault();
     const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
@@ -100,17 +47,13 @@ export default function VerifyEmailPage() {
     const next = [...code];
     for (let i = 0; i < 6; i++) next[i] = pasted[i] || '';
     setCode(next);
-    const lastFilled = Math.min(pasted.length, 5);
-    inputRefs.current[lastFilled]?.focus();
+    inputRefs.current[Math.min(pasted.length, 5)]?.focus();
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     const fullCode = code.join('');
-    if (fullCode.length !== 6) {
-      toast.error('Введите все 6 цифр кода');
-      return;
-    }
+    if (fullCode.length !== 6) { toast.error('Введите все 6 цифр кода'); return; }
     setLoading(true);
     try {
       const response = await verifyEmail(email, fullCode);
@@ -118,109 +61,94 @@ export default function VerifyEmailPage() {
       toast.success('Email подтверждён! Добро пожаловать!');
       navigate('/');
     } catch (err) {
-      const detail = err.response?.data?.detail;
-      toast.error(detail || 'Неверный или истёкший код');
+      toast.error(err.response?.data?.detail || 'Неверный или истёкший код');
       setCode(['', '', '', '', '', '']);
       inputRefs.current[0]?.focus();
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   const handleResend = async () => {
     try {
       await resendCode(email);
       toast.success('Новый код отправлен на ' + email);
-      setResendTimer(60);
-      setCode(['', '', '', '', '', '']);
+      setResendTimer(60); setCode(['', '', '', '', '', '']);
       inputRefs.current[0]?.focus();
-    } catch {
-      toast.error('Ошибка отправки кода');
-    }
+    } catch { toast.error('Ошибка отправки кода'); }
   };
 
   return (
-    <div style={cardStyle}>
-      <div style={glassStyle}>
-        {/* Logo */}
-        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <div style={{
-            fontSize: '1.75rem', fontWeight: '900', letterSpacing: '3px',
-            background: 'linear-gradient(135deg, #00f0ff, #7c3aed)',
-            WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-          }}>
-            QUASAR-X
+    <div className="flex min-h-screen items-center justify-center bg-background p-4">
+      <div className="w-full max-w-sm animate-fade-in-up">
+
+        {/* Brand */}
+        <div className="mb-8 text-center">
+          <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-primary">
+            <Zap className="h-5 w-5 text-primary-foreground" />
           </div>
-          <div style={{ color: '#6b7280', fontSize: '0.6875rem', letterSpacing: '4px', marginTop: '4px' }}>
-            REPRICER
-          </div>
+          <h1 className="text-2xl font-semibold tracking-tight">Подтверждение email</h1>
+          <p className="mt-1.5 text-sm text-muted-foreground">
+            Введите код, отправленный на{' '}
+            <span className="text-foreground font-medium">{email}</span>
+          </p>
         </div>
 
-        <h2 style={{ color: '#f9fafb', fontSize: '1.25rem', fontWeight: '700', margin: '0 0 0.5rem', textAlign: 'center' }}>
-          Подтверждение email
-        </h2>
-        <p style={{ color: '#6b7280', fontSize: '0.875rem', textAlign: 'center', margin: '0 0 2rem' }}>
-          Введите 6-значный код, отправленный на<br />
-          <span style={{ color: '#00f0ff' }}>{email}</span>
+        <Card>
+          <CardContent className="pt-6">
+            <form onSubmit={handleSubmit} className="space-y-5">
+              <div className="space-y-2">
+                <Label>Код подтверждения</Label>
+                <div className="flex gap-2 justify-center">
+                  {code.map((digit, i) => (
+                    <input
+                      key={i}
+                      ref={(el) => (inputRefs.current[i] = el)}
+                      type="text" inputMode="numeric" maxLength={1}
+                      value={digit}
+                      onChange={(e) => handleChange(i, e.target.value)}
+                      onKeyDown={(e) => handleKeyDown(i, e)}
+                      onPaste={handlePaste}
+                      autoFocus={i === 0}
+                      className={cn(
+                        'h-12 w-10 rounded-md border text-center text-lg font-bold font-mono',
+                        'bg-background text-foreground transition-colors',
+                        'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                        digit ? 'border-primary' : 'border-input'
+                      )}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <Button type="submit" disabled={loading} className="w-full">
+                {loading
+                  ? <><Loader2 className="h-4 w-4 animate-spin" /> Проверяем...</>
+                  : 'Подтвердить'
+                }
+              </Button>
+
+              <p className="text-center text-xs text-muted-foreground">
+                {resendTimer > 0
+                  ? `Отправить повторно через ${resendTimer} сек.`
+                  : (
+                    <button
+                      type="button" onClick={handleResend}
+                      className="text-primary hover:underline underline-offset-4"
+                    >
+                      Отправить код повторно
+                    </button>
+                  )
+                }
+              </p>
+            </form>
+          </CardContent>
+        </Card>
+
+        <p className="mt-5 text-center text-sm">
+          <Link to="/login" className="flex items-center justify-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors">
+            <ArrowLeft className="h-3.5 w-3.5" /> Вернуться ко входу
+          </Link>
         </p>
 
-        <form onSubmit={handleSubmit}>
-          {/* 6 digit inputs */}
-          <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', marginBottom: '0.5rem' }}>
-            {code.map((digit, i) => (
-              <input
-                key={i}
-                ref={(el) => (inputRefs.current[i] = el)}
-                type="text"
-                inputMode="numeric"
-                maxLength={1}
-                value={digit}
-                onChange={(e) => handleChange(i, e.target.value)}
-                onKeyDown={(e) => handleKeyDown(i, e)}
-                onPaste={handlePaste}
-                style={{
-                  ...digitInputStyle,
-                  borderColor: digit ? 'rgba(0,240,255,0.6)' : 'rgba(0,240,255,0.2)',
-                  boxShadow: digit ? '0 0 8px rgba(0,240,255,0.2)' : 'none',
-                }}
-                autoFocus={i === 0}
-              />
-            ))}
-          </div>
-
-          <button type="submit" style={btnStyle(loading)} disabled={loading}>
-            {loading ? 'Проверяем...' : 'Подтвердить'}
-          </button>
-        </form>
-
-        {/* Resend */}
-        <div style={{ textAlign: 'center', marginTop: '1.5rem' }}>
-          {resendTimer > 0 ? (
-            <span style={{ color: '#4b5563', fontSize: '0.8125rem' }}>
-              Отправить повторно через {resendTimer} сек.
-            </span>
-          ) : (
-            <button
-              onClick={handleResend}
-              style={{
-                background: 'none', border: 'none', color: '#7c3aed',
-                fontSize: '0.8125rem', cursor: 'pointer', fontWeight: '600',
-              }}
-            >
-              Отправить код повторно
-            </button>
-          )}
-        </div>
-
-        <div style={{
-          borderTop: '1px solid rgba(255,255,255,0.06)',
-          marginTop: '1.5rem', paddingTop: '1.5rem',
-          textAlign: 'center', fontSize: '0.8125rem', color: '#4b5563',
-        }}>
-          <Link to="/login" style={{ color: '#6b7280', textDecoration: 'none' }}>
-            Вернуться ко входу
-          </Link>
-        </div>
       </div>
     </div>
   );
