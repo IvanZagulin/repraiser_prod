@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Plus, Trash2, AlertCircle, X, KeyRound } from 'lucide-react';
+import { Plus, Trash2, AlertCircle, X, KeyRound, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { getAccounts, createAccount, deleteAccount } from '../api/client';
+import { getAccounts, createAccount, deleteAccount, syncAccountCatalog } from '../api/client';
 import { format } from 'date-fns';
 
 export default function Accounts() {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [syncingId, setSyncingId] = useState(null);
 
   useEffect(() => {
     loadAccounts();
@@ -22,6 +23,18 @@ export default function Accounts() {
       toast.error('Ошибка загрузки аккаунтов');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSyncCatalog = async (id, name) => {
+    setSyncingId(id);
+    try {
+      await syncAccountCatalog(id);
+      toast.success(`Синхронизация каталога "${name}" запущена — фото обновятся через 1–3 мин.`);
+    } catch {
+      toast.error('Ошибка запуска синхронизации');
+    } finally {
+      setSyncingId(null);
     }
   };
 
@@ -93,6 +106,16 @@ export default function Accounts() {
 
                   <div className="mt-4 flex items-center gap-6 pl-12">
                     <div>
+                      <p className="text-xs mb-1" style={{ color: 'var(--text-3)' }}>ID аккаунта</p>
+                      <span
+                        className="font-mono text-sm font-semibold px-2 py-0.5 rounded"
+                        style={{ background: '#ede9fe', color: '#7c3aed' }}
+                        title="Используйте этот ID при загрузке товаров через Excel"
+                      >
+                        {account.id}
+                      </span>
+                    </div>
+                    <div>
                       <p className="text-xs mb-1" style={{ color: 'var(--text-3)' }}>Срок токена</p>
                       {getTokenStatus(account)}
                     </div>
@@ -111,13 +134,23 @@ export default function Accounts() {
                   )}
                 </div>
 
-                <button
-                  onClick={() => handleDelete(account.id, account.name)}
-                  className="btn btn-sm btn-danger ml-4"
-                  title="Удалить"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-2 ml-4">
+                  <button
+                    onClick={() => handleSyncCatalog(account.id, account.name)}
+                    disabled={syncingId === account.id}
+                    className="btn btn-sm btn-secondary"
+                    title="Синхронизировать каталог (обновить фото товаров)"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${syncingId === account.id ? 'animate-spin' : ''}`} />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(account.id, account.name)}
+                    className="btn btn-sm btn-danger"
+                    title="Удалить"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
             </div>
           ))}

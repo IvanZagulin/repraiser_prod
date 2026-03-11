@@ -1,7 +1,9 @@
 from typing import Annotated, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
+from slowapi import Limiter
 
 from app.database import get_db
 from app.models import Product, RepricerRun, PriceChange, Account
@@ -12,8 +14,12 @@ from app.schemas.repricer import (
 )
 from app.api.auth import get_current_user
 from app.services.repricer_engine import RepricerEngine
+from app.utils import get_user_id_key
 
 router = APIRouter()
+
+# Per-user rate limiter: один пользователь — один ключ вне зависимости от IP
+limiter = Limiter(key_func=get_user_id_key)
 
 
 def _user_product_ids(db: Session, user_id: int, seller_skus: Optional[List[str]] = None):
@@ -56,47 +62,67 @@ def _build_change_responses(db: Session, changes: list) -> list:
 
 
 @router.post("/run", response_model=RepricerRunResponse)
+@limiter.limit("5/minute")
 async def manual_run(
-    request: ManualRunRequest,
+    request: Request,
+    body: ManualRunRequest,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Ручной запуск репрайсера (через Celery — не блокирует API)"""
-    product_ids = _user_product_ids(db, current_user.id, request.seller_skus or None)
+    product_ids = _user_product_ids(db, current_user.id, body.seller_skus or None)
 
     if not product_ids:
         raise HTTPException(status_code=404, detail="No products found")
 
-    from app.tasks.repricer_task import run_repricer_for_user
-    run_repricer_for_user.delay(current_user.id, product_ids, "manual", request.dry_run)
+    # Создаём запись в БД заранее — чтобы вернуть реальный ID на фронт (fix: id=0)
+    run = RepricerRun(
+        user_id=current_user.id,
+        run_type="manual",
+        status="queued",
+        total_products=len(product_ids),
+        updated_count=0,
+        skipped_count=0,
+        error_count=0,
+        error_message=None,
+        started_at=datetime.utcnow(),
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
 
-    return {
-        "id": 0,
-        "run_type": "manual",
-        "total_products": len(product_ids),
-        "updated_count": 0,
-        "skipped_count": 0,
-        "error_count": 0,
-        "status": "queued",
-        "started_at": None,
-        "completed_at": None,
-    }
+    from app.tasks.repricer_task import run_repricer_for_user
+    run_repricer_for_user.delay(
+        current_user.id,
+        product_ids,
+        "manual",
+        run.id,
+        body.dry_run,
+    )
+
+    return RepricerRunResponse.model_validate(run)
 
 
 @router.post("/run-sync", response_model=RepricerRunResponse)
+@limiter.limit("5/minute")
 async def manual_run_sync(
-    request: ManualRunRequest,
+    request: Request,
+    body: ManualRunRequest,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Ручной СИНХРОННЫЙ запуск репрайсера"""
-    product_ids = _user_product_ids(db, current_user.id, request.seller_skus or None)
+    product_ids = _user_product_ids(db, current_user.id, body.seller_skus or None)
 
     if not product_ids:
         raise HTTPException(status_code=404, detail="No products found")
 
-    engine = RepricerEngine(db)
-    run = await engine.run_repricer(product_ids=product_ids, run_type="manual")
+    engine = RepricerEngine(db, user_id=current_user.id)
+    run = await engine.run_repricer(
+        product_ids=product_ids,
+        run_type="manual",
+        dry_run=body.dry_run,
+    )
 
     changes = db.query(PriceChange).filter(PriceChange.run_id == run.id).all()
     response = RepricerRunResponse.model_validate(run)
@@ -105,13 +131,15 @@ async def manual_run_sync(
 
 
 @router.post("/fetch-prices")
+@limiter.limit("10/minute")
 async def fetch_prices(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Получить текущие цены с WB и сохранить снимки (без изменения цен)."""
     product_ids = _user_product_ids(db, current_user.id)
-    engine = RepricerEngine(db)
+    engine = RepricerEngine(db, user_id=current_user.id)
     result = await engine.fetch_price_snapshots(product_ids=product_ids)
     return result
 
@@ -121,10 +149,11 @@ async def list_runs(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
     run_type: Optional[str] = Query(None, regex="^(scheduled|manual)$"),
-    status: Optional[str] = Query(None, regex="^(running|completed|failed)$"),
+    status: Optional[str] = Query(None, regex="^(running|completed|failed|queued)$"),
     limit: int = Query(50, ge=1, le=100),
 ):
-    query = db.query(RepricerRun)
+    # Фильтруем по user_id — каждый видит только свои прогоны
+    query = db.query(RepricerRun).filter(RepricerRun.user_id == current_user.id)
     if run_type:
         query = query.filter(RepricerRun.run_type == run_type)
     if status:
@@ -145,7 +174,11 @@ async def get_run(
     current_user: Annotated[User, Depends(get_current_user)],
     include_changes: bool = Query(False),
 ):
-    run = db.query(RepricerRun).filter(RepricerRun.id == run_id).first()
+    # IDOR fix: прогон должен принадлежать текущему пользователю
+    run = db.query(RepricerRun).filter(
+        RepricerRun.id == run_id,
+        RepricerRun.user_id == current_user.id,
+    ).first()
     if not run:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 

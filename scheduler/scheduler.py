@@ -147,6 +147,19 @@ async def health_check_proxies():
         logger.error(f"Ошибка в health_check_proxies: {e}", exc_info=True)
 
 
+async def catalog_sync_job():
+    """Раз в неделю: синхронизирует каталог карточек WB для всех аккаунтов."""
+    logger.info("=" * 70)
+    logger.info("Планировщик: еженедельная синхронизация каталога WB")
+    try:
+        from app.tasks.catalog_sync import sync_all_wb_catalogs_task
+        sync_all_wb_catalogs_task.delay()
+        logger.info("Задача sync_all_wb_catalogs_task поставлена в очередь")
+    except Exception as e:
+        logger.error(f"Ошибка при запуске catalog_sync_job: {e}", exc_info=True)
+    logger.info("=" * 70)
+
+
 def setup_scheduler(interval_minutes: int) -> AsyncIOScheduler:
     """Настройка и запуск планировщика"""
     scheduler = AsyncIOScheduler(timezone="UTC")
@@ -169,6 +182,16 @@ def setup_scheduler(interval_minutes: int) -> AsyncIOScheduler:
         replace_existing=True
     )
     logger.info("✓ Задача 'proxy_health_check' зарегистрирована (каждые 30 мин.)")
+
+    scheduler.add_job(
+        catalog_sync_job,
+        trigger=IntervalTrigger(weeks=1),
+        id="catalog_sync_job",
+        name="WB Catalog Sync (weekly)",
+        replace_existing=True,
+        max_instances=1,
+    )
+    logger.info("✓ Задача 'catalog_sync_job' зарегистрирована (раз в неделю)")
 
     return scheduler
 

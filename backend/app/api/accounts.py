@@ -67,6 +67,14 @@ async def create_account(
     db.add(account)
     db.commit()
     db.refresh(account)
+
+    # Фоновая синхронизация каталога WB (все карточки аккаунта)
+    try:
+        from app.tasks.catalog_sync import sync_wb_catalog_task
+        sync_wb_catalog_task.delay(account.id)
+    except Exception:
+        pass  # не блокируем ответ если Celery недоступен
+
     return _build_response(account)
 
 
@@ -96,14 +104,44 @@ async def update_account(
     _check_ownership(account, current_user)
 
     update_data = account_data.model_dump(exclude_unset=True)
+    token_changed = "wb_api_token" in update_data
     for field, value in update_data.items():
         setattr(account, field, value)
-    if "wb_api_token" in update_data:
+    if token_changed:
         account.token_expires_at = get_token_expiration(account.wb_api_token)
 
     db.commit()
     db.refresh(account)
+
+    # При смене токена — перекачиваем каталог с новым ключом
+    if token_changed:
+        try:
+            from app.tasks.catalog_sync import sync_wb_catalog_task
+            sync_wb_catalog_task.delay(account.id)
+        except Exception:
+            pass
+
     return _build_response(account)
+
+
+@router.post("/{account_id}/sync-catalog", status_code=status.HTTP_202_ACCEPTED)
+async def sync_catalog(
+    account_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Запустить синхронизацию каталога WB (все карточки + фото) для аккаунта"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail=f"Account {account_id} not found")
+    _check_ownership(account, current_user)
+
+    try:
+        from app.tasks.catalog_sync import sync_wb_catalog_task
+        sync_wb_catalog_task.delay(account_id)
+        return {"status": "queued", "message": "Синхронизация каталога запущена"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Celery недоступен: {e}")
 
 
 @router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT)

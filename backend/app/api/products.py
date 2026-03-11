@@ -1,7 +1,8 @@
 from typing import Annotated, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
+from slowapi import Limiter
 
 from app.database import get_db
 from app.models import Product, ProductConfig, PriceSnapshot, Account
@@ -15,8 +16,10 @@ from app.schemas.product import (
 from app.api.auth import get_current_user
 from app.api.settings import _get_setting
 from app.services.wb_api import create_wb_client, WBAPIError
+from app.utils import get_real_ip
 
 router = APIRouter()
+limiter = Limiter(key_func=get_real_ip)
 
 
 def _user_product(db: Session, product_id: int, user: User) -> Product:
@@ -68,6 +71,28 @@ async def list_products(
     acquiring_type   = _get_setting(db, "acquiring_type",   "pct", uid)
     acquiring_value  = float(_get_setting(db, "acquiring_value",  "0.0", uid))
 
+    # Batch-загрузка последних снимков цен (fix N+1: 1 запрос вместо N)
+    from sqlalchemy import func as sa_func
+    product_ids_page = [p.id for p in products]
+    last_snapshots: dict = {}
+    if product_ids_page:
+        subq = (
+            db.query(
+                PriceSnapshot.product_id,
+                sa_func.max(PriceSnapshot.snapshot_at).label("max_at")
+            )
+            .filter(PriceSnapshot.product_id.in_(product_ids_page))
+            .group_by(PriceSnapshot.product_id)
+            .subquery()
+        )
+        snap_rows = (
+            db.query(PriceSnapshot)
+            .join(subq, (PriceSnapshot.product_id == subq.c.product_id) &
+                        (PriceSnapshot.snapshot_at == subq.c.max_at))
+            .all()
+        )
+        last_snapshots = {s.product_id: s for s in snap_rows}
+
     response_products = []
     for product in products:
         product_data = {
@@ -90,12 +115,7 @@ async def list_products(
         if product.config:
             product_data['config'] = ProductConfigResponse.model_validate(product.config)
 
-        latest_snapshot = (
-            db.query(PriceSnapshot)
-            .filter(PriceSnapshot.product_id == product.id)
-            .order_by(desc(PriceSnapshot.snapshot_at))
-            .first()
-        )
+        latest_snapshot = last_snapshots.get(product.id)
 
         if latest_snapshot:
             product_data['current_seller_price'] = latest_snapshot.seller_price
@@ -196,7 +216,9 @@ async def create_product(
 
 
 @router.get("/search-wb")
+@limiter.limit("30/minute")
 async def search_wb_product(
+    request: Request,
     account_id: int,
     text: str,
     db: Annotated[Session, Depends(get_db)],

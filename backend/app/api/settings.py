@@ -29,11 +29,11 @@ class SettingsUpdate(BaseModel):
     repricer_interval_minutes: int   = Field(..., ge=1, le=1440)
     wb_wallet_discount_pct: float    = Field(..., ge=0.0, le=10.0)
     commission_type: str             = Field("pct", pattern="^(pct|rub)$")
-    commission_value: float          = Field(0.0, ge=0.0)
+    commission_value: float          = Field(0.0, ge=0.0, le=100.0)
     logistics_type: str              = Field("rub", pattern="^(pct|rub)$")
-    logistics_value: float           = Field(0.0, ge=0.0)
+    logistics_value: float           = Field(0.0, ge=0.0, le=10000.0)
     acquiring_type: str              = Field("pct", pattern="^(pct|rub)$")
-    acquiring_value: float           = Field(0.0, ge=0.0)
+    acquiring_value: float           = Field(0.0, ge=0.0, le=100.0)
     min_margin_pct: float            = Field(0.0, ge=0.0, le=1000.0)
 
 

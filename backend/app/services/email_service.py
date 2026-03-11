@@ -222,3 +222,125 @@ def send_reset_code(to_email: str, code: str) -> bool:
         code=code,
         footer="Код действителен 15 минут. Если вы не запрашивали сброс — проигнорируйте письмо.",
     )
+
+
+def send_change_password_code(to_email: str, code: str) -> bool:
+    """Отправляет код подтверждения смены пароля из раздела настроек."""
+    return _send_code_email(
+        to_email=to_email,
+        subject="Смена пароля — QUASAR-X",
+        title="Подтверждение смены пароля",
+        subtitle="Для смены пароля введите этот код в разделе Настройки:",
+        code=code,
+        footer="Код действителен 15 минут. Если вы не запрашивали смену пароля — проигнорируйте письмо.",
+    )
+
+
+def send_password_changed_notification(to_email: str) -> bool:
+    """
+    Уведомление об успешной смене пароля.
+    Отправляется после каждого успешного изменения пароля — сброс или смена в настройках.
+    Помогает пользователю заметить несанкционированное изменение.
+    """
+    if not settings.SMTP_USER or not settings.SMTP_PASS:
+        logger.info(f"SMTP не настроен, пропускаем уведомление о смене пароля для {to_email}")
+        return False
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = "Пароль изменён — QUASAR-X"
+        msg["From"] = settings.SMTP_FROM or settings.SMTP_USER
+        msg["To"] = to_email
+
+        html = f"""
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#0f0f1a;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center" style="padding:40px 20px;">
+        <table width="560" cellpadding="0" cellspacing="0"
+               style="background:linear-gradient(135deg,#1a1a2e,#16213e);
+                      border-radius:16px;border:1px solid #ff4d4d33;overflow:hidden;">
+          <tr>
+            <td align="center" style="padding:32px 40px 24px;">
+              <div style="font-size:28px;font-weight:900;letter-spacing:2px;color:#00f0ff;">
+                QUASAR-X
+              </div>
+              <div style="color:#6b7280;font-size:12px;letter-spacing:3px;margin-top:4px;">
+                REPRICER
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 40px 32px;">
+              <h1 style="color:#f9fafb;font-size:22px;margin:0 0 16px;">
+                🔐 Пароль был изменён
+              </h1>
+              <p style="color:#9ca3af;font-size:15px;line-height:1.6;margin:0 0 20px;">
+                Пароль от вашего аккаунта <b style="color:#f9fafb;">{to_email}</b>
+                был успешно изменён.
+              </p>
+
+              <table width="100%" cellpadding="0" cellspacing="0"
+                     style="background:#ff4d4d11;border:1px solid #ff4d4d33;
+                            border-radius:12px;margin:0 0 24px;">
+                <tr>
+                  <td style="padding:20px 24px;">
+                    <p style="color:#fca5a5;font-size:14px;font-weight:700;margin:0 0 8px;">
+                      &#9888; Если это были не вы:
+                    </p>
+                    <p style="color:#d1d5db;font-size:14px;margin:0 0 8px;">
+                      1. Немедленно перейдите на сайт и запросите сброс пароля
+                    </p>
+                    <p style="color:#d1d5db;font-size:14px;margin:0 0 8px;">
+                      2. Проверьте WB API-токены в разделе &laquo;Аккаунты&raquo;
+                    </p>
+                    <p style="color:#d1d5db;font-size:14px;margin:0;">
+                      3. Обратитесь в поддержку
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td align="center" style="padding:0 0 24px;">
+                    <a href="{settings.APP_URL}"
+                       style="display:inline-block;
+                              background:linear-gradient(135deg,#00f0ff,#7c3aed);
+                              color:#fff;font-weight:700;font-size:15px;
+                              text-decoration:none;padding:14px 40px;
+                              border-radius:10px;letter-spacing:0.5px;">
+                      Войти в аккаунт &rarr;
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="color:#4b5563;font-size:12px;text-align:center;margin:0;">
+                Если вы сами изменили пароль &mdash; проигнорируйте это письмо.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+"""
+        msg.attach(MIMEText(html, "html", "utf-8"))
+
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, context=context) as server:
+            server.login(settings.SMTP_USER, settings.SMTP_PASS)
+            server.sendmail(msg["From"], to_email, msg.as_string())
+
+        logger.info(f"Уведомление о смене пароля отправлено на {to_email}")
+        return True
+
+    except Exception as e:
+        logger.warning(f"Не удалось отправить уведомление о смене пароля на {to_email}: {e}")
+        return False

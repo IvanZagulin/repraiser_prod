@@ -33,7 +33,7 @@ services:
       - wb_network
     volumes:
       - redis_data:/data
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: redis-server --requirepass ${REDIS_PASSWORD} --maxmemory 256mb --maxmemory-policy volatile-lru
 
   backend:
     build:
@@ -42,7 +42,7 @@ services:
     container_name: wb_repricer_backend_prod
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-wb_repricer}
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       JWT_SECRET: ${JWT_SECRET}
       JWT_ALGORITHM: HS256
       JWT_EXPIRE_HOURS: 24
@@ -57,6 +57,7 @@ services:
       SMTP_PASS: ${SMTP_PASS}
       SMTP_FROM: ${SMTP_FROM}
       APP_URL: ${APP_URL:-https://qvaz.quasar-x.ru}
+      FERNET_KEY: ${FERNET_KEY}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -74,7 +75,7 @@ services:
     container_name: wb_repricer_celery
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-wb_repricer}
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       JWT_SECRET: ${JWT_SECRET}
       JWT_ALGORITHM: HS256
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
@@ -88,6 +89,7 @@ services:
       SMTP_PASS: ${SMTP_PASS}
       SMTP_FROM: ${SMTP_FROM}
       APP_URL: ${APP_URL:-https://qvaz.quasar-x.ru}
+      FERNET_KEY: ${FERNET_KEY}
     depends_on:
       - db
       - redis
@@ -103,7 +105,7 @@ services:
     container_name: wb_repricer_scheduler_prod
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-wb_repricer}
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       BACKEND_URL: http://backend:8000
       JWT_SECRET: ${JWT_SECRET}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
@@ -125,7 +127,7 @@ services:
       dockerfile: Dockerfile
     container_name: wb_repricer_flower
     environment:
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-wb_repricer}
       JWT_SECRET: ${JWT_SECRET}
       JWT_ALGORITHM: HS256

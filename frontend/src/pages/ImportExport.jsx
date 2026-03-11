@@ -69,6 +69,11 @@ function ImportResult({ result }) {
           ))}
         </div>
       )}
+      {result.message && (
+        <div className="mt-2 pt-2 border-t border-current border-opacity-20 text-xs italic opacity-80">
+          ℹ️ {result.message}
+        </div>
+      )}
     </div>
   );
 }
@@ -177,6 +182,14 @@ export default function ImportExport() {
   };
 
   /* ── import ── */
+  const parseImportError = (err) => {
+    const detail = err.response?.data?.detail;
+    if (Array.isArray(detail)) {
+      return detail.map(d => (typeof d === 'string' ? d : d.msg || JSON.stringify(d))).join('; ');
+    }
+    return typeof detail === 'string' ? detail : 'Ошибка импорта';
+  };
+
   const handleProductsImport = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -188,7 +201,9 @@ export default function ImportExport() {
       toast.success(`Создано ${res.data.created} товаров`);
       if (res.data.errors?.length) toast.error(`Ошибок: ${res.data.errors.length}`);
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Ошибка импорта');
+      const msg = parseImportError(err);
+      toast.error(msg);
+      setImportResultProd({ errors: [msg] });
     } finally {
       setUploadingProducts(false);
       e.target.value = '';
@@ -206,7 +221,9 @@ export default function ImportExport() {
       toast.success(`Обновлено ${res.data.updated}, создано ${res.data.created}`);
       if (res.data.errors?.length) toast.error(`Ошибок: ${res.data.errors.length}`);
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Ошибка импорта');
+      const msg = parseImportError(err);
+      toast.error(msg);
+      setImportResultStrat({ errors: [msg] });
     } finally {
       setUploadingStrategy(false);
       e.target.value = '';
@@ -224,7 +241,9 @@ export default function ImportExport() {
       toast.success(`Себестоимость обновлена: ${res.data.updated} товаров`);
       if (res.data.errors?.length) toast.error(`Ошибок: ${res.data.errors.length}`);
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Ошибка импорта');
+      const msg = parseImportError(err);
+      toast.error(msg);
+      setImportResultCosts({ errors: [msg] });
     } finally {
       setUploadingCosts(false);
       e.target.value = '';

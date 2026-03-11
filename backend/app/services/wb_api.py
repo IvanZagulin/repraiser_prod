@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from decimal import Decimal
 import httpx
 from app.config import settings
@@ -63,8 +63,7 @@ class WBAPIClient:
         """
         self.base_url = settings.WB_API_BASE_URL
         self.api_token = api_token
-        self.session: Optional[httpx.AsyncClient] = None
-    
+
     def _get_headers(self) -> dict:
         """Формирование заголовков для запросов"""
         return {
@@ -72,22 +71,6 @@ class WBAPIClient:
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         }
-    
-    async def _init_session(self):
-        """Инициализация HTTP сессии"""
-        if self.session is None:
-            self.session = httpx.AsyncClient(
-                base_url=self.base_url,
-                headers=self._get_headers(),
-                timeout=30.0,
-                follow_redirects=True
-            )
-    
-    async def _close_session(self):
-        """Закрытие HTTP сессии"""
-        if self.session:
-            await self.session.aclose()
-            self.session = None
     
     async def _make_request(
         self,
@@ -99,8 +82,10 @@ class WBAPIClient:
         max_retries: int = 3
     ) -> dict:
         """
-        Выполнение HTTP запроса с обработкой ошибок
-        
+        Выполнение HTTP запроса с обработкой ошибок.
+        Сессия создаётся и гарантированно закрывается внутри каждого вызова
+        (fix: TCP socket leak — persistent self.session мог не закрываться).
+
         Args:
             method: HTTP метод (GET, POST, etc)
             endpoint: Endpoint API
@@ -108,58 +93,62 @@ class WBAPIClient:
             params: Query параметры
             retry_on_429: Повторять ли при 429 ошибке
             max_retries: Максимум попыток при 429
-            
+
         Returns:
             JSON ответ
-            
+
         Raises:
             WBAPIError: При ошибках API
             RateLimitError: При превышении лимита
         """
-        await self._init_session()
-        
         retry_count = 0
         backoff_delay = 5  # Начальная задержка при 429
-        
-        while retry_count <= max_retries:
-            try:
-                response = await self.session.request(
-                    method=method,
-                    url=endpoint,
-                    json=json_data,
-                    params=params
-                )
-                
-                # Обработка кодов ответа
-                if response.status_code == 200:
-                    return response.json()
-                
-                elif response.status_code == 429:
-                    # Rate limit exceeded
-                    if not retry_on_429 or retry_count >= max_retries:
-                        raise RateLimitError(f"Rate limit exceeded (429) после {retry_count} попыток")
-                    
-                    logger.warning(f"Rate limit (429), ждем {backoff_delay}s перед retry {retry_count + 1}/{max_retries}")
-                    await asyncio.sleep(backoff_delay)
-                    backoff_delay *= 2  # Exponential backoff
-                    retry_count += 1
-                    continue
-                
-                elif response.status_code == 401:
-                    raise WBAPIError("Unauthorized (401) - неверный или истекший токен")
-                
-                elif response.status_code == 400:
-                    error_msg = response.text
-                    raise WBAPIError(f"Bad Request (400): {error_msg}")
-                
-                else:
-                    raise WBAPIError(f"API вернул код {response.status_code}: {response.text}")
-                    
-            except httpx.TimeoutException:
-                raise WBAPIError("Timeout при запросе к WB API")
-            except httpx.RequestError as e:
-                raise WBAPIError(f"Ошибка соединения с WB API: {e}")
-        
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=30.0,
+            follow_redirects=True,
+        ) as client:
+            while retry_count <= max_retries:
+                try:
+                    response = await client.request(
+                        method=method,
+                        url=endpoint,
+                        json=json_data,
+                        params=params
+                    )
+
+                    # Обработка кодов ответа
+                    if response.status_code == 200:
+                        return response.json()
+
+                    elif response.status_code == 429:
+                        # Rate limit exceeded
+                        if not retry_on_429 or retry_count >= max_retries:
+                            raise RateLimitError(f"Rate limit exceeded (429) после {retry_count} попыток")
+
+                        logger.warning(f"Rate limit (429), ждем {backoff_delay}s перед retry {retry_count + 1}/{max_retries}")
+                        await asyncio.sleep(backoff_delay)
+                        backoff_delay *= 2  # Exponential backoff
+                        retry_count += 1
+                        continue
+
+                    elif response.status_code == 401:
+                        raise WBAPIError("Unauthorized (401) - неверный или истекший токен")
+
+                    elif response.status_code == 400:
+                        error_msg = response.text
+                        raise WBAPIError(f"Bad Request (400): {error_msg}")
+
+                    else:
+                        raise WBAPIError(f"API вернул код {response.status_code}: {response.text}")
+
+                except httpx.TimeoutException:
+                    raise WBAPIError("Timeout при запросе к WB API")
+                except httpx.RequestError as e:
+                    raise WBAPIError(f"Ошибка соединения с WB API: {e}")
+
         # Если вышли из цикла - значит превысили лимит попыток
         raise RateLimitError(f"Rate limit (429) после {max_retries} попыток")
     
@@ -310,57 +299,77 @@ class WBAPIClient:
         logger.error(f"✗ Цена не применилась после {max_attempts} попыток")
         return False
     
-    async def get_card_info(self, nm_id: int) -> dict:
+    async def get_card_info(self, nm_id: int, max_retries: int = 5) -> dict:
         """
         Получение информации о карточке товара из WB Content API по nmID.
 
         Возвращает словарь {seller_sku, name, image_url} или {} если не найдено.
+        Автоматически повторяет запрос при 429 с экспоненциальной задержкой.
         """
-        try:
-            content_api_url = "https://content-api.wildberries.ru"
-            payload = {
-                "settings": {
-                    "sort": {"ascending": False},
-                    "filter": {
-                        "textSearch": str(nm_id),
-                        "withPhoto": -1
-                    },
-                    "cursor": {"limit": 10}
-                }
+        content_api_url = "https://content-api.wildberries.ru"
+        payload = {
+            "settings": {
+                "sort": {"ascending": False},
+                "filter": {
+                    "textSearch": str(nm_id),
+                    "withPhoto": -1
+                },
+                "cursor": {"limit": 10}
             }
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.post(
-                    f"{content_api_url}/content/v2/get/cards/list",
-                    json=payload,
-                    headers=self._get_headers()
-                )
+        }
+        retry_delays = [5, 15, 30, 60, 120]
+
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    response = await client.post(
+                        f"{content_api_url}/content/v2/get/cards/list",
+                        json=payload,
+                        headers=self._get_headers()
+                    )
+
+                if response.status_code == 429:
+                    delay = retry_delays[min(attempt, len(retry_delays) - 1)]
+                    logger.warning(
+                        f"get_card_info: 429 для nm_id={nm_id} "
+                        f"(попытка {attempt + 1}/{max_retries}), ждём {delay}s..."
+                    )
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(delay)
+                        continue
+                    return {}
+
                 if response.status_code != 200:
                     logger.warning(f"Content API вернул {response.status_code} для nm_id={nm_id}")
                     return {}
 
                 cards = response.json().get("cards", [])
+                for card in cards:
+                    if card.get("nmID") == nm_id:
+                        photos = card.get("photos", [])
+                        image_url = None
+                        if photos:
+                            photo = photos[0]
+                            image_url = photo.get("c246x328") or photo.get("big")
+                        info = {
+                            "seller_sku": card.get("vendorCode", ""),
+                            "name":       card.get("title", ""),
+                            "image_url":  image_url,
+                        }
+                        logger.info(f"✓ Информация о карточке получена для nm_id={nm_id}: {info['name']!r}")
+                        return info
 
-            for card in cards:
-                if card.get("nmID") == nm_id:
-                    photos = card.get("photos", [])
-                    image_url = None
-                    if photos:
-                        photo = photos[0]
-                        image_url = photo.get("c246x328") or photo.get("big")
-                    info = {
-                        "seller_sku": card.get("vendorCode", ""),
-                        "name":       card.get("title", ""),
-                        "image_url":  image_url,
-                    }
-                    logger.info(f"✓ Информация о карточке получена для nm_id={nm_id}: {info['name']!r}")
-                    return info
+                logger.warning(f"Карточка не найдена для nm_id={nm_id} (карточек в ответе: {len(cards)})")
+                return {}
 
-            logger.warning(f"Карточка не найдена для nm_id={nm_id} (карточек в ответе: {len(cards)})")
-            return {}
+            except Exception as e:
+                logger.error(f"Ошибка получения информации о карточке nm_id={nm_id}: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delays[min(attempt, len(retry_delays) - 1)])
+                    continue
+                return {}
 
-        except Exception as e:
-            logger.error(f"Ошибка получения информации о карточке nm_id={nm_id}: {e}")
-            return {}
+        return {}
 
     async def get_card_info_by_sku(self, seller_sku: str) -> dict:
         """
@@ -423,6 +432,163 @@ class WBAPIClient:
         info = await self.get_card_info(nm_id)
         return info.get("image_url")
 
+    async def get_cards_batch(
+        self,
+        nm_ids: List[int],
+        concurrency: int = 10
+    ) -> Dict[int, dict]:
+        """
+        Batch-получение информации о карточках по списку nmID.
+        Запросы выполняются параллельно с ограничением concurrency.
+
+        Returns:
+            Словарь {nm_id: {seller_sku, name, image_url}}
+        """
+        if not nm_ids:
+            return {}
+
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def fetch_one(nm_id: int) -> Tuple[int, dict]:
+            async with semaphore:
+                info = await self.get_card_info(nm_id)
+                return nm_id, info
+
+        results_raw = await asyncio.gather(
+            *[fetch_one(nm_id) for nm_id in nm_ids],
+            return_exceptions=True
+        )
+
+        result: Dict[int, dict] = {}
+        for item in results_raw:
+            if isinstance(item, Exception):
+                logger.warning(f"Ошибка в batch-запросе карточки: {item}")
+                continue
+            nm_id, info = item
+            if info:
+                result[nm_id] = info
+
+        logger.info(f"get_cards_batch: запрошено {len(nm_ids)}, получено {len(result)}")
+        return result
+
+    async def get_all_cards(self, page_limit: int = 100) -> Dict[str, dict]:
+        """
+        Загружает ВСЕ карточки аккаунта через cursor-пагинацию.
+        Вместо N отдельных запросов (по одному на артикул) делает 2-5 запросов.
+
+        Returns:
+            Словарь {vendorCode: {nm_id, seller_sku, name, image_url}}
+        """
+        content_api_url = "https://content-api.wildberries.ru"
+        all_cards: Dict[str, dict] = {}
+        cursor: dict = {"limit": page_limit}
+
+        max_page_retries = 5
+        retry_delays = [2, 5, 10, 20, 30]  # секунды перед каждой попыткой
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            while True:
+                payload = {
+                    "settings": {
+                        "sort": {"ascending": True},
+                        "filter": {"withPhoto": -1},
+                        "cursor": cursor,
+                    }
+                }
+
+                # Retry-цикл для текущей страницы
+                page_data = None
+                for attempt in range(max_page_retries):
+                    try:
+                        response = await client.post(
+                            f"{content_api_url}/content/v2/get/cards/list",
+                            json=payload,
+                            headers=self._get_headers(),
+                        )
+                    except Exception as e:
+                        logger.error(f"get_all_cards: ошибка запроса (попытка {attempt+1}): {e}")
+                        if attempt < max_page_retries - 1:
+                            await asyncio.sleep(retry_delays[attempt])
+                            continue
+                        break
+
+                    if response.status_code == 200:
+                        page_data = response.json()
+                        break
+                    elif response.status_code in (500, 502, 503, 504):
+                        logger.warning(
+                            f"get_all_cards: Content API вернул {response.status_code} "
+                            f"(попытка {attempt+1}/{max_page_retries}), повтор через {retry_delays[attempt]}s..."
+                        )
+                        if attempt < max_page_retries - 1:
+                            await asyncio.sleep(retry_delays[attempt])
+                            continue
+                        logger.error(f"get_all_cards: страница не загружена после {max_page_retries} попыток, прерываем")
+                        break
+                    else:
+                        logger.warning(f"get_all_cards: Content API вернул {response.status_code}")
+                        break
+
+                if page_data is None:
+                    break  # не удалось получить страницу — завершаем
+
+                cards = page_data.get("cards", [])
+
+                for card in cards:
+                    vendor_code = card.get("vendorCode")
+                    if not vendor_code:
+                        continue
+                    photos = card.get("photos", [])
+                    image_url = None
+                    if photos:
+                        image_url = photos[0].get("c246x328") or photos[0].get("big")
+                    all_cards[vendor_code] = {
+                        "nm_id":      card.get("nmID"),
+                        "seller_sku": vendor_code,
+                        "name":       card.get("title", ""),
+                        "image_url":  image_url,
+                    }
+
+                resp_cursor = page_data.get("cursor", {})
+                total = resp_cursor.get("total", 0)
+                logger.info(f"get_all_cards: страница {len(all_cards)} карточек, total={total}")
+
+                if total < page_limit:
+                    break  # последняя страница
+
+                cursor = {
+                    "limit":     page_limit,
+                    "updatedAt": resp_cursor.get("updatedAt"),
+                    "nmID":      resp_cursor.get("nmID"),
+                }
+
+        logger.info(f"get_all_cards: итого загружено {len(all_cards)} карточек")
+        return all_cards
+
+    async def get_cards_batch_by_skus(
+        self,
+        seller_skus: List[str],
+        concurrency: int = 10
+    ) -> Dict[str, dict]:
+        """
+        Batch-получение информации о карточках по списку артикулов продавца.
+        Загружает ВСЕ карточки аккаунта одним пагинированным запросом,
+        затем фильтрует нужные — без рейт-лимитов.
+
+        Returns:
+            Словарь {seller_sku: {nm_id, seller_sku, name, image_url}}
+        """
+        if not seller_skus:
+            return {}
+
+        all_cards = await self.get_all_cards()
+
+        skus_set = set(seller_skus)
+        result = {sku: info for sku, info in all_cards.items() if sku in skus_set}
+
+        logger.info(f"get_cards_batch_by_skus: запрошено {len(seller_skus)}, найдено {len(result)}")
+        return result
+
     async def search_cards(self, text_search: str, limit: int = 100) -> List[dict]:
         """
         Поиск карточек товаров по nmID или артикулу продавца через Content API
@@ -460,13 +626,12 @@ class WBAPIClient:
             raise WBAPIError(f"Ошибка соединения с WB Content API: {e}")
 
     async def __aenter__(self):
-        """Context manager support"""
-        await self._init_session()
+        """Context manager support (no-op: сессии управляются per-request)."""
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Context manager support"""
-        await self._close_session()
+        """Context manager support (no-op: сессии управляются per-request)."""
+        pass
 
 
 def create_wb_client(api_token: str) -> WBAPIClient:

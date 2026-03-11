@@ -82,41 +82,37 @@ export default function Dashboard() {
       title: 'Аккаунты',
       value: stats.totalAccounts,
       icon: Users,
-      numColor: '#6d28d9',
-      iconColor: '#7c3aed',
-      iconBg: 'linear-gradient(135deg, #ede9fe 0%, #e0e7ff 100%)',
-      borderColor: '#ddd6fe',
-      cardAccent: 'rgba(124,58,237,0.06)',
+      accent: '#6366f1',
+      numColor: '#4338ca',
+      iconColor: '#6366f1',
+      iconBg: '#eef2ff',
     },
     {
       title: 'Всего товаров',
       value: stats.totalProducts,
       icon: Package,
+      accent: '#3b82f6',
       numColor: '#1d4ed8',
-      iconColor: '#2563eb',
-      iconBg: 'linear-gradient(135deg, #dbeafe 0%, #e0e7ff 100%)',
-      borderColor: '#bfdbfe',
-      cardAccent: 'rgba(37,99,235,0.06)',
+      iconColor: '#3b82f6',
+      iconBg: '#eff6ff',
     },
     {
       title: 'Активных',
       value: stats.activeProducts,
       icon: TrendingUp,
+      accent: '#22c55e',
       numColor: '#15803d',
       iconColor: '#16a34a',
-      iconBg: 'linear-gradient(135deg, #dcfce7 0%, #d1fae5 100%)',
-      borderColor: '#bbf7d0',
-      cardAccent: 'rgba(22,163,74,0.06)',
+      iconBg: '#f0fdf4',
     },
     {
       title: 'Неактивных',
       value: stats.inactiveProducts,
       icon: PlayCircle,
+      accent: '#f59e0b',
       numColor: '#b45309',
       iconColor: '#d97706',
-      iconBg: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
-      borderColor: '#fde68a',
-      cardAccent: 'rgba(217,119,6,0.06)',
+      iconBg: '#fffbeb',
     },
   ];
 
@@ -135,15 +131,7 @@ export default function Dashboard() {
       {/* ─── HEADER ─── */}
       <div className="flex items-start justify-between">
         <div>
-          <h1
-            className="text-2xl font-bold"
-            style={{
-              background: 'linear-gradient(135deg, #1e1b4b 0%, #7c3aed 100%)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              backgroundClip: 'text',
-            }}
-          >
+          <h1 className="text-2xl font-bold page-h1">
             Главная
           </h1>
           <p className="text-sm mt-1.5 flex items-center gap-1.5" style={{ color: 'var(--text-3)' }}>
@@ -177,16 +165,13 @@ export default function Dashboard() {
           <div
             key={idx}
             className="stat-card"
-            style={{
-              borderColor: stat.borderColor,
-              '--card-accent-bg': stat.cardAccent,
-            }}
+            style={{ borderLeft: `4px solid ${stat.accent}` }}
           >
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between mb-3">
               <p className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: '#9ca3af' }}>
                 {stat.title}
               </p>
-              <div className="icon-box" style={{ background: stat.iconBg }}>
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: stat.iconBg }}>
                 <stat.icon className="w-4 h-4" style={{ color: stat.iconColor }} />
               </div>
             </div>
@@ -201,8 +186,8 @@ export default function Dashboard() {
       {runsChartData.length > 1 && (
         <div className="card">
           <div className="flex items-center gap-2.5 mb-5">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: '#ede9fe' }}>
-              <BarChart2 className="w-3.5 h-3.5" style={{ color: '#7c3aed' }} />
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: '#eef2ff' }}>
+              <BarChart2 className="w-3.5 h-3.5" style={{ color: '#6366f1' }} />
             </div>
             <h2 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
               Активность прогонов
@@ -215,8 +200,8 @@ export default function Dashboard() {
             <AreaChart data={runsChartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id="gradTotal" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.15} />
-                  <stop offset="95%" stopColor="#7c3aed" stopOpacity={0} />
+                  <stop offset="5%" stopColor="#6366f1" stopOpacity={0.15} />
+                  <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
                 </linearGradient>
                 <linearGradient id="gradUpdated" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#16a34a" stopOpacity={0.2} />
@@ -253,7 +238,7 @@ export default function Dashboard() {
               <Area
                 type="monotone"
                 dataKey="total"
-                stroke="#7c3aed"
+                stroke="#6366f1"
                 strokeWidth={1.5}
                 fill="url(#gradTotal)"
                 dot={false}
@@ -280,9 +265,9 @@ export default function Dashboard() {
           <div className="flex items-center gap-2.5">
             <div
               className="w-7 h-7 rounded-lg flex items-center justify-center"
-              style={{ background: '#ede9fe' }}
+              style={{ background: '#eef2ff' }}
             >
-              <PlayCircle className="w-3.5 h-3.5" style={{ color: '#7c3aed' }} />
+              <PlayCircle className="w-3.5 h-3.5" style={{ color: '#6366f1' }} />
             </div>
             <h2 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
               Последние прогоны

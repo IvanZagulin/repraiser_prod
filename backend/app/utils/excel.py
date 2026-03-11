@@ -10,6 +10,15 @@ from openpyxl.comments import Comment
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_str(value: Any) -> Any:
+    """Экранирует строки, начинающиеся с символов формул Excel (=, +, -, @).
+    Предотвращает CSV/Excel-инъекции при открытии файла."""
+    if isinstance(value, str) and value and value[0] in ('=', '+', '-', '@', '\t', '\r'):
+        return "'" + value
+    return value
+
+
 # Цвета бренда
 COLOR_HEADER   = "4C1D95"   # фиолетовый
 COLOR_HEADER2  = "1E3A5F"   # синий (для второго листа)
@@ -306,10 +315,10 @@ class ExcelExporter:
                 status = "Отключен"
 
             row = [
-                p.get("seller_sku", ""),
-                p.get("name", ""),
+                _safe_str(p.get("seller_sku", "")),
+                _safe_str(p.get("name", "")),
                 p.get("nm_id", ""),
-                p.get("account_name", ""),
+                _safe_str(p.get("account_name", "")),
                 status,
                 STRATEGY_LABELS.get(cfg.get("strategy", ""), ""),
                 float(cfg["min_price"])           if cfg.get("min_price")           else "",
@@ -368,8 +377,8 @@ class ExcelExporter:
 
         for item in history_data:
             ws.append([
-                item.get("seller_sku", ""),
-                item.get("product_name", ""),
+                _safe_str(item.get("seller_sku", "")),
+                _safe_str(item.get("product_name", "")),
                 item.get("nm_id", ""),
                 float(item.get("seller_price", 0)),
                 float(item.get("final_price", 0)),
@@ -424,8 +433,8 @@ class ExcelExporter:
 
         for change in changes:
             ws_changes.append([
-                change.get("seller_sku", ""),
-                change.get("product_name", ""),
+                _safe_str(change.get("seller_sku", "")),
+                _safe_str(change.get("product_name", "")),
                 float(change.get("old_seller_price", 0)),
                 float(change.get("new_seller_price", 0)) if change.get("new_seller_price") else "",
                 float(change.get("old_final_price", 0)),

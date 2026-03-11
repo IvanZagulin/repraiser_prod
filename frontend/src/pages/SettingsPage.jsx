@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Clock, Save, Wallet, TrendingUp } from 'lucide-react';
+import { Clock, Save, Wallet, TrendingUp, User, KeyRound, Eye, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { getSettings, updateSettings } from '../api/client';
+import { getSettings, updateSettings, changePasswordSendCode, changePasswordConfirm } from '../api/client';
+import { useAuthStore } from '../store';
 
 const INTERVAL_OPTIONS = [
   { value: 1,    label: '1 минута (тест)' },
@@ -44,7 +45,188 @@ function FeeRow({ label, type, value, onTypeChange, onValueChange }) {
   );
 }
 
+// ─── Блок смены пароля ────────────────────────────────────────────────────────
+function ChangePasswordBlock({ userEmail }) {
+  // step: 'idle' | 'code_sent' | 'done'
+  const [step, setStep] = useState('idle');
+  const [sending, setSending] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [code, setCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [showPass, setShowPass] = useState(false);
+
+  const handleSendCode = async () => {
+    setSending(true);
+    try {
+      await changePasswordSendCode();
+      setStep('code_sent');
+      toast.success('Код отправлен на ' + userEmail);
+    } catch (err) {
+      const detail = err.response?.data?.detail;
+      toast.error(typeof detail === 'string' ? detail : 'Ошибка отправки кода');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleConfirm = async () => {
+    if (!code || code.length !== 6) {
+      toast.error('Введите 6-значный код из письма');
+      return;
+    }
+    if (!newPassword || newPassword.length < 8) {
+      toast.error('Пароль должен быть не менее 8 символов');
+      return;
+    }
+    setConfirming(true);
+    try {
+      await changePasswordConfirm(code, newPassword);
+      setStep('done');
+      toast.success('Пароль успешно изменён!');
+    } catch (err) {
+      const detail = err.response?.data?.detail;
+      toast.error(typeof detail === 'string' ? detail : 'Ошибка подтверждения');
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  const handleReset = () => {
+    setStep('idle');
+    setCode('');
+    setNewPassword('');
+    setShowPass(false);
+  };
+
+  return (
+    <div className="card mb-6">
+      <div className="flex items-center space-x-3 mb-5">
+        <div className="bg-violet-50 p-2 rounded-lg">
+          <User className="w-5 h-5 text-violet-600" />
+        </div>
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900">Профиль</h2>
+          <p className="text-sm text-gray-500">Данные вашего аккаунта</p>
+        </div>
+      </div>
+
+      {/* Email */}
+      <div className="mb-5">
+        <label className="block text-sm font-medium text-gray-500 mb-1">Почта</label>
+        <div
+          className="px-3 py-2 rounded-lg text-sm font-medium text-gray-800"
+          style={{ background: '#f3f4f6', border: '1px solid #e5e7eb' }}
+        >
+          {userEmail}
+        </div>
+      </div>
+
+      {/* Separator */}
+      <div className="border-t border-gray-100 mb-5" />
+
+      {/* Смена пароля */}
+      <div className="flex items-center space-x-2 mb-4">
+        <KeyRound className="w-4 h-4 text-gray-400" />
+        <span className="text-sm font-medium text-gray-700">Смена пароля</span>
+      </div>
+
+      {step === 'idle' && (
+        <div>
+          <p className="text-sm text-gray-500 mb-3">
+            На вашу почту будет отправлен 6-значный код подтверждения.
+          </p>
+          <button
+            onClick={handleSendCode}
+            disabled={sending}
+            className="btn btn-primary text-sm"
+            style={{ minWidth: 200 }}
+          >
+            {sending ? 'Отправка...' : 'Получить код на почту'}
+          </button>
+        </div>
+      )}
+
+      {step === 'code_sent' && (
+        <div className="space-y-3">
+          <p className="text-sm text-gray-500">
+            Код отправлен на <b>{userEmail}</b>. Введите его и новый пароль:
+          </p>
+
+          {/* Код */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Код из письма</label>
+            <input
+              type="text"
+              maxLength={6}
+              value={code}
+              onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              placeholder="123456"
+              className="input w-full font-mono tracking-widest text-center text-lg"
+              style={{ maxWidth: 160 }}
+            />
+          </div>
+
+          {/* Новый пароль */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Новый пароль</label>
+            <div className="relative" style={{ maxWidth: 300 }}>
+              <input
+                type={showPass ? 'text' : 'password'}
+                value={newPassword}
+                onChange={e => setNewPassword(e.target.value)}
+                placeholder="Минимум 6 символов"
+                className="input w-full pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPass(v => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                {showPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 pt-1">
+            <button
+              onClick={handleConfirm}
+              disabled={confirming}
+              className="btn btn-primary text-sm"
+              style={{ minWidth: 180 }}
+            >
+              {confirming ? 'Проверка...' : 'Сменить пароль'}
+            </button>
+            <button
+              onClick={handleSendCode}
+              disabled={sending}
+              className="text-sm text-gray-400 hover:text-gray-600 underline"
+            >
+              {sending ? 'Отправка...' : 'Отправить код снова'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step === 'done' && (
+        <div className="flex items-center gap-3">
+          <div
+            className="text-sm font-medium px-4 py-2 rounded-lg"
+            style={{ background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0' }}
+          >
+            ✅ Пароль успешно изменён
+          </div>
+          <button onClick={handleReset} className="text-sm text-gray-400 hover:text-gray-600 underline">
+            Сменить ещё раз
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Основная страница настроек ────────────────────────────────────────────────
 export default function SettingsPage() {
+  const { user } = useAuthStore();
   const [interval, setInterval] = useState(60);
   const [walletPct, setWalletPct] = useState(3.0);
   const [commissionType,  setCommissionType]  = useState('pct');
@@ -134,6 +316,9 @@ export default function SettingsPage() {
       </div>
 
       <div className="max-w-4xl">
+
+      {/* Профиль и смена пароля */}
+      <ChangePasswordBlock userEmail={user?.email || ''} />
       <div className="grid gap-6 items-start" style={{ gridTemplateColumns: '1fr 1.4fr' }}>
 
         {/* Левая колонка: Интервал + Кошелёк */}

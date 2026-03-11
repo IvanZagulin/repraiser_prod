@@ -587,11 +587,9 @@ class RepricerEngine:
                 logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": _reason, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
                 return _reason
         
-        # Загружаем скидку кошелька из глобальных настроек
-        wallet_row = self.db.query(AppSetting).filter(
-            AppSetting.key == "wb_wallet_discount_pct"
-        ).first()
-        wallet_pct = Decimal(str(wallet_row.value)) if wallet_row else Decimal(0)
+        # Загружаем скидку кошелька (per-user, с fallback на глобальную — Fix 7)
+        from app.api.settings import _get_setting as _gs
+        wallet_pct = Decimal(_gs(self.db, "wb_wallet_discount_pct", "0", self.user_id))
 
         # Выполняем стратегию
         if config.strategy == 'rrp':
@@ -717,6 +715,7 @@ class RepricerEngine:
         product_ids: Optional[List[int]] = None,
         run_type: str = "scheduled",
         dry_run: bool = False,
+        existing_run_id: Optional[int] = None,
     ) -> RepricerRun:
         """
         Запуск репрайсера
@@ -732,14 +731,24 @@ class RepricerEngine:
         _run_start = time.monotonic()
         logger.info(f"Запуск репрайсера (тип: {run_type}, dry_run={dry_run})")
 
-        # Создаем запись о прогоне
-        run = RepricerRun(
-            run_type=run_type,
-            status="running",
-            started_at=datetime.utcnow()
-        )
-        self.db.add(run)
-        self.db.commit()
+        # Используем существующую запись (из API) или создаём новую (Fix 6)
+        if existing_run_id:
+            run = self.db.query(RepricerRun).filter(RepricerRun.id == existing_run_id).first()
+            if run:
+                run.status = "running"
+                self.db.commit()
+            else:
+                existing_run_id = None
+
+        if not existing_run_id:
+            run = RepricerRun(
+                user_id=self.user_id,
+                run_type=run_type,
+                status="running",
+                started_at=datetime.utcnow()
+            )
+            self.db.add(run)
+            self.db.commit()
 
         try:
             # Получаем товары для обработки
@@ -771,7 +780,7 @@ class RepricerEngine:
                 try:
                     reason_code = await self.process_product(product, run, dry_run=dry_run)
 
-                    if reason_code in ['UPDATED', 'CLAMPED_TO_MIN', 'CLAMPED_TO_MAX']:
+                    if reason_code in ['UPDATED', 'CLAMPED_TO_MIN', 'CLAMPED_TO_MAX', 'CLAMPED_TO_MARGIN']:
                         results['updated'] += 1
                     elif reason_code in ['SKIPPED_PROMO', 'SKIPPED_INACTIVE', 'NO_CHANGE', 'COMPETITOR_OOS']:
                         results['skipped'] += 1

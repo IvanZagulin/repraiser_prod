@@ -53,9 +53,14 @@ def get_or_create_test_account(client: httpx.Client, base_url: str) -> int:
             console.print(f"[cyan]↩ Использую существующий тестовый аккаунт id={acc['id']}[/cyan]")
             return acc["id"]
 
+    import base64, json as _json
+    _hdr = base64.urlsafe_b64encode(_json.dumps({"alg":"HS256","typ":"JWT"}).encode()).rstrip(b'=').decode()
+    _pay = base64.urlsafe_b64encode(_json.dumps({"sid":"loadtest","sub":"0"}).encode()).rstrip(b'=').decode()
+    fake_wb_token = f"{_hdr}.{_pay}.ZmFrZXNpZ25hdHVyZWZvcmxvYWR0ZXN0"
+
     r = client.post(f"{base_url}/api/accounts", json={
         "name": "LOAD_TEST_ACCOUNT",
-        "wb_api_token": "FAKE_TOKEN_FOR_LOAD_TEST_" + "x" * 40,
+        "wb_api_token": fake_wb_token,
     })
     r.raise_for_status()
     acc_id = r.json()["id"]
@@ -73,6 +78,13 @@ def create_products_batch(
     """Создаёт count товаров через API, возвращает список их ID."""
     product_ids = []
 
+    # Загружаем уже существующие товары аккаунта для быстрого lookup по nm_id
+    existing = {}
+    r0 = client.get(f"{base_url}/api/products", params={"account_id": account_id, "limit": 10000})
+    if r0.status_code == 200:
+        for p in r0.json().get("products", r0.json() if isinstance(r0.json(), list) else []):
+            existing[p.get("nm_id")] = p["id"]
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -88,6 +100,12 @@ def create_products_batch(
             sku = f"LOADTEST-{offset + i:05d}"
             min_price = random.randint(500, 2000)
             rrp_price = min_price + random.randint(100, 500)
+
+            # Если товар уже есть — просто берём его ID
+            if nm_id in existing:
+                product_ids.append(existing[nm_id])
+                progress.advance(task)
+                continue
 
             # Создаём товар
             r = client.post(f"{base_url}/api/products", json={

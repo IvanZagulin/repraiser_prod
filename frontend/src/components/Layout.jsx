@@ -51,8 +51,8 @@ export default function Layout() {
   };
 
   const sidebarBg   = dark ? '#12121e' : '#ffffff';
-  const sidebarBord = dark ? '#2a2a3e' : '#e8eaf0';
-  const mainBg      = dark ? '#0a0a12' : '#f4f5f8';
+  const sidebarBord = dark ? '#2a2a3e' : '#e2e8f0';
+  const mainBg      = dark ? '#0a0a12' : '#f8fafc';
 
   return (
     <div className="min-h-screen" style={{ background: mainBg }}>
@@ -75,24 +75,23 @@ export default function Layout() {
             <div
               className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 relative overflow-hidden"
               style={{
-                background: 'linear-gradient(135deg, #00f0ff 0%, #0066ff 50%, #ff00d4 100%)',
+                background: dark
+                  ? 'linear-gradient(135deg, #00f0ff 0%, #0066ff 50%, #ff00d4 100%)'
+                  : 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
                 boxShadow: dark
                   ? '0 0 16px rgba(0,240,255,0.45), 0 0 32px rgba(0,240,255,0.15)'
-                  : '0 4px 14px rgba(0,102,255,0.35)',
+                  : '0 4px 14px rgba(99,102,241,0.35)',
               }}
             >
-              <Zap className="w-4 h-4 relative z-10" style={{ color: '#0a0a12' }} />
+              <Zap className="w-4 h-4 relative z-10" style={{ color: dark ? '#0a0a12' : '#ffffff' }} />
             </div>
             <div>
               <p
+                className="logo-gradient-text"
                 style={{
                   fontFamily: "'Orbitron', sans-serif",
                   fontSize: '0.75rem', fontWeight: 900,
                   letterSpacing: '0.08em', lineHeight: 1.1,
-                  background: 'linear-gradient(135deg, #00f0ff 0%, #0066ff 55%, #ff00d4 100%)',
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                  backgroundClip: 'text',
                 }}
               >
                 QUASAR-X

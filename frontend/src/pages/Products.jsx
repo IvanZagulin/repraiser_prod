@@ -11,6 +11,7 @@ const PAGE_SIZE = 50;
 
 const getWBImageUrl = (nmId) => {
   const nm = parseInt(nmId);
+  if (!nm || isNaN(nm)) return null;
   const vol = Math.floor(nm / 100000);
   const part = Math.floor(nm / 1000);
   const baskets = [
@@ -18,8 +19,9 @@ const getWBImageUrl = (nmId) => {
     [1061,'06'],[1115,'07'],[1169,'08'],[1313,'09'],[1601,'10'],
     [1655,'11'],[1919,'12'],[2045,'13'],[2189,'14'],[2405,'15'],
     [2621,'16'],[2837,'17'],[3053,'18'],[3261,'19'],[3473,'20'],
+    [3721,'21'],[4001,'22'],[4281,'23'],[4601,'24'],[5001,'25'],
   ];
-  const basket = (baskets.find(([v]) => vol <= v) ?? [0,'21'])[1];
+  const basket = (baskets.find(([v]) => vol <= v) ?? [0,'26'])[1];
   return `https://basket-${basket}.wbbasket.ru/vol${vol}/part${part}/${nm}/images/c246x328/1.webp`;
 };
 
@@ -248,110 +250,82 @@ export default function Products() {
           </button>
         </div>
       ) : viewMode === 'grid' ? (
-        /* Card Grid */
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+        /* Card Grid — компактный вид */
+        <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-3">
           {filteredProducts.map((product) => (
             <div key={product.id} className="product-card">
               {/* Image container */}
-              <div className="relative overflow-hidden" style={{ paddingBottom: '133%', background: '#f3f4f6' }}>
-                <img
-                  src={product.image_url || getWBImageUrl(product.nm_id)}
-                  alt={product.name}
-                  className="absolute inset-0 w-full h-full object-cover"
-                  loading="lazy"
-                  onError={(e) => {
-                    e.target.style.display = 'none';
-                    const placeholder = e.target.nextElementSibling;
-                    if (placeholder) placeholder.style.display = 'flex';
-                  }}
-                />
+              <div className="relative overflow-hidden" style={{ paddingBottom: '120%', background: '#f3f4f6' }}>
+                {(product.image_url || getWBImageUrl(product.nm_id)) && (
+                  <img
+                    src={product.image_url || getWBImageUrl(product.nm_id)}
+                    alt={product.name}
+                    className="absolute inset-0 w-full h-full object-cover"
+                    loading="lazy"
+                    onError={(e) => {
+                      e.target.style.display = 'none';
+                      const placeholder = e.target.parentElement?.querySelector('.img-placeholder');
+                      if (placeholder) placeholder.style.display = 'flex';
+                    }}
+                  />
+                )}
                 {/* Placeholder when image fails */}
                 <div
-                  className="absolute inset-0 flex-col items-center justify-center"
-                  style={{ display: 'none', background: '#f3f4f6' }}
+                  className="img-placeholder absolute inset-0 flex-col items-center justify-center"
+                  style={{ display: (!product.image_url && !getWBImageUrl(product.nm_id)) ? 'flex' : 'none', background: '#f3f4f6' }}
                 >
-                  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" style={{ color: '#d1d5db' }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" style={{ color: '#d1d5db' }}>
                     <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="1.5"/>
                     <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/>
                     <path d="M21 15l-5-5L5 21" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                   </svg>
-                  <span className="text-xs mt-1.5" style={{ color: '#9ca3af' }}>Нет фото</span>
                 </div>
                 {/* Hover overlay with actions */}
                 <div
-                  className="absolute inset-0 flex items-center justify-center gap-2 opacity-0 hover:opacity-100 transition-opacity"
+                  className="absolute inset-0 flex items-center justify-center gap-1 opacity-0 hover:opacity-100 transition-opacity"
                   style={{ background: 'rgba(0,0,0,.65)' }}
                 >
-                  <button
-                    onClick={() => handleRunRepricer(product.seller_sku)}
-                    className="btn btn-sm btn-primary"
-                    title="Запустить"
-                  >
-                    <Play className="w-3.5 h-3.5" />
+                  <button onClick={() => handleRunRepricer(product.seller_sku)} className="btn btn-xs btn-primary p-1" title="Запустить">
+                    <Play className="w-3 h-3" />
                   </button>
-                  <button
-                    onClick={() => handleHistoryClick(product)}
-                    className="btn btn-sm btn-secondary"
-                    title="История цен"
-                  >
-                    <LineChart className="w-3.5 h-3.5" />
+                  <button onClick={() => handleHistoryClick(product)} className="btn btn-xs btn-secondary p-1" title="История цен">
+                    <LineChart className="w-3 h-3" />
                   </button>
-                  <button
-                    onClick={() => handleConfigClick(product)}
-                    className="btn btn-sm btn-secondary"
-                    title="Настроить"
-                  >
-                    <Settings className="w-3.5 h-3.5" />
+                  <button onClick={() => handleConfigClick(product)} className="btn btn-xs btn-secondary p-1" title="Настроить">
+                    <Settings className="w-3 h-3" />
                   </button>
-                  <button
-                    onClick={() => handleDelete(product.id, product.seller_sku)}
-                    className="btn btn-sm btn-danger"
-                    title="Удалить"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
+                  <button onClick={() => handleDelete(product.id, product.seller_sku)} className="btn btn-xs btn-danger p-1" title="Удалить">
+                    <Trash2 className="w-3 h-3" />
                   </button>
                 </div>
                 {/* Status badge */}
-                <div className="absolute top-2 left-2">{getStatusBadge(product)}</div>
+                <div className="absolute top-1 left-1">{getStatusBadge(product)}</div>
               </div>
 
               {/* Info */}
-              <div className="p-3">
-                <p className="text-xs font-semibold text-gray-900 truncate">
-                  {product.seller_sku || <span className="text-gray-400">#{product.nm_id}</span>}
+              <div className="p-2">
+                {product.name && (
+                  <p className="truncate mb-0.5" style={{ fontSize: '11px', color: 'var(--text-2)' }}>
+                    {product.name}
+                  </p>
+                )}
+                <p className="font-semibold truncate" style={{ fontSize: '11px', color: 'var(--text-1)' }}>
+                  {product.seller_sku || <span style={{ color: 'var(--text-3)' }}>#{product.nm_id}</span>}
                 </p>
-                <p className="text-xs mt-0.5 line-clamp-2 leading-relaxed" style={{ color: 'var(--text-2)' }}>
-                  {product.name || '—'}
-                </p>
-                {product.current_seller_price && (
-                  <div className="mt-2 flex items-center justify-between">
-                    <div>
-                      <div className="text-sm font-bold text-gray-900">
-                        {Number(product.current_seller_price).toLocaleString('ru')}₽
-                      </div>
-                      {product.current_final_price && (
-                        <div className="text-xs" style={{ color: 'var(--text-3)' }}>
-                          СПП: {Number(product.current_final_price).toLocaleString('ru')}₽
-                        </div>
-                      )}
-                    </div>
-                    {product.config?.strategy && (
-                      <span className="badge badge-info">
-                        {getStrategyLabel(product.config.strategy)}
+                {product.current_seller_price ? (
+                  <div className="flex items-center justify-between mt-1">
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-1)' }}>
+                      {Number(product.current_seller_price).toLocaleString('ru')}₽
+                    </span>
+                    {product.margin !== null && product.margin !== undefined && (
+                      <span style={{ fontSize: '10px', fontWeight: 700, color: getMarginColor(product.margin) }}>
+                        {product.margin}%
                       </span>
                     )}
                   </div>
+                ) : (
+                  <span style={{ fontSize: '10px', color: 'var(--text-3)' }}>нет цены</span>
                 )}
-                <div className="mt-1 flex items-center justify-between">
-                  <span className="text-xs" style={{ color: 'var(--text-3)' }}>Маржа:</span>
-                  {product.margin !== null && product.margin !== undefined ? (
-                    <span className="text-xs font-bold" style={{ color: getMarginColor(product.margin) }}>
-                      {product.margin}%
-                    </span>
-                  ) : (
-                    <span className="text-xs" style={{ color: 'var(--text-3)' }}>нет данных</span>
-                  )}
-                </div>
               </div>
             </div>
           ))}

@@ -26,6 +26,9 @@ class User(Base):
     reset_code_expires_at = Column(DateTime, nullable=True)
     reset_attempts        = Column(Integer, default=0, nullable=False)
 
+    # JWT invalidation: инкрементируется при смене пароля → старые токены перестают работать
+    token_version = Column(SmallInteger, default=1, nullable=False)
+
     # Relationships
     accounts = relationship("Account", back_populates="user", cascade="all, delete-orphan")
     settings = relationship("AppSetting", back_populates="user", cascade="all, delete-orphan")

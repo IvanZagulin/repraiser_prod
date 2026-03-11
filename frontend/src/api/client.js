@@ -26,8 +26,18 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('token');
-      window.location.href = '/login';
+      const url = error.config?.url || '';
+      // Не редиректим если 401 пришёл от самих auth-эндпоинтов (login, register, forgot-password)
+      // — там ошибка должна отображаться на странице, а не сбрасывать её
+      const isAuthCall = url.includes('/auth/login') ||
+                         url.includes('/auth/register') ||
+                         url.includes('/auth/forgot-password') ||
+                         url.includes('/auth/reset-password') ||
+                         url.includes('/auth/verify-email');
+      if (!isAuthCall) {
+        localStorage.removeItem('token');
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }
@@ -67,6 +77,9 @@ export const updateAccount = (id, data) =>
 
 export const deleteAccount = (id) =>
   api.delete(`/api/accounts/${id}`);
+
+export const syncAccountCatalog = (id) =>
+  api.post(`/api/accounts/${id}/sync-catalog`);
 
 // Products
 export const getProducts = (params) =>
@@ -126,6 +139,13 @@ export const exportProducts = (filters = {}) => {
 
 export const downloadTemplate = (type) =>
   api.get(`/api/export/template/${type}`, { responseType: 'blob' });
+
+// Profile / change password
+export const changePasswordSendCode = () =>
+  api.post('/api/auth/change-password/send-code');
+
+export const changePasswordConfirm = (code, new_password) =>
+  api.post('/api/auth/change-password/confirm', { code, new_password });
 
 // Settings
 export const getSettings = () =>

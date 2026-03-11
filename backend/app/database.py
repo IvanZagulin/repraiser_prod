@@ -8,7 +8,9 @@ engine = create_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,
     pool_size=10,
-    max_overflow=20
+    max_overflow=20,
+    # 30s timeout на SQL-запросы — защита от зависших/долгих запросов
+    connect_args={"options": "-c statement_timeout=30000"},
 )
 
 # Session factory
@@ -23,5 +25,8 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

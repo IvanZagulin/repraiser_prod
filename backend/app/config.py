@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # Redis / Celery
     REDIS_URL: str = "redis://redis:6379/0"
 
+    # Fernet key для шифрования WB API токенов в БД
+    # Генерация: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    FERNET_KEY: Optional[str] = None
+
     # Sentry (опционально — оставь пустым чтобы отключить)
     SENTRY_DSN: Optional[str] = None
 

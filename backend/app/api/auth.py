@@ -1,4 +1,4 @@
-import random
+import secrets
 import string
 from datetime import datetime, timedelta
 from typing import Annotated
@@ -7,22 +7,24 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from slowapi import Limiter
-from slowapi.util import get_remote_address
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.utils import get_real_ip
 from app.database import get_db
 from app.models.user import User
 from app.schemas.auth import (
     LoginRequest, RegisterRequest, TokenResponse, TokenData,
     VerifyEmailRequest, ResendCodeRequest,
     ForgotPasswordRequest, ResetPasswordRequest, MessageResponse,
+    ChangePasswordConfirmRequest,
 )
 
 router = APIRouter()
 security = HTTPBearer()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=get_real_ip)
 
 # Максимум неудачных попыток ввода кода до инвалидации
 MAX_CODE_ATTEMPTS = 5
@@ -39,8 +41,8 @@ def hash_password(plain: str) -> str:
 
 
 def generate_code() -> str:
-    """Генерирует 6-значный цифровой код."""
-    return ''.join(random.choices(string.digits, k=6))
+    """Генерирует криптографически стойкий 6-значный цифровой код."""
+    return ''.join(secrets.choice(string.digits) for _ in range(6))
 
 
 def create_access_token(user: User) -> str:
@@ -49,6 +51,7 @@ def create_access_token(user: User) -> str:
         "sub": user.email,
         "user_id": user.id,
         "is_admin": user.is_admin,
+        "token_version": user.token_version or 1,  # для инвалидации после смены пароля
         "exp": expire,
     }
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
@@ -79,6 +82,11 @@ async def get_current_user(
     user = db.query(User).filter(User.id == user_id, User.is_active == True).first()
     if user is None:
         raise exc
+
+    # Проверка версии токена — инвалидирует старые JWT после смены пароля
+    if payload.get("token_version", 1) != (user.token_version or 1):
+        raise exc
+
     return user
 
 
@@ -114,8 +122,15 @@ async def register(
         verification_attempts=0,
     )
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    try:
+        db.commit()
+        db.refresh(user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Пользователь с таким email уже существует",
+        )
 
     _copy_default_settings(db, user.id)
 
@@ -262,6 +277,7 @@ async def forgot_password(
 async def reset_password(
     request: Request,
     body: ResetPasswordRequest,
+    background_tasks: BackgroundTasks,
     db: Annotated[Session, Depends(get_db)],
 ):
     """Сброс пароля по коду → автологин (возвращает JWT)."""
@@ -280,7 +296,7 @@ async def reset_password(
         db.commit()
         raise HTTPException(status_code=400, detail=f"Неверный код. Осталось попыток: {MAX_CODE_ATTEMPTS - user.reset_attempts}")
 
-    if user.reset_code_expires_at < datetime.utcnow():
+    if not user.reset_code_expires_at or user.reset_code_expires_at < datetime.utcnow():
         raise HTTPException(status_code=400, detail="Код истёк. Запросите новый")
 
     user.password_hash = hash_password(body.new_password)
@@ -288,7 +304,12 @@ async def reset_password(
     user.reset_code_expires_at = None
     user.reset_attempts = 0
     user.is_verified = True  # На случай если не был верифицирован
+    user.token_version = (user.token_version or 1) + 1  # Инвалидируем старые JWT
     db.commit()
+
+    # Уведомляем пользователя о смене пароля в фоне
+    from app.services.email_service import send_password_changed_notification
+    background_tasks.add_task(send_password_changed_notification, user.email)
 
     token = create_access_token(user)
     return TokenResponse(
@@ -296,6 +317,67 @@ async def reset_password(
         token_type="bearer",
         expires_in=settings.JWT_EXPIRE_HOURS * 3600,
     )
+
+
+@router.post("/change-password/send-code", response_model=MessageResponse)
+@limiter.limit("3/minute")
+async def change_password_send_code(
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Отправляет код подтверждения смены пароля на email текущего пользователя."""
+    code = generate_code()
+    current_user.reset_code = code
+    current_user.reset_code_expires_at = datetime.utcnow() + timedelta(minutes=15)
+    current_user.reset_attempts = 0
+    db.commit()
+
+    from app.services.email_service import send_change_password_code
+    send_change_password_code(current_user.email, code)
+
+    return MessageResponse(message="Код подтверждения отправлен на ваш email")
+
+
+@router.post("/change-password/confirm", response_model=MessageResponse)
+@limiter.limit("10/minute")
+async def change_password_confirm(
+    request: Request,
+    body: ChangePasswordConfirmRequest,
+    background_tasks: BackgroundTasks,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Подтверждает смену пароля по коду из email."""
+    if not current_user.reset_code or current_user.reset_code != body.code:
+        current_user.reset_attempts = (current_user.reset_attempts or 0) + 1
+        if current_user.reset_attempts >= MAX_CODE_ATTEMPTS:
+            current_user.reset_code = None
+            current_user.reset_code_expires_at = None
+            current_user.reset_attempts = 0
+            db.commit()
+            raise HTTPException(status_code=400, detail="Превышено число попыток. Запросите новый код")
+        db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Неверный код. Осталось попыток: {MAX_CODE_ATTEMPTS - current_user.reset_attempts}"
+        )
+
+    if not current_user.reset_code_expires_at or current_user.reset_code_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Код истёк. Запросите новый")
+
+    current_user.password_hash = hash_password(body.new_password)
+    current_user.reset_code = None
+    current_user.reset_code_expires_at = None
+    current_user.reset_attempts = 0
+    current_user.token_version = (current_user.token_version or 1) + 1  # Инвалидируем старые JWT
+    db.commit()
+
+    # Уведомляем пользователя о смене пароля в фоне
+    from app.services.email_service import send_password_changed_notification
+    background_tasks.add_task(send_password_changed_notification, current_user.email)
+
+    return MessageResponse(message="Пароль успешно изменён")
 
 
 @router.get("/verify")
