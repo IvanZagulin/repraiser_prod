@@ -113,10 +113,7 @@ function ChangePasswordBlock({ userEmail }) {
       {/* Email */}
       <div className="mb-5">
         <label className="block text-sm font-medium text-gray-500 mb-1">Почта</label>
-        <div
-          className="px-3 py-2 rounded-lg text-sm font-medium text-gray-800"
-          style={{ background: '#f3f4f6', border: '1px solid #e5e7eb' }}
-        >
+        <div className="px-3 py-2 rounded-lg text-sm font-medium text-foreground bg-muted border border-border">
           {userEmail}
         </div>
       </div>
@@ -327,8 +324,8 @@ export default function SettingsPage() {
         {/* Интервал */}
         <div className="card">
           <div className="flex items-center space-x-3 mb-6">
-            <div className="bg-primary-50 p-2 rounded-lg">
-              <Clock className="w-5 h-5 text-primary-600" />
+            <div className="bg-primary/10 p-2 rounded-lg">
+              <Clock className="w-5 h-5 text-primary" />
             </div>
             <div>
               <h2 className="text-lg font-semibold text-gray-900">Интервал обновления цен</h2>
@@ -395,8 +392,8 @@ export default function SettingsPage() {
         {/* Правая колонка: Расчёт маржи */}
         <div className="card">
           <div className="flex items-center space-x-3 mb-6">
-            <div className="p-2 rounded-lg" style={{ background: '#00f0ff18' }}>
-              <TrendingUp className="w-5 h-5" style={{ color: '#00b8c8' }} />
+            <div className="bg-cyan-50 p-2 rounded-lg dark:bg-cyan-950/20">
+              <TrendingUp className="w-5 h-5 text-cyan-600" />
             </div>
             <div>
               <h2 className="text-lg font-semibold text-gray-900">Расходы для расчёта маржи</h2>

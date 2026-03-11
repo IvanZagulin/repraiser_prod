@@ -274,7 +274,7 @@ export default function ImportExport() {
         <div className="card">
           <SectionTitle
             icon={FileText}
-            color="#7c3aed"
+            color="hsl(var(--primary))"
             title="Шаблоны"
             subtitle="Скачайте пустые файлы для заполнения"
           />
@@ -286,9 +286,8 @@ export default function ImportExport() {
               style={{ borderColor: '#e8eaf0', background: '#f9fafc' }}
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                     style={{ background: '#7c3aed15' }}>
-                  <Package className="w-4 h-4" style={{ color: '#7c3aed' }} />
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-primary/10">
+                  <Package className="w-4 h-4 text-primary" />
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-gray-900">Шаблон товаров</p>
@@ -359,7 +358,7 @@ export default function ImportExport() {
           {/* Collapsible column descriptions */}
           <div className="mt-4 space-y-2">
             <details>
-              <summary className="cursor-pointer text-xs text-purple-600 font-medium select-none list-none flex items-center gap-1">
+              <summary className="cursor-pointer text-xs text-primary font-medium select-none list-none flex items-center gap-1">
                 <ChevronDown className="w-3 h-3" /> Колонки шаблона товаров
               </summary>
               <div className="mt-2 p-3 rounded-lg bg-gray-50 border border-gray-100 text-xs text-gray-600 space-y-1.5">
@@ -371,7 +370,7 @@ export default function ImportExport() {
               </div>
             </details>
             <details>
-              <summary className="cursor-pointer text-xs text-indigo-600 font-medium select-none list-none flex items-center gap-1">
+              <summary className="cursor-pointer text-xs text-primary font-medium select-none list-none flex items-center gap-1">
                 <ChevronDown className="w-3 h-3" /> Колонки шаблона стратегий
               </summary>
               <div className="mt-2 p-3 rounded-lg bg-gray-50 border border-gray-100 text-xs text-gray-600 space-y-1">
@@ -424,14 +423,11 @@ export default function ImportExport() {
             <ImportResult result={importResultProd} />
 
             {/* Import strategies */}
-            <div
-              className="p-4 rounded-xl border-2 border-dashed"
-              style={{ borderColor: '#c4b5fd', background: '#f5f3ff' }}
-            >
+            <div className="p-4 rounded-xl border-2 border-dashed border-primary/30 bg-primary/5">
               <div className="flex items-center gap-2 mb-1">
-                <Settings2 className="w-4 h-4 text-purple-600" />
+                <Settings2 className="w-4 h-4 text-primary" />
                 <span className="text-sm font-medium text-gray-900">Стратегии</span>
-                {uploadingStrategy && <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-600 ml-auto" />}
+                {uploadingStrategy && <Loader2 className="w-3.5 h-3.5 animate-spin text-primary ml-auto" />}
               </div>
               <p className="text-xs text-gray-500 mb-3">
                 Обновить параметры репрайсера по артикулу продавца
@@ -439,8 +435,7 @@ export default function ImportExport() {
               <input ref={fileInputStrategy} type="file" accept=".xlsx,.xls"
                      onChange={handleStrategyImport} disabled={uploadingStrategy} className="hidden" />
               <button
-                className="btn btn-sm w-full gap-1.5"
-                style={{ background: uploadingStrategy ? '#c4b5fd' : '#7c3aed', color: '#fff', border: 'none' }}
+                className="btn btn-primary btn-sm w-full gap-1.5"
                 onClick={() => fileInputStrategy.current?.click()}
                 disabled={uploadingStrategy}
               >

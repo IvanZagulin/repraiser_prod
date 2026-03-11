@@ -182,7 +182,7 @@ export default function Products() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold" style={{ background: 'linear-gradient(135deg,#1e1b4b,#7c3aed)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent', backgroundClip:'text' }}>Товары</h1>
+          <h1 className="page-h1">Товары</h1>
           <p className="text-sm mt-1" style={{ color: 'var(--text-3)' }}>
             Управление товарами и стратегиями ценообразования
           </p>
@@ -191,8 +191,7 @@ export default function Products() {
           <button
             onClick={handleFetchPrices}
             disabled={fetchingPrices}
-            className="btn gap-2"
-            style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--text-2)' }}
+            className="btn btn-secondary gap-2"
             title="Получить текущие цены с WB для всех товаров (без изменения цен)"
           >
             <RefreshCw className={`w-4 h-4 ${fetchingPrices ? 'animate-spin' : ''}`} />
@@ -230,25 +229,17 @@ export default function Products() {
             <option value="rrp">РРЦ</option>
             <option value="competitor">Конкурент</option>
           </select>
-          <div className="flex rounded-xl overflow-hidden" style={{ border: '1px solid #e5e7eb', background: '#f9fafb' }}>
+          <div className="flex rounded-lg overflow-hidden border border-border bg-muted/50">
             <button
               onClick={() => setViewMode('grid')}
-              className="p-2 transition-colors"
-              style={{
-                background: viewMode === 'grid' ? '#ede9fe' : 'transparent',
-                color: viewMode === 'grid' ? '#6d28d9' : '#9ca3af',
-              }}
+              className={`p-2 transition-colors ${viewMode === 'grid' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground'}`}
               title="Карточки"
             >
               <LayoutGrid className="w-4 h-4" />
             </button>
             <button
               onClick={() => setViewMode('table')}
-              className="p-2 transition-colors"
-              style={{
-                background: viewMode === 'table' ? '#ede9fe' : 'transparent',
-                color: viewMode === 'table' ? '#6d28d9' : '#9ca3af',
-              }}
+              className={`p-2 transition-colors ${viewMode === 'table' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground'}`}
               title="Таблица"
             >
               <List className="w-4 h-4" />
@@ -274,7 +265,7 @@ export default function Products() {
           {filteredProducts.map((product) => (
             <div key={product.id} className="product-card">
               {/* Image container */}
-              <div className="relative overflow-hidden" style={{ paddingBottom: '120%', background: '#f3f4f6' }}>
+              <div className="relative overflow-hidden bg-muted" style={{ paddingBottom: '120%' }}>
                 {(product.image_url || getWBImageUrl(product.nm_id)) && (
                   <img
                     src={product.image_url || getWBImageUrl(product.nm_id)}
@@ -485,12 +476,7 @@ export default function Products() {
                 <button
                   key={p}
                   onClick={() => handlePageChange(p)}
-                  className="btn btn-sm min-w-[32px] text-xs"
-                  style={{
-                    background: p === page ? '#7c3aed' : 'transparent',
-                    color: p === page ? '#fff' : 'var(--text-2)',
-                    fontWeight: p === page ? 700 : 500,
-                  }}
+                  className={`btn btn-sm min-w-[32px] text-xs ${p === page ? 'bg-primary text-primary-foreground font-bold' : 'text-muted-foreground font-medium'}`}
                 >
                   {p}
                 </button>
