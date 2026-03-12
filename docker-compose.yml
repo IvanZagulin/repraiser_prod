@@ -21,6 +21,11 @@ services:
       -c random_page_cost=1.1
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 10s
@@ -39,6 +44,11 @@ services:
     volumes:
       - redis_data:/data
     command: redis-server --requirepass ${REDIS_PASSWORD} --maxmemory 256mb --maxmemory-policy volatile-lru
+    deploy:
+      resources:
+        limits:
+          memory: 320m
+          cpus: "0.5"
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
@@ -75,7 +85,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    command: gunicorn app.main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --timeout 120 --graceful-timeout 30
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/api/health\")'"]
       interval: 30s
@@ -119,6 +134,11 @@ services:
       redis:
         condition: service_healthy
     command: celery -A app.celery_app worker --loglevel=info --concurrency=4
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+          cpus: "2.0"
     restart: unless-stopped
     logging:
       driver: json-file
@@ -149,6 +169,11 @@ services:
     volumes:
       - ./backend:/backend
     command: python scheduler.py
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.5"
     restart: unless-stopped
     logging:
       driver: json-file
@@ -175,6 +200,11 @@ services:
     depends_on:
       - redis
     command: celery -A app.celery_app flower --port=5555 --basic_auth=${ADMIN_EMAIL}:${ADMIN_PASSWORD}
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.25"
     restart: unless-stopped
     networks:
       - wb_network
@@ -183,12 +213,16 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_API_URL: https://qvaz.quasar-x.ru
     container_name: wb_repricer_frontend_prod
-    environment:
-      VITE_API_URL: https://qvaz.quasar-x.ru
     ports:
-      - "127.0.0.1:5173:5173"
-    command: sh -c "npm run build && npm run preview -- --host 0.0.0.0 --port 5173"
+      - "127.0.0.1:5173:80"
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+          cpus: "0.25"
     restart: unless-stopped
     networks:
       - wb_network

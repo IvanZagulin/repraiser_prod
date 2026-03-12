@@ -21,3 +21,4 @@ slowapi==0.1.9
 celery[redis]==5.3.6
 flower==2.0.1
 sentry-sdk[fastapi]==2.22.0
+gunicorn==22.0.0
