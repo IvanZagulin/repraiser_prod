@@ -2,6 +2,8 @@ import asyncio
 import logging
 from typing import Optional
 
+import redis as redis_lib
+
 from app.celery_app import celery_app
 from app.database import SessionLocal
 from app.redis_client import acquire_run_lock, release_run_lock
@@ -9,7 +11,7 @@ from app.redis_client import acquire_run_lock, release_run_lock
 logger = logging.getLogger(__name__)
 
 # Ошибки соединения/сети — допускают retry; логические ошибки — нет
-_NETWORK_ERRORS = (ConnectionError, TimeoutError, OSError)
+_NETWORK_ERRORS = (ConnectionError, TimeoutError, OSError, redis_lib.ConnectionError, redis_lib.TimeoutError)
 
 
 @celery_app.task(
@@ -63,5 +65,11 @@ def run_repricer_for_user(
             raise self.retry(exc=exc)
         raise
     finally:
-        db.close()
-        release_run_lock(user_id)
+        try:
+            db.close()
+        except Exception as e:
+            logger.error(f"[Celery] user={user_id}: db.close() failed: {e}")
+        try:
+            release_run_lock(user_id)
+        except Exception as e:
+            logger.error(f"[Celery] user={user_id}: release_run_lock failed: {e}")

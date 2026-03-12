@@ -47,8 +47,8 @@ def acquire_run_lock(user_id: int, ttl: int = 3900) -> bool:
         key = f"repricer:run_lock:{user_id}"
         return bool(_get_client().set(key, "1", nx=True, ex=ttl))
     except Exception as e:
-        logger.warning(f"Redis acquire_run_lock(user={user_id}) error: {e}")
-        return True  # если Redis недоступен — разрешаем запуск
+        logger.error(f"Redis acquire_run_lock(user={user_id}) error: {e} — блокируем запуск во избежание дублирования")
+        return False  # если Redis недоступен — запрещаем запуск (safer than allowing concurrent runs)
 
 
 def release_run_lock(user_id: int) -> None:

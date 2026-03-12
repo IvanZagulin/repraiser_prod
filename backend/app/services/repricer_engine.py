@@ -660,9 +660,12 @@ class RepricerEngine:
 
         if success:
             # Рассчитываем новую финальную цену
-            if current_data.get('spp') is not None:
-                new_final = final_new_price * (1 - current_data['spp'] / 100)
+            spp = current_data.get('spp')
+            if spp is not None and 0 <= spp < 100:
+                new_final = final_new_price * (1 - spp / 100)
             else:
+                if spp is not None and spp >= 100:
+                    logger.warning(f"Некорректный SPP={spp} для nm_id={product.nm_id}, финальная цена не рассчитана")
                 new_final = None
 
             # Сохраняем снимок с НОВОЙ ценой, чтобы UI сразу отображал обновление
