@@ -82,8 +82,14 @@ export default function VerifyEmailPage() {
 
         {/* Brand */}
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-primary">
-            <Zap className="h-5 w-5 text-primary-foreground" />
+          <div
+            className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-xl"
+            style={{
+              background: 'linear-gradient(135deg, var(--neon), var(--accent-blue))',
+              boxShadow: '0 2px 12px rgba(0,200,255,.3)',
+            }}
+          >
+            <span className="w-2.5 h-2.5 rounded-full bg-white" />
           </div>
           <h1 className="text-2xl font-semibold tracking-tight">Подтверждение email</h1>
           <p className="mt-1.5 text-sm text-muted-foreground">

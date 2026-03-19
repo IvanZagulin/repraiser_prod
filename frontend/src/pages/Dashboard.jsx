@@ -76,10 +76,10 @@ export default function Dashboard() {
   };
 
   const statCards = [
-    { title: 'Аккаунты',   value: stats.totalAccounts,    icon: Users,      colorClass: 'text-blue-600 dark:text-blue-400' },
-    { title: 'Товаров',    value: stats.totalProducts,    icon: Package,    colorClass: 'text-violet-600 dark:text-violet-400' },
-    { title: 'Активных',   value: stats.activeProducts,   icon: TrendingUp, colorClass: 'text-emerald-600 dark:text-emerald-400' },
-    { title: 'Неактивных', value: stats.inactiveProducts, icon: PlayCircle, colorClass: 'text-amber-600 dark:text-amber-400' },
+    { title: 'Аккаунты',   value: stats.totalAccounts,    icon: Users,      color: 'var(--neon)' },
+    { title: 'Товаров',    value: stats.totalProducts,    icon: Package,    color: 'var(--accent-blue)' },
+    { title: 'Активных',   value: stats.activeProducts,   icon: TrendingUp, color: '#22c55e' },
+    { title: 'Неактивных', value: stats.inactiveProducts, icon: PlayCircle, color: '#f59e0b' },
   ];
 
   if (loading) {
@@ -120,9 +120,9 @@ export default function Dashboard() {
                 <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   {s.title}
                 </p>
-                <s.icon className={`h-4 w-4 ${s.colorClass}`} />
+                <s.icon className="h-4 w-4" style={{ color: s.color }} />
               </div>
-              <p className="stat-number text-3xl font-bold">{s.value}</p>
+              <p className="stat-number text-3xl font-bold font-mono" style={{ color: s.color }}>{s.value}</p>
             </CardContent>
           </Card>
         ))}
@@ -147,8 +147,8 @@ export default function Dashboard() {
               <AreaChart data={runsChartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="gTotal" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor="hsl(var(--primary))" stopOpacity={0.15} />
-                    <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                    <stop offset="5%"  stopColor="#00c8ff" stopOpacity={0.15} />
+                    <stop offset="95%" stopColor="#00c8ff" stopOpacity={0} />
                   </linearGradient>
                   <linearGradient id="gUpdated" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%"  stopColor="#10b981" stopOpacity={0.2} />
@@ -180,7 +180,7 @@ export default function Dashboard() {
                 />
                 <Area
                   type="monotone" dataKey="total"
-                  stroke="hsl(var(--primary))" strokeWidth={1.5}
+                  stroke="#00c8ff" strokeWidth={1.5}
                   fill="url(#gTotal)" dot={false} activeDot={{ r: 3 }}
                 />
                 <Area

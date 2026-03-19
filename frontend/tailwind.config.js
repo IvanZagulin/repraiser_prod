@@ -18,6 +18,8 @@ export default {
         ring:       "hsl(var(--ring))",
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
+        neon:       "var(--neon)",
+        electric:   "var(--electric)",
         primary: {
           DEFAULT:    "hsl(var(--primary))",
           foreground: "hsl(var(--primary-foreground))",
@@ -62,7 +64,8 @@ export default {
         sm: "calc(var(--radius) - 4px)",
       },
       fontFamily: {
-        sans: ["Inter", "system-ui", "-apple-system", "sans-serif"],
+        sans: ["'Plus Jakarta Sans'", "system-ui", "-apple-system", "sans-serif"],
+        mono: ["'JetBrains Mono'", "monospace"],
       },
       keyframes: {
         "fade-in": {
@@ -89,6 +92,10 @@ export default {
           from: { opacity: "0", transform: "translateY(6px)" },
           to:   { opacity: "1", transform: "none" },
         },
+        "neon-pulse": {
+          "0%, 100%": { boxShadow: "0 0 8px rgba(0,200,255,.15)" },
+          "50%":      { boxShadow: "0 0 20px rgba(0,200,255,.3)" },
+        },
       },
       animation: {
         "fade-in":       "fade-in 0.2s ease",
@@ -98,6 +105,7 @@ export default {
         shimmer:         "shimmer 1.5s ease-in-out infinite",
         "number-in":     "number-in 0.4s ease",
         spin:            "spin 0.8s linear infinite",
+        "neon-pulse":    "neon-pulse 2s ease-in-out infinite",
       },
     },
   },

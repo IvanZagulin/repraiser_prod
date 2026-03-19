@@ -1,7 +1,7 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import {
   Home, Package, LogOut, PlayCircle, FileText,
-  SlidersHorizontal, Users, Zap, BarChart2, Moon, Sun,
+  SlidersHorizontal, Users, BarChart2, Moon, Sun,
   AlertTriangle, X,
 } from 'lucide-react';
 import { useAuthStore } from '../store';
@@ -62,10 +62,16 @@ export default function Layout() {
 
         {/* Logo */}
         <div className="flex h-14 items-center gap-2.5 px-4 border-b border-sidebar-border">
-          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary flex-shrink-0">
-            <Zap className="h-4 w-4 text-primary-foreground" />
+          <div
+            className="flex h-7 w-7 items-center justify-center rounded-lg flex-shrink-0"
+            style={{
+              background: 'linear-gradient(135deg, var(--neon), var(--accent-blue))',
+              boxShadow: '0 2px 12px rgba(0,200,255,.3)',
+            }}
+          >
+            <span className="w-2 h-2 rounded-full bg-white" />
           </div>
-          <span className="text-sm font-semibold text-sidebar-foreground">Repraiser</span>
+          <span className="font-mono text-sm font-bold tracking-wider text-foreground">QUASAR-X</span>
         </div>
 
         {/* Navigation */}
@@ -77,17 +83,23 @@ export default function Layout() {
               end={item.to === '/'}
               className={({ isActive }) =>
                 cn(
-                  'flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                  'flex items-center gap-2.5 rounded-[10px] px-3 py-2 text-sm font-medium transition-all',
                   isActive
-                    ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                    : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                    ? 'text-foreground font-semibold'
+                    : 'text-muted-foreground hover:text-foreground'
                 )
+              }
+              style={({ isActive }) =>
+                isActive
+                  ? { background: 'var(--neon-glow)', color: 'var(--neon)', borderLeft: '3px solid var(--neon)' }
+                  : {}
               }
             >
               {({ isActive }) => (
                 <>
                   <item.icon
-                    className={cn('h-4 w-4 flex-shrink-0 transition-colors', isActive && 'text-primary')}
+                    className="h-4 w-4 flex-shrink-0 transition-colors"
+                    style={isActive ? { color: 'var(--neon)' } : {}}
                   />
                   <span>{item.label}</span>
                 </>
@@ -98,8 +110,11 @@ export default function Layout() {
 
         {/* Footer */}
         <div className="space-y-0.5 p-3 border-t border-sidebar-border">
-          <div className="flex items-center gap-2 rounded-md px-3 py-2">
-            <span className="h-2 w-2 rounded-full bg-emerald-500 flex-shrink-0" />
+          <div className="flex items-center gap-2 rounded-[10px] px-3 py-2">
+            <span
+              className="h-2 w-2 rounded-full flex-shrink-0"
+              style={{ background: 'var(--neon)', boxShadow: '0 0 8px var(--neon-dim)' }}
+            />
             <span className="text-xs text-muted-foreground">Система активна</span>
           </div>
 
@@ -107,7 +122,8 @@ export default function Layout() {
 
           <button
             onClick={() => setDark((d) => !d)}
-            className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            className="flex w-full items-center gap-2.5 rounded-[10px] px-3 py-2 text-sm font-medium text-muted-foreground transition-all hover:text-foreground"
+            style={{ ':hover': { background: 'var(--neon-glow)' } }}
           >
             {dark
               ? <Sun className="h-4 w-4 flex-shrink-0" />
@@ -118,7 +134,7 @@ export default function Layout() {
 
           <button
             onClick={handleLogout}
-            className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+            className="flex w-full items-center gap-2.5 rounded-[10px] px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
           >
             <LogOut className="h-4 w-4 flex-shrink-0" />
             <span>Выход</span>

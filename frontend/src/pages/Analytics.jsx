@@ -9,7 +9,7 @@ import {
 } from 'recharts';
 import toast from 'react-hot-toast';
 
-const PIE_COLORS = { rrp: '#7c3aed', competitor: '#3b82f6', none: '#d1d5db' };
+const PIE_COLORS = { rrp: '#00c8ff', competitor: '#0066ff', none: '#d1d5db' };
 const PIE_LABELS = { rrp: 'РРЦ', competitor: 'Конкурент', none: 'Без настройки' };
 
 const CustomPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }) => {
@@ -101,15 +101,7 @@ export default function Analytics() {
 
       {/* Header */}
       <div>
-        <h1
-          className="text-2xl font-bold"
-          style={{
-            background: 'linear-gradient(135deg, #1e1b4b 0%, #7c3aed 100%)',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
-            backgroundClip: 'text',
-          }}
-        >
+        <h1 className="text-2xl font-bold neon-gradient">
           Аналитика
         </h1>
         <p className="text-sm mt-1.5 flex items-center gap-1.5" style={{ color: 'var(--text-3)' }}>
@@ -125,33 +117,33 @@ export default function Analytics() {
             label: 'Всего прогонов',
             value: totalRuns,
             icon: RefreshCw,
-            color: '#7c3aed',
-            bg: 'linear-gradient(135deg, #ede9fe 0%, #e0e7ff 100%)',
-            border: '#ddd6fe',
+            color: '#00c8ff',
+            bg: 'linear-gradient(135deg, rgba(0,200,255,.08), rgba(0,102,255,.08))',
+            border: 'rgba(0,200,255,.2)',
           },
           {
             label: 'Успешных',
             value: `${completedRuns} (${successRate}%)`,
             icon: CheckCircle2,
-            color: '#16a34a',
-            bg: 'linear-gradient(135deg, #dcfce7 0%, #d1fae5 100%)',
-            border: '#bbf7d0',
+            color: '#22c55e',
+            bg: 'linear-gradient(135deg, rgba(34,197,94,.08), rgba(34,197,94,.04))',
+            border: 'rgba(34,197,94,.2)',
           },
           {
             label: 'Обновлений всего',
             value: totalUpdated.toLocaleString('ru'),
             icon: TrendingUp,
-            color: '#1d4ed8',
-            bg: 'linear-gradient(135deg, #dbeafe 0%, #e0e7ff 100%)',
-            border: '#bfdbfe',
+            color: '#0066ff',
+            bg: 'linear-gradient(135deg, rgba(0,102,255,.08), rgba(108,92,231,.06))',
+            border: 'rgba(0,102,255,.2)',
           },
           {
             label: 'Ошибок / ср. обновлений',
             value: `${failedRuns} / ${avgUpdated}`,
             icon: XCircle,
-            color: failedRuns > 0 ? '#b45309' : '#9ca3af',
-            bg: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
-            border: '#fde68a',
+            color: failedRuns > 0 ? '#f59e0b' : '#9ca3bc',
+            bg: 'linear-gradient(135deg, rgba(245,158,11,.08), rgba(245,158,11,.04))',
+            border: 'rgba(245,158,11,.2)',
           },
         ].map((s, i) => (
           <div
@@ -177,8 +169,8 @@ export default function Analytics() {
       {/* Runs activity area chart */}
       <div className="card">
         <div className="flex items-center gap-2.5 mb-5">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: '#ede9fe' }}>
-            <BarChart2 className="w-3.5 h-3.5" style={{ color: '#7c3aed' }} />
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(0,200,255,.1)' }}>
+            <BarChart2 className="w-3.5 h-3.5" style={{ color: '#00c8ff' }} />
           </div>
           <h2 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
             Активность прогонов
@@ -196,8 +188,8 @@ export default function Analytics() {
             <AreaChart data={runsChart} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id="analyticsTotal" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.15} />
-                  <stop offset="95%" stopColor="#7c3aed" stopOpacity={0} />
+                  <stop offset="5%" stopColor="#00c8ff" stopOpacity={0.15} />
+                  <stop offset="95%" stopColor="#00c8ff" stopOpacity={0} />
                 </linearGradient>
                 <linearGradient id="analyticsUpdated" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#16a34a" stopOpacity={0.2} />
@@ -212,7 +204,7 @@ export default function Analytics() {
                 formatter={(v, name) => [v, name === 'total' ? 'Всего товаров' : 'Обновлено']}
               />
               <Legend formatter={(v) => (v === 'total' ? 'Всего товаров' : 'Обновлено')} wrapperStyle={{ fontSize: 11 }} />
-              <Area type="monotone" dataKey="total" stroke="#7c3aed" strokeWidth={1.5} fill="url(#analyticsTotal)" dot={false} activeDot={{ r: 3 }} />
+              <Area type="monotone" dataKey="total" stroke="#00c8ff" strokeWidth={1.5} fill="url(#analyticsTotal)" dot={false} activeDot={{ r: 3 }} />
               <Area type="monotone" dataKey="updated" stroke="#16a34a" strokeWidth={2} fill="url(#analyticsUpdated)" dot={false} activeDot={{ r: 3 }} />
             </AreaChart>
           </ResponsiveContainer>
@@ -225,8 +217,8 @@ export default function Analytics() {
         {/* Updates per day bar chart */}
         <div className="card">
           <div className="flex items-center gap-2.5 mb-5">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: '#dbeafe' }}>
-              <TrendingUp className="w-3.5 h-3.5" style={{ color: '#2563eb' }} />
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(0,102,255,.1)' }}>
+              <TrendingUp className="w-3.5 h-3.5" style={{ color: '#0066ff' }} />
             </div>
             <h2 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
               Обновления по дням
@@ -246,7 +238,7 @@ export default function Analytics() {
                   contentStyle={{ border: '1px solid #e8eaf0', borderRadius: 10, fontSize: 12, boxShadow: '0 4px 16px rgba(0,0,0,0.08)' }}
                   formatter={(v) => [v, 'Обновлений']}
                 />
-                <Bar dataKey="count" name="Обновлений" fill="#7c3aed" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="count" name="Обновлений" fill="#00c8ff" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           )}
@@ -255,7 +247,7 @@ export default function Analytics() {
         {/* Strategy pie */}
         <div className="card">
           <div className="flex items-center gap-2.5 mb-5">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: '#dcfce7' }}>
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(34,197,94,.1)' }}>
               <Activity className="w-3.5 h-3.5" style={{ color: '#16a34a' }} />
             </div>
             <h2 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
