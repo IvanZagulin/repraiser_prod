@@ -75,7 +75,6 @@ def generate_report(
     # Price changes in period
     changes = []
     changes_count = 0
-    total_savings = 0.0
     top_changed = []
     if product_ids:
         changes_count = (
@@ -85,21 +84,6 @@ def generate_report(
                 PriceChange.changed_at >= since,
             )
             .scalar() or 0
-        )
-
-        # Savings (price reductions)
-        savings_changes = (
-            db.query(PriceChange)
-            .filter(
-                PriceChange.product_id.in_(product_ids),
-                PriceChange.changed_at >= since,
-                PriceChange.new_seller_price < PriceChange.old_seller_price,
-            )
-            .all()
-        )
-        total_savings = sum(
-            float(c.old_seller_price) - float(c.new_seller_price)
-            for c in savings_changes
         )
 
         # Top 10 most changed products
@@ -210,7 +194,7 @@ def generate_report(
         ("Прогонов", str(total_runs), NEON),
         ("Успешных", f"{completed_runs} ({round(completed_runs / total_runs * 100) if total_runs else 0}%)", (34, 197, 94)),
         ("Обновлений", f"{total_updated:,}".replace(",", " "), (0, 102, 255)),
-        ("Экономия", f"{total_savings:,.0f} руб".replace(",", " "), (22, 163, 74)),
+        ("Изменений цен", str(changes_count), (139, 92, 246)),
     ]
 
     x_start = 10
