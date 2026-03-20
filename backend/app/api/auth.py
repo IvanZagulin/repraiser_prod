@@ -111,6 +111,9 @@ async def register(
     code = generate_code()
     expires_at = datetime.utcnow() + timedelta(minutes=15)
 
+    trial_start = datetime.utcnow()
+    trial_end = trial_start + timedelta(days=7)
+
     user = User(
         email=body.email.lower().strip(),
         password_hash=hash_password(body.password),
@@ -120,6 +123,9 @@ async def register(
         verification_code=code,
         verification_code_expires_at=expires_at,
         verification_attempts=0,
+        trial_started_at=trial_start,
+        trial_ends_at=trial_end,
+        onboarding_completed=False,
     )
     db.add(user)
     try:
@@ -381,13 +387,53 @@ async def change_password_confirm(
 
 
 @router.get("/verify")
-async def verify_token(current_user: Annotated[User, Depends(get_current_user)]):
-    """Проверка валидности токена."""
+async def verify_token(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Проверка валидности токена + информация о плане."""
+    plan_info = None
+    if current_user.plan:
+        plan_info = {
+            "code": current_user.plan.code,
+            "name": current_user.plan.name,
+            "max_sku": current_user.plan.max_sku,
+            "max_accounts": current_user.plan.max_accounts,
+        }
+
+    # Usage counts
+    from app.models import Account, Product
+    accounts_count = db.query(Account).filter(Account.user_id == current_user.id).count()
+    products_count = (
+        db.query(Product)
+        .join(Account, Product.account_id == Account.id)
+        .filter(Account.user_id == current_user.id)
+        .count()
+    )
+
     return {
         "user_id": current_user.id,
         "email": current_user.email,
         "is_admin": current_user.is_admin,
+        "onboarding_completed": current_user.onboarding_completed,
+        "plan": plan_info,
+        "trial_ends_at": current_user.trial_ends_at.isoformat() if current_user.trial_ends_at else None,
+        "usage": {
+            "accounts": accounts_count,
+            "products": products_count,
+        },
     }
+
+
+@router.post("/complete-onboarding", response_model=MessageResponse)
+async def complete_onboarding(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Отмечает онбординг как завершённый."""
+    current_user.onboarding_completed = True
+    db.commit()
+    return MessageResponse(message="Онбординг завершён")
 
 
 # ─── internal helpers ─────────────────────────────────────────────────────────

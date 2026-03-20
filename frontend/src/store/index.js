@@ -16,6 +16,9 @@ function tokenToUser(token) {
     id: payload.user_id ?? null,
     email: payload.sub ?? '',
     isAdmin: payload.is_admin ?? false,
+    onboardingCompleted: null, // will be fetched from API
+    plan: null,
+    trialEndsAt: null,
   };
 }
 

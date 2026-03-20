@@ -147,6 +147,57 @@ export const changePasswordSendCode = () =>
 export const changePasswordConfirm = (code, new_password) =>
   api.post('/api/auth/change-password/confirm', { code, new_password });
 
+// Schedule
+export const getSchedule = () =>
+  api.get('/api/schedule');
+
+export const updateSchedule = (data) =>
+  api.put('/api/schedule', data);
+
+// Analytics
+export const getPriceDynamics = (productId, days = 30) =>
+  api.get(`/api/analytics/product/${productId}/price-dynamics`, { params: { days } });
+
+export const getSavings = (days = 30) =>
+  api.get('/api/analytics/savings', { params: { days } });
+
+export const getCompetitorTrends = (days = 30) =>
+  api.get('/api/analytics/competitor-trends', { params: { days } });
+
+export const getAnalyticsSummary = () =>
+  api.get('/api/analytics/summary');
+
+// Bulk operations
+export const bulkStrategy = (productIds, strategy, config) =>
+  api.post('/api/products/bulk/strategy', { product_ids: productIds, strategy, config });
+
+export const bulkActivate = (productIds, isActive) =>
+  api.post('/api/products/bulk/activate', { product_ids: productIds, is_active: isActive });
+
+export const bulkDelete = (productIds) =>
+  api.post('/api/products/bulk/delete', { product_ids: productIds });
+
+// Activity log
+export const getActivityLog = (params) =>
+  api.get('/api/activity', { params });
+
+export const exportActivityLog = () =>
+  api.get('/api/activity/export', { responseType: 'blob' });
+
+// Onboarding
+export const completeOnboarding = () =>
+  api.post('/api/auth/complete-onboarding');
+
+// Admin
+export const getAdminUsers = () =>
+  api.get('/api/admin/users');
+
+export const assignPlan = (userId, planCode) =>
+  api.put(`/api/admin/users/${userId}/plan`, { plan_code: planCode });
+
+export const getPlans = () =>
+  api.get('/api/admin/plans');
+
 // Settings
 export const getSettings = () =>
   api.get('/api/settings');

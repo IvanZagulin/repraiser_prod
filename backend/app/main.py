@@ -9,7 +9,10 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from app.config import settings
 from app.utils import get_real_ip
-from app.api import auth, accounts, products, repricer, export, settings as settings_api
+from app.api import (
+    auth, accounts, products, repricer, export,
+    settings as settings_api, admin, schedule, analytics, bulk, activity,
+)
 
 
 # ─── Sensitive Data Filter — маскирует JWT и зашифрованные токены в логах ─────
@@ -166,12 +169,17 @@ async def health_check():
 
 
 # Подключаем роутеры
-app.include_router(auth.router,         prefix="/api/auth",     tags=["Authentication"])
-app.include_router(accounts.router,     prefix="/api/accounts", tags=["Accounts"])
-app.include_router(products.router,     prefix="/api/products", tags=["Products"])
-app.include_router(repricer.router,     prefix="/api/repricer", tags=["Repricer"])
-app.include_router(export.router,       prefix="/api/export",   tags=["Import/Export"])
-app.include_router(settings_api.router, prefix="/api/settings", tags=["Settings"])
+app.include_router(auth.router,         prefix="/api/auth",      tags=["Authentication"])
+app.include_router(accounts.router,     prefix="/api/accounts",  tags=["Accounts"])
+app.include_router(products.router,     prefix="/api/products",  tags=["Products"])
+app.include_router(repricer.router,     prefix="/api/repricer",  tags=["Repricer"])
+app.include_router(export.router,       prefix="/api/export",    tags=["Import/Export"])
+app.include_router(settings_api.router, prefix="/api/settings",  tags=["Settings"])
+app.include_router(admin.router,        prefix="/api/admin",     tags=["Admin"])
+app.include_router(schedule.router,     prefix="/api/schedule",  tags=["Schedule"])
+app.include_router(analytics.router,    prefix="/api/analytics", tags=["Analytics"])
+app.include_router(bulk.router,         prefix="/api/products/bulk", tags=["Bulk Operations"])
+app.include_router(activity.router,     prefix="/api/activity",  tags=["Activity Log"])
 
 
 @app.on_event("startup")
@@ -376,7 +384,101 @@ async def startup_db_migration():
             ))
             conn.commit()
 
-            # 7. Seed admin user if no users exist
+            # 7. Plans table + seed data
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS plans (
+                    id SERIAL PRIMARY KEY,
+                    code VARCHAR(50) UNIQUE NOT NULL,
+                    name VARCHAR(100) NOT NULL,
+                    max_sku INTEGER,
+                    max_accounts INTEGER,
+                    price_rub NUMERIC(10,2),
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+                )
+            """))
+            # Seed plans if empty
+            plan_count = conn.execute(text("SELECT COUNT(*) FROM plans")).scalar()
+            if plan_count == 0:
+                conn.execute(text("""
+                    INSERT INTO plans (code, name, max_sku, max_accounts, price_rub) VALUES
+                    ('start',      'Старт',      500,  1, 2990),
+                    ('business',   'Бизнес',     5000, 5, 6990),
+                    ('enterprise', 'Энтерпрайз', NULL, NULL, NULL)
+                """))
+            conn.commit()
+
+            # 7b. User plan/trial/onboarding columns
+            conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+                "plan_id INTEGER REFERENCES plans(id)"
+            ))
+            conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+                "plan_assigned_at TIMESTAMP"
+            ))
+            conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+                "trial_started_at TIMESTAMP"
+            ))
+            conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+                "trial_ends_at TIMESTAMP"
+            ))
+            conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+                "onboarding_completed BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
+            conn.commit()
+
+            # 7c. Repricer schedules table
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS repricer_schedules (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                    interval_minutes INTEGER NOT NULL DEFAULT 60,
+                    work_start_hour INTEGER NOT NULL DEFAULT 0,
+                    work_end_hour INTEGER NOT NULL DEFAULT 24,
+                    timezone VARCHAR(50) NOT NULL DEFAULT 'Europe/Moscow',
+                    paused_days VARCHAR(50),
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """))
+            conn.commit()
+
+            # 7d. Activity logs table
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS activity_logs (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    event_type VARCHAR(50) NOT NULL,
+                    product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+                    account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+                    details TEXT,
+                    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_activity_logs_user_created "
+                "ON activity_logs(user_id, created_at DESC)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_activity_logs_event_type "
+                "ON activity_logs(event_type)"
+            ))
+            conn.commit()
+
+            # 7e. Products: brand/category columns for filtering
+            conn.execute(text(
+                "ALTER TABLE products ADD COLUMN IF NOT EXISTS brand VARCHAR(200)"
+            ))
+            conn.execute(text(
+                "ALTER TABLE products ADD COLUMN IF NOT EXISTS category VARCHAR(200)"
+            ))
+            conn.commit()
+
+            # 8. Seed admin user if no users exist
             count = conn.execute(text("SELECT COUNT(*) FROM users")).scalar()
             if count == 0:
                 hashed = pwd.hash(settings.ADMIN_PASSWORD)

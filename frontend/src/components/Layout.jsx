@@ -2,7 +2,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import {
   Home, Package, LogOut, PlayCircle, FileText,
   SlidersHorizontal, Users, BarChart2, Moon, Sun,
-  AlertTriangle, X,
+  AlertTriangle, X, Clock, ScrollText,
 } from 'lucide-react';
 import { useAuthStore } from '../store';
 import { getAccounts } from '../api/client';
@@ -17,7 +17,9 @@ const navItems = [
   { to: '/products',      icon: Package,           label: 'Товары' },
   { to: '/analytics',     icon: BarChart2,         label: 'Аналитика' },
   { to: '/runs',          icon: PlayCircle,        label: 'Прогоны' },
+  { to: '/schedule',      icon: Clock,             label: 'Расписание' },
   { to: '/accounts',      icon: Users,             label: 'Аккаунты' },
+  { to: '/activity',      icon: ScrollText,        label: 'Журнал' },
   { to: '/import-export', icon: FileText,          label: 'Импорт/Экспорт' },
   { to: '/settings',      icon: SlidersHorizontal, label: 'Настройки' },
 ];
@@ -25,6 +27,7 @@ const navItems = [
 export default function Layout() {
   const navigate = useNavigate();
   const logout   = useAuthStore((s) => s.logout);
+  const user     = useAuthStore((s) => s.user);
 
   const [dark, setDark] = useState(() => localStorage.getItem('theme') === 'dark');
   useEffect(() => {
@@ -107,6 +110,28 @@ export default function Layout() {
             </NavLink>
           ))}
         </nav>
+
+        {/* Plan badge */}
+        {user && (
+          <div className="mx-3 mb-1 rounded-lg p-3 text-xs" style={{ background: 'var(--neon-glow)', border: '1px solid var(--neon-dim)' }}>
+            {user.plan ? (
+              <>
+                <span className="font-semibold" style={{ color: 'var(--neon)' }}>{user.plan.name}</span>
+                <span className="text-muted-foreground ml-1">план</span>
+              </>
+            ) : user.trialEndsAt ? (
+              <>
+                <span className="font-semibold" style={{ color: 'var(--neon)' }}>Пробный период</span>
+                <br />
+                <span className="text-muted-foreground">
+                  до {new Date(user.trialEndsAt).toLocaleDateString('ru-RU')}
+                </span>
+              </>
+            ) : (
+              <span className="text-muted-foreground">Нет активного плана</span>
+            )}
+          </div>
+        )}
 
         {/* Footer */}
         <div className="space-y-0.5 p-3 border-t border-sidebar-border">

@@ -158,6 +158,10 @@ async def create_product(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ):
+    # Plan limit check
+    from app.api.plan_guard import check_sku_limit
+    check_sku_limit(db, current_user)
+
     # Проверяем что аккаунт принадлежит текущему пользователю
     account = db.query(Account).filter(
         Account.id == product_data.account_id,

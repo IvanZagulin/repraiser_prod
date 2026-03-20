@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, Settings, Trash2, Play, Search, LayoutGrid, List, LineChart, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { getProducts, deleteProduct, runRepricer, getSettings, fetchPrices } from '../api/client';
+import { getProducts, deleteProduct, runRepricer, getSettings, fetchPrices, bulkActivate, bulkDelete } from '../api/client';
 import { useProductsStore } from '../store';
 import ProductModal from '../components/ProductModal';
 import ConfigModal from '../components/ConfigModal';
@@ -39,6 +39,10 @@ export default function Products() {
   const [page, setPage] = useState(1);
   const [totalProducts, setTotalProducts] = useState(0);
   const [fetchingPrices, setFetchingPrices] = useState(false);
+  const [selected, setSelected] = useState(new Set());
+  const [filterBrand, setFilterBrand] = useState('');
+  const [filterPriceMin, setFilterPriceMin] = useState('');
+  const [filterPriceMax, setFilterPriceMax] = useState('');
   const isMounted = useRef(true);
 
   // Debounce search input
@@ -50,7 +54,7 @@ export default function Products() {
   // Reload when debounced search or strategy changes
   useEffect(() => {
     loadProducts(1);
-  }, [debouncedSearch, filterStrategy]);
+  }, [debouncedSearch, filterStrategy, filterBrand, filterPriceMin, filterPriceMax]);
 
   useEffect(() => {
     isMounted.current = true;
@@ -70,6 +74,9 @@ export default function Products() {
       const params = { page: p, page_size: PAGE_SIZE };
       if (debouncedSearch) params.search = debouncedSearch;
       if (filterStrategy !== 'all') params.strategy = filterStrategy;
+      if (filterBrand) params.brand = filterBrand;
+      if (filterPriceMin) params.price_min = filterPriceMin;
+      if (filterPriceMax) params.price_max = filterPriceMax;
       const response = await getProducts(params);
       setProducts(response.data.products);
       setTotalProducts(response.data.total);
@@ -155,6 +162,46 @@ export default function Products() {
     setShowHistoryModal(true);
   };
 
+  const toggleSelect = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selected.size === filteredProducts.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(filteredProducts.map((p) => p.id)));
+    }
+  };
+
+  const handleBulkActivate = async (isActive) => {
+    try {
+      await bulkActivate(Array.from(selected), isActive);
+      toast.success(isActive ? 'Товары активированы' : 'Товары деактивированы');
+      setSelected(new Set());
+      loadProducts();
+    } catch {
+      toast.error('Ошибка массовой операции');
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (!confirm(`Удалить ${selected.size} товар(ов)?`)) return;
+    try {
+      await bulkDelete(Array.from(selected));
+      toast.success('Товары удалены');
+      setSelected(new Set());
+      loadProducts();
+    } catch {
+      toast.error('Ошибка массового удаления');
+    }
+  };
+
   // Filtering is now done server-side via search & strategy params
   const filteredProducts = products;
 
@@ -229,6 +276,29 @@ export default function Products() {
             <option value="rrp">РРЦ</option>
             <option value="competitor">Конкурент</option>
           </select>
+          <input
+            type="text"
+            placeholder="Бренд"
+            value={filterBrand}
+            onChange={(e) => setFilterBrand(e.target.value)}
+            className="input w-36"
+          />
+          <input
+            type="number"
+            placeholder="Цена от"
+            value={filterPriceMin}
+            onChange={(e) => setFilterPriceMin(e.target.value)}
+            className="input w-28"
+            min="0"
+          />
+          <input
+            type="number"
+            placeholder="Цена до"
+            value={filterPriceMax}
+            onChange={(e) => setFilterPriceMax(e.target.value)}
+            className="input w-28"
+            min="0"
+          />
           <div className="flex rounded-lg overflow-hidden border border-border bg-muted/50">
             <button
               onClick={() => setViewMode('grid')}
@@ -347,6 +417,14 @@ export default function Products() {
             <table className="dark-table">
               <thead>
                 <tr>
+                  <th style={{ width: 40 }}>
+                    <input
+                      type="checkbox"
+                      checked={filteredProducts.length > 0 && selected.size === filteredProducts.length}
+                      onChange={toggleSelectAll}
+                      className="accent-[var(--primary)]"
+                    />
+                  </th>
                   <th>Артикул</th>
                   <th>Название</th>
                   <th>nmID</th>
@@ -361,6 +439,14 @@ export default function Products() {
               <tbody>
                 {filteredProducts.map((product) => (
                   <tr key={product.id}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={selected.has(product.id)}
+                        onChange={() => toggleSelect(product.id)}
+                        className="accent-[var(--primary)]"
+                      />
+                    </td>
                     <td>
                       <span className="font-medium text-foreground">
                         {product.seller_sku || <span className="text-muted-foreground">#{product.nm_id}</span>}
@@ -490,6 +576,26 @@ export default function Products() {
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>
+        </div>
+      )}
+
+      {selected.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-2xl bg-card border border-border px-6 py-3 shadow-2xl">
+          <span className="text-sm font-medium" style={{ color: 'var(--text-2)' }}>
+            Выбрано: {selected.size}
+          </span>
+          <button onClick={() => handleBulkActivate(true)} className="btn btn-sm btn-primary">
+            Активировать
+          </button>
+          <button onClick={() => handleBulkActivate(false)} className="btn btn-sm btn-secondary">
+            Деактивировать
+          </button>
+          <button onClick={handleBulkDelete} className="btn btn-sm btn-danger">
+            Удалить
+          </button>
+          <button onClick={() => setSelected(new Set())} className="btn btn-sm btn-secondary">
+            Снять выделение
+          </button>
         </div>
       )}
 

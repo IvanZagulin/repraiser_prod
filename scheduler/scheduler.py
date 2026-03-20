@@ -1,11 +1,17 @@
 import asyncio
 import logging
 import sys
+from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 import os
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
 
 # Добавляем путь к приложению
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'backend'))
@@ -32,51 +38,112 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Глобальная ссылка на планировщик
 _scheduler: AsyncIOScheduler = None
-_current_interval_minutes: int = 60
+
+# Фиксированный тик — каждые 5 минут проверяем всех пользователей
+TICK_MINUTES = 5
 
 
-def _read_interval_from_db() -> int:
+def _user_should_run(db, user_id: int) -> bool:
     """
-    Читает минимальный интервал из настроек всех пользователей.
+    Проверяет, нужно ли запускать репрайсер для пользователя:
+    1. План/триал активен
+    2. Текущее время попадает в рабочие часы
+    3. Текущий день не в паузе
+    4. Прошло достаточно времени с последнего прогона
     """
-    try:
-        db = SessionLocal()
+    # Проверка плана/триала
+    user_row = db.execute(
+        text("""
+            SELECT plan_id, trial_ends_at, is_admin
+            FROM users WHERE id = :uid AND is_active = TRUE
+        """),
+        {"uid": user_id}
+    ).fetchone()
+
+    if not user_row:
+        return False
+
+    plan_id, trial_ends_at, is_admin = user_row
+    if not is_admin and not plan_id and (not trial_ends_at or trial_ends_at < datetime.utcnow()):
+        logger.info(f"  user={user_id}: план/триал истёк, пропускаем")
+        return False
+
+    # Читаем пользовательское расписание
+    sched_row = db.execute(
+        text("""
+            SELECT interval_minutes, work_start_hour, work_end_hour,
+                   timezone, paused_days, is_active
+            FROM repricer_schedules WHERE user_id = :uid
+        """),
+        {"uid": user_id}
+    ).fetchone()
+
+    if sched_row:
+        interval_minutes, work_start, work_end, tz_name, paused_days, is_sched_active = sched_row
+
+        if not is_sched_active:
+            logger.info(f"  user={user_id}: расписание отключено, пропускаем")
+            return False
+
+        # Текущее время в таймзоне пользователя
         try:
-            row = db.execute(
-                text("SELECT value FROM app_settings "
-                     "WHERE key = 'repricer_interval_minutes' AND user_id IS NULL")
-            ).fetchone()
-            if row:
-                return max(1, int(row[0]))
-            row = db.execute(
-                text("SELECT MIN(value::int) FROM app_settings "
-                     "WHERE key = 'repricer_interval_minutes'")
-            ).fetchone()
-            if row and row[0]:
-                return max(1, row[0])
-        finally:
-            db.close()
-    except Exception as e:
-        logger.warning(f"Не удалось прочитать интервал из БД: {e}")
-    return 60
+            tz = ZoneInfo(tz_name or "Europe/Moscow")
+        except Exception:
+            tz = ZoneInfo("Europe/Moscow")
+
+        now_user = datetime.now(tz)
+        current_hour = now_user.hour
+        current_dow = now_user.weekday()  # 0=Mon, 6=Sun
+
+        # Проверка рабочих часов
+        if work_end == 24:
+            if current_hour < work_start:
+                logger.info(f"  user={user_id}: вне рабочих часов ({current_hour}h < {work_start}h)")
+                return False
+        else:
+            if current_hour < work_start or current_hour >= work_end:
+                logger.info(f"  user={user_id}: вне рабочих часов ({current_hour}h)")
+                return False
+
+        # Проверка дней паузы (формат: "0,6" = Пн, Вс; используем Python weekday 0=Mon)
+        if paused_days:
+            paused = set()
+            for d in paused_days.split(","):
+                d = d.strip()
+                if d.isdigit():
+                    paused.add(int(d))
+            if current_dow in paused:
+                logger.info(f"  user={user_id}: день паузы ({current_dow})")
+                return False
+    else:
+        interval_minutes = 60  # default
+
+    # Проверка: прошло ли достаточно времени с последнего прогона
+    last_run = db.execute(
+        text("""
+            SELECT started_at FROM repricer_runs
+            WHERE user_id = :uid
+            ORDER BY started_at DESC LIMIT 1
+        """),
+        {"uid": user_id}
+    ).fetchone()
+
+    if last_run and last_run[0]:
+        elapsed = (datetime.utcnow() - last_run[0]).total_seconds() / 60
+        if elapsed < interval_minutes - 2:  # 2-минутный буфер
+            return False
+
+    return True
 
 
 async def repricer_job():
     """
-    Читает активных пользователей и отправляет задачу репрайсера
-    в Celery-воркер для каждого. Воркеры обрабатывают пользователей параллельно.
+    Тик планировщика (каждые 5 мин): проверяет каждого пользователя
+    и запускает репрайсер если подошло время по его расписанию.
     """
-    global _scheduler, _current_interval_minutes
-
     logger.info("=" * 70)
-    logger.info("Планировщик: отправка задач репрайсера в Celery")
+    logger.info("Планировщик: проверка пользователей")
     logger.info("=" * 70)
-
-    new_interval = _read_interval_from_db()
-    if new_interval != _current_interval_minutes and _scheduler is not None:
-        logger.info(f"Интервал изменён: {_current_interval_minutes} → {new_interval} мин.")
-        _current_interval_minutes = new_interval
-        _scheduler.reschedule_job('repricer_job', trigger=IntervalTrigger(minutes=new_interval))
 
     db = SessionLocal()
     try:
@@ -91,6 +158,10 @@ async def repricer_job():
         dispatched = 0
         for (user_id,) in users:
             try:
+                # Проверяем расписание, план, рабочие часы
+                if not _user_should_run(db, user_id):
+                    continue
+
                 # Проверяем наличие товаров С активными конфигами
                 product_rows = db.execute(
                     text("""
@@ -145,7 +216,7 @@ async def health_check_proxies():
         logger.info(f"Health check завершен: {stats}")
 
         if stats['alive'] == 0 and stats['total'] > 0:
-            logger.critical("⚠️ ВСЕ ПРОКСИ МЕРТВЫ!")
+            logger.critical("ВСЕ ПРОКСИ МЕРТВЫ!")
             await telegram_notifier.notify_all_proxies_dead()
 
     except Exception as e:
@@ -165,19 +236,20 @@ async def catalog_sync_job():
     logger.info("=" * 70)
 
 
-def setup_scheduler(interval_minutes: int) -> AsyncIOScheduler:
+def setup_scheduler() -> AsyncIOScheduler:
     """Настройка и запуск планировщика"""
     scheduler = AsyncIOScheduler(timezone="UTC")
 
+    # Единый тик каждые 5 минут — внутри проверяется per-user расписание
     scheduler.add_job(
         repricer_job,
-        trigger=IntervalTrigger(minutes=interval_minutes),
+        trigger=IntervalTrigger(minutes=TICK_MINUTES),
         id="repricer_job",
-        name="Repricer Job",
+        name="Repricer Tick",
         replace_existing=True,
         max_instances=1
     )
-    logger.info(f"✓ Задача 'repricer_job' зарегистрирована (каждые {interval_minutes} мин.)")
+    logger.info(f"Задача 'repricer_job' зарегистрирована (тик каждые {TICK_MINUTES} мин.)")
 
     scheduler.add_job(
         health_check_proxies,
@@ -186,7 +258,7 @@ def setup_scheduler(interval_minutes: int) -> AsyncIOScheduler:
         name="Proxy Health Check",
         replace_existing=True
     )
-    logger.info("✓ Задача 'proxy_health_check' зарегистрирована (каждые 30 мин.)")
+    logger.info("Задача 'proxy_health_check' зарегистрирована (каждые 30 мин.)")
 
     scheduler.add_job(
         catalog_sync_job,
@@ -196,7 +268,7 @@ def setup_scheduler(interval_minutes: int) -> AsyncIOScheduler:
         replace_existing=True,
         max_instances=1,
     )
-    logger.info("✓ Задача 'catalog_sync_job' зарегистрирована (раз в неделю)")
+    logger.info("Задача 'catalog_sync_job' зарегистрирована (раз в неделю)")
 
     return scheduler
 
@@ -217,9 +289,9 @@ async def startup():
         db = SessionLocal()
         db.execute(text("SELECT 1"))
         db.close()
-        logger.info("✓ Подключение к БД успешно")
+        logger.info("Подключение к БД успешно")
     except Exception as e:
-        logger.error(f"✗ Ошибка подключения к БД: {e}")
+        logger.error(f"Ошибка подключения к БД: {e}")
         raise
 
     logger.info("=" * 70)
@@ -229,30 +301,17 @@ async def startup():
 
 async def main():
     """Главная функция"""
-    global _scheduler, _current_interval_minutes
+    global _scheduler
 
     try:
         await startup()
 
-        _current_interval_minutes = _read_interval_from_db()
-        logger.info(f"Интервал репрайсера из БД: {_current_interval_minutes} мин.")
-
-        _scheduler = setup_scheduler(_current_interval_minutes)
+        _scheduler = setup_scheduler()
         _scheduler.start()
-        logger.info("Планировщик запущен. Задачи отправляются в Celery.")
+        logger.info("Планировщик запущен. Per-user расписания активны.")
 
         while True:
             await asyncio.sleep(60)
-            new_interval = _read_interval_from_db()
-            if new_interval != _current_interval_minutes:
-                logger.info(
-                    f"Интервал изменён в БД: {_current_interval_minutes} → {new_interval} мин."
-                )
-                _current_interval_minutes = new_interval
-                _scheduler.reschedule_job(
-                    'repricer_job',
-                    trigger=IntervalTrigger(minutes=new_interval)
-                )
 
     except KeyboardInterrupt:
         logger.info("Получен сигнал завершения (Ctrl+C)")

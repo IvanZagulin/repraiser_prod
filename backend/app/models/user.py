@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, SmallInteger
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, SmallInteger, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -29,9 +29,17 @@ class User(Base):
     # JWT invalidation: инкрементируется при смене пароля → старые токены перестают работать
     token_version = Column(SmallInteger, default=1, nullable=False)
 
+    # Plan / Trial
+    plan_id          = Column(Integer, ForeignKey("plans.id"), nullable=True)
+    plan_assigned_at = Column(DateTime, nullable=True)
+    trial_started_at = Column(DateTime, nullable=True)
+    trial_ends_at    = Column(DateTime, nullable=True)
+    onboarding_completed = Column(Boolean, default=False, nullable=False)
+
     # Relationships
     accounts = relationship("Account", back_populates="user", cascade="all, delete-orphan")
     settings = relationship("AppSetting", back_populates="user", cascade="all, delete-orphan")
+    plan     = relationship("Plan", lazy="joined")
 
     def __repr__(self):
         return f"<User {self.id}: {self.email}>"

@@ -57,6 +57,10 @@ async def create_account(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Создать новый WB-аккаунт"""
+    # Plan limit check
+    from app.api.plan_guard import check_account_limit
+    check_account_limit(db, current_user)
+
     token_expires_at = get_token_expiration(account_data.wb_api_token)
     account = Account(
         user_id=current_user.id,

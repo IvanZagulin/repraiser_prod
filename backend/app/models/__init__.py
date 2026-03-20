@@ -7,6 +7,9 @@ from app.models.price_snapshot import PriceSnapshot
 from app.models.repricer_run import RepricerRun
 from app.models.price_change import PriceChange
 from app.models.app_setting import AppSetting
+from app.models.plan import Plan
+from app.models.repricer_schedule import RepricerSchedule
+from app.models.activity_log import ActivityLog
 
 __all__ = [
     "User",
@@ -18,4 +21,7 @@ __all__ = [
     "RepricerRun",
     "PriceChange",
     "AppSetting",
+    "Plan",
+    "RepricerSchedule",
+    "ActivityLog",
 ]
