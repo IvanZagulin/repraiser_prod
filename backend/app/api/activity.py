@@ -17,7 +17,7 @@ from app.api.auth import get_current_user
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("")
 def list_activity(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),

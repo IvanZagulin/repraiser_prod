@@ -295,48 +295,10 @@ export default function SettingsPage() {
 
       {/* Профиль и смена пароля */}
       <ChangePasswordBlock userEmail={user?.email || ''} />
-      <div className="grid gap-6 items-start" style={{ gridTemplateColumns: '1fr 1.4fr' }}>
 
-        {/* Левая колонка: Кошелёк */}
-        <div className="space-y-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-        {/* WB Кошелёк */}
-        <div className="card">
-          <div className="flex items-center space-x-3 mb-6">
-            <div className="bg-green-50 p-2 rounded-lg">
-              <Wallet className="w-5 h-5 text-green-600" />
-            </div>
-            <div>
-              <h2 className="text-lg font-semibold text-foreground">Скидка WB Кошелька</h2>
-              <p className="text-sm text-muted-foreground">Дополнительная скидка для владельцев WB Кошелька</p>
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-1">
-              Процент скидки (%)
-            </label>
-            <input
-              type="number"
-              min="0"
-              max="10"
-              step="0.1"
-              value={walletPct}
-              onChange={(e) => setWalletPct(parseFloat(e.target.value) || 0)}
-              className="input w-full"
-            />
-            <p className="text-xs text-muted-foreground mt-2">
-              Пример: цена после СПП {exampleFinal.toLocaleString('ru')}₽ → с кошельком{' '}
-              <span className="font-medium text-green-600">{exampleWallet.toLocaleString('ru')}₽</span>
-            </p>
-            <p className="text-xs text-muted-foreground mt-1">
-              Используется только для отображения в таблице товаров. На расчёт РРЦ не влияет.
-            </p>
-          </div>
-        </div>
-
-        </div>{/* /Левая колонка */}
-
-        {/* Правая колонка: Расчёт маржи */}
+        {/* Расходы для расчёта маржи */}
         <div className="card">
           <div className="flex items-center space-x-3 mb-6">
             <div className="bg-cyan-50 p-2 rounded-lg dark:bg-cyan-950/20">
@@ -400,26 +362,76 @@ export default function SettingsPage() {
           <p className="text-xs text-muted-foreground mt-3">
             Себестоимость товаров загружается через раздел Импорт / Экспорт.
           </p>
+        </div>
 
-          {/* Мин. маржа */}
-          <div className="mt-4 pt-4 border-t border-green-200 dark:border-green-900">
-            <label className="block text-sm font-medium text-foreground mb-1">
-              Мин. маржа — Margin Guard (%)
-            </label>
-            <input
-              type="number"
-              min="0"
-              step="0.5"
-              value={minMarginPct}
-              onChange={e => setMinMarginPct(parseFloat(e.target.value) || 0)}
-              className="input w-full text-sm"
-              placeholder="0"
-            />
-            <p className="text-xs text-muted-foreground mt-1">
-              Репрайсер не опустит цену ниже уровня при котором маржа меньше этого порога.
-              0 = выключено.
-            </p>
+        {/* Правая колонка: Кошелёк + Margin Guard */}
+        <div className="space-y-6">
+
+          {/* WB Кошелёк */}
+          <div className="card">
+            <div className="flex items-center space-x-3 mb-6">
+              <div className="bg-green-50 p-2 rounded-lg dark:bg-green-950/20">
+                <Wallet className="w-5 h-5 text-green-600" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-foreground">Скидка WB Кошелька</h2>
+                <p className="text-sm text-muted-foreground">Дополнительная скидка для владельцев WB Кошелька</p>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-foreground mb-1">
+                Процент скидки (%)
+              </label>
+              <input
+                type="number"
+                min="0"
+                max="10"
+                step="0.1"
+                value={walletPct}
+                onChange={(e) => setWalletPct(parseFloat(e.target.value) || 0)}
+                className="input w-full"
+              />
+              <p className="text-xs text-muted-foreground mt-2">
+                Пример: цена после СПП {exampleFinal.toLocaleString('ru')}₽ → с кошельком{' '}
+                <span className="font-medium text-green-600">{exampleWallet.toLocaleString('ru')}₽</span>
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Используется только для отображения в таблице товаров. На расчёт РРЦ не влияет.
+              </p>
+            </div>
           </div>
+
+          {/* Мин. маржа — Margin Guard */}
+          <div className="card">
+            <div className="flex items-center space-x-3 mb-6">
+              <div className="bg-amber-50 p-2 rounded-lg dark:bg-amber-950/20">
+                <TrendingUp className="w-5 h-5 text-amber-600" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-foreground">Margin Guard</h2>
+                <p className="text-sm text-muted-foreground">Минимальная допустимая маржа</p>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-foreground mb-1">
+                Мин. маржа (%)
+              </label>
+              <input
+                type="number"
+                min="0"
+                step="0.5"
+                value={minMarginPct}
+                onChange={e => setMinMarginPct(parseFloat(e.target.value) || 0)}
+                className="input w-full text-sm"
+                placeholder="0"
+              />
+              <p className="text-xs text-muted-foreground mt-2">
+                Репрайсер не опустит цену ниже уровня при котором маржа меньше этого порога.
+                0 = выключено.
+              </p>
+            </div>
+          </div>
+
         </div>{/* /Правая колонка */}
 
       </div>{/* /grid */}

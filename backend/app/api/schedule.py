@@ -73,7 +73,7 @@ class ScheduleUpdate(BaseModel):
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/", response_model=ScheduleOut)
+@router.get("", response_model=ScheduleOut)
 def get_schedule(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -97,7 +97,7 @@ def get_schedule(
     )
 
 
-@router.put("/", response_model=ScheduleOut)
+@router.put("", response_model=ScheduleOut)
 def update_schedule(
     body: ScheduleUpdate,
     db: Session = Depends(get_db),
