@@ -23,13 +23,16 @@ import ProductDetailPage from './pages/ProductDetailPage';
 
 function isTokenExpired(token) {
   try {
-    const base64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-    const payload = JSON.parse(atob(base64));
+    // JWT payload is base64url — need to add padding for atob()
+    const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
+    const payload = JSON.parse(atob(padded));
     if (!payload.exp) return false;
-    // 60s buffer to avoid edge-case race
+    // token is expired if exp was MORE than 60s ago
     return payload.exp * 1000 < Date.now() - 60000;
   } catch {
-    return true;
+    // Can't parse → don't assume expired; let server decide via verifyToken
+    return false;
   }
 }
 
@@ -40,10 +43,15 @@ function ProtectedRoute({ children }) {
   const setUser = useAuthStore((state) => state.setUser);
   const [checking, setChecking] = useState(true);
   const [onboardingDone, setOnboardingDone] = useState(true);
+  const [shouldRedirect, setShouldRedirect] = useState(false);
 
   useEffect(() => {
-    if (!token || isTokenExpired(token)) {
-      if (token) logout();
+    if (!token) {
+      setChecking(false);
+      return;
+    }
+    if (isTokenExpired(token)) {
+      logout();
       setChecking(false);
       return;
     }
@@ -63,12 +71,14 @@ function ProtectedRoute({ children }) {
         });
         setOnboardingDone(data.onboarding_completed !== false);
       })
-      .catch(() => {})
+      .catch(() => {
+        // verifyToken failed — let interceptor handle if 401, else stay logged in
+      })
       .finally(() => setChecking(false));
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!token || isTokenExpired(token)) {
-    if (token) logout();
+  // Redirect to login if no token (no side effects in render)
+  if (!token) {
     return <Navigate to="/login" replace />;
   }
 
