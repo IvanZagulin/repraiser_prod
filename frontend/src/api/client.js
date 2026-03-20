@@ -32,7 +32,8 @@ api.interceptors.response.use(
                          url.includes('/auth/register') ||
                          url.includes('/auth/forgot-password') ||
                          url.includes('/auth/reset-password') ||
-                         url.includes('/auth/verify-email');
+                         url.includes('/auth/verify-email') ||
+                         url.includes('/auth/verify');  // не выкидываем при transient 401 на startup-check
       const skipRedirect = error.config?.skipAuthRedirect === true;
       if (!isAuthCall && !skipRedirect) {
         localStorage.removeItem('token');
