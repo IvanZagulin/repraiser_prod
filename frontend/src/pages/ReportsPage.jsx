@@ -28,13 +28,9 @@ export default function ReportsPage() {
       const link = document.createElement('a');
       link.href = url;
 
-      // Extract filename from content-disposition or generate one
-      const cd = res.headers?.['content-disposition'];
-      let filename = `QUASAR-X_report_${days}d.pdf`;
-      if (cd) {
-        const match = cd.match(/filename="?([^"]+)"?/);
-        if (match) filename = match[1].replace(/['"]/g, '');
-      }
+      // Generate clean filename — ignore content-disposition to avoid .pdf_ issue
+      const today = new Date().toISOString().slice(0, 10);
+      const filename = `QUASAR-X_report_${days}d_${today}.pdf`;
 
       link.setAttribute('download', filename);
       document.body.appendChild(link);
@@ -81,7 +77,7 @@ export default function ReportsPage() {
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6">
               {[
                 'Сводка по прогонам',
-                'Экономия от снижений',
+                'Изменения цен',
                 'Топ товаров по изменениям',
                 'Стратегии товаров',
                 'Список аккаунтов',

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Plus, Settings, Trash2, Play, Search, LayoutGrid, List, LineChart, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getProducts, deleteProduct, runRepricer, getSettings, fetchPrices, bulkActivate, bulkDelete } from '../api/client';
@@ -26,6 +27,7 @@ const getWBImageUrl = (nmId) => {
 };
 
 export default function Products() {
+  const navigate = useNavigate();
   const { products, setProducts, loading, setLoading, removeProduct } = useProductsStore();
   const [showProductModal, setShowProductModal] = useState(false);
   const [showConfigModal, setShowConfigModal] = useState(false);
@@ -333,7 +335,7 @@ export default function Products() {
         /* Card Grid — компактный вид */
         <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-3">
           {filteredProducts.map((product) => (
-            <div key={product.id} className="product-card">
+            <div key={product.id} className="product-card cursor-pointer" onClick={() => navigate(`/products/${product.id}`)}>
               {/* Image container */}
               <div className="relative overflow-hidden bg-muted" style={{ paddingBottom: '120%' }}>
                 {(product.image_url || getWBImageUrl(product.nm_id)) && (
@@ -364,6 +366,7 @@ export default function Products() {
                 <div
                   className="absolute inset-0 flex items-center justify-center gap-1 opacity-0 hover:opacity-100 transition-opacity"
                   style={{ background: 'rgba(0,0,0,.65)' }}
+                  onClick={(e) => e.stopPropagation()}
                 >
                   <button onClick={() => handleRunRepricer(product.seller_sku)} className="btn btn-xs btn-primary p-1" title="Запустить">
                     <Play className="w-3 h-3" />
@@ -438,8 +441,8 @@ export default function Products() {
               </thead>
               <tbody>
                 {filteredProducts.map((product) => (
-                  <tr key={product.id}>
-                    <td>
+                  <tr key={product.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/products/${product.id}`)}>
+                    <td onClick={(e) => e.stopPropagation()}>
                       <input
                         type="checkbox"
                         checked={selected.has(product.id)}
@@ -493,7 +496,7 @@ export default function Products() {
                       )}
                     </td>
                     <td>{getStatusBadge(product)}</td>
-                    <td>
+                    <td onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1.5">
                         <button
                           onClick={() => handleRunRepricer(product.seller_sku)}

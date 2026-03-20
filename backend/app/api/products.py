@@ -1,13 +1,15 @@
 from typing import Annotated, Optional
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, or_, cast, String
+from sqlalchemy import desc, or_, cast, String, func, and_
 from slowapi import Limiter
 
 from app.database import get_db
 from app.models import Product, ProductConfig, PriceSnapshot, Account
 from app.models.user import User
 from app.models.competitor_entry import CompetitorEntry
+from app.models.price_change import PriceChange
 from app.schemas.product import (
     ProductCreate, ProductResponse, ProductWithPriceResponse,
     ProductListResponse, ProductConfigCreate, ProductConfigUpdate,
@@ -392,5 +394,185 @@ async def get_product_history(
                 "competitor_nm_id":  s.competitor_nm_id,
             }
             for s in snapshots
+        ],
+    }
+
+
+@router.get("/{product_id}/detail")
+async def get_product_detail(
+    product_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Full product detail: info, config, latest snapshot, price changes, stats."""
+    product = _user_product(db, product_id, current_user)
+
+    # Settings for margin calculation
+    uid = current_user.id
+    commission_type = _get_setting(db, "commission_type", "pct", uid)
+    commission_value = float(_get_setting(db, "commission_value", "0.0", uid))
+    logistics_type = _get_setting(db, "logistics_type", "rub", uid)
+    logistics_value = float(_get_setting(db, "logistics_value", "0.0", uid))
+    acquiring_type = _get_setting(db, "acquiring_type", "pct", uid)
+    acquiring_value = float(_get_setting(db, "acquiring_value", "0.0", uid))
+
+    # Latest snapshot
+    latest_snap = (
+        db.query(PriceSnapshot)
+        .filter(PriceSnapshot.product_id == product_id)
+        .order_by(desc(PriceSnapshot.snapshot_at))
+        .first()
+    )
+
+    # Snapshots for chart (last 30 days)
+    since_30d = datetime.utcnow() - timedelta(days=30)
+    snapshots = (
+        db.query(PriceSnapshot)
+        .filter(PriceSnapshot.product_id == product_id, PriceSnapshot.snapshot_at >= since_30d)
+        .order_by(PriceSnapshot.snapshot_at.asc())
+        .all()
+    )
+
+    # Price changes (last 50)
+    changes = (
+        db.query(PriceChange)
+        .filter(PriceChange.product_id == product_id)
+        .order_by(desc(PriceChange.changed_at))
+        .limit(50)
+        .all()
+    )
+
+    # Stats
+    total_changes = (
+        db.query(func.count(PriceChange.id))
+        .filter(PriceChange.product_id == product_id)
+        .scalar() or 0
+    )
+    changes_7d = (
+        db.query(func.count(PriceChange.id))
+        .filter(
+            PriceChange.product_id == product_id,
+            PriceChange.changed_at >= datetime.utcnow() - timedelta(days=7),
+        )
+        .scalar() or 0
+    )
+    total_snapshots = (
+        db.query(func.count(PriceSnapshot.id))
+        .filter(PriceSnapshot.product_id == product_id)
+        .scalar() or 0
+    )
+
+    # Min/max prices over 30d
+    price_min_30d = None
+    price_max_30d = None
+    if snapshots:
+        prices = [float(s.seller_price) for s in snapshots if s.seller_price]
+        if prices:
+            price_min_30d = min(prices)
+            price_max_30d = max(prices)
+
+    # Margin calculation
+    margin = None
+    fees_total = None
+    if latest_snap and product.cost_price and float(product.cost_price) > 0:
+        sp = float(latest_snap.seller_price)
+        cost = float(product.cost_price)
+        fees = 0.0
+        for ftype, fval in [
+            (commission_type, commission_value),
+            (logistics_type, logistics_value),
+            (acquiring_type, acquiring_value),
+        ]:
+            fees += sp * fval / 100 if ftype == "pct" else fval
+        fees_total = round(fees, 2)
+        margin = round((sp - cost - fees) / cost * 100, 1)
+
+    # Config with competitors
+    config_data = None
+    if product.config:
+        competitors = []
+        if product.config.competitors:
+            competitors = [
+                {"nm_id": c.nm_id, "alias": c.alias}
+                for c in product.config.competitors
+            ]
+        config_data = {
+            "id": product.config.id,
+            "strategy": product.config.strategy,
+            "is_active": product.config.is_active,
+            "min_price": float(product.config.min_price) if product.config.min_price else None,
+            "max_price": float(product.config.max_price) if product.config.max_price else None,
+            "rrp_price": float(product.config.rrp_price) if product.config.rrp_price else None,
+            "rrp_tolerance": float(product.config.rrp_tolerance) if product.config.rrp_tolerance else None,
+            "rrp_consider_wallet": product.config.rrp_consider_wallet,
+            "competitor_nm_id": product.config.competitor_nm_id,
+            "competitor_offset_type": product.config.competitor_offset_type,
+            "competitor_offset_direction": product.config.competitor_offset_direction,
+            "competitor_offset_value": float(product.config.competitor_offset_value) if product.config.competitor_offset_value else None,
+            "competitor_select_rule": product.config.competitor_select_rule,
+            "competitors": competitors,
+            "updated_at": product.config.updated_at.isoformat() if product.config.updated_at else None,
+        }
+
+    return {
+        "product": {
+            "id": product.id,
+            "nm_id": product.nm_id,
+            "seller_sku": product.seller_sku,
+            "name": product.name,
+            "image_url": product.image_url,
+            "cost_price": float(product.cost_price) if product.cost_price else None,
+            "account_id": product.account_id,
+            "created_at": product.created_at.isoformat(),
+            "updated_at": product.updated_at.isoformat(),
+        },
+        "config": config_data,
+        "current_price": {
+            "seller_price": float(latest_snap.seller_price) if latest_snap else None,
+            "final_price": float(latest_snap.final_price) if latest_snap else None,
+            "spp": float(latest_snap.spp) if latest_snap and latest_snap.spp else None,
+            "discount": float(latest_snap.discount) if latest_snap and latest_snap.discount else None,
+            "competitor_price": float(latest_snap.competitor_price) if latest_snap and latest_snap.competitor_price else None,
+            "competitor_nm_id": latest_snap.competitor_nm_id if latest_snap else None,
+            "in_stock": latest_snap.total_quantity > 0 if latest_snap and latest_snap.total_quantity else False,
+            "is_in_promo": latest_snap.is_in_promo if latest_snap else False,
+            "snapshot_at": latest_snap.snapshot_at.isoformat() if latest_snap else None,
+        } if latest_snap else None,
+        "margin": {
+            "value": margin,
+            "fees_total": fees_total,
+            "cost_price": float(product.cost_price) if product.cost_price else None,
+        },
+        "stats": {
+            "total_changes": total_changes,
+            "changes_7d": changes_7d,
+            "total_snapshots": total_snapshots,
+            "price_min_30d": price_min_30d,
+            "price_max_30d": price_max_30d,
+        },
+        "snapshots": [
+            {
+                "snapshot_at": s.snapshot_at.isoformat(),
+                "seller_price": float(s.seller_price),
+                "final_price": float(s.final_price),
+                "competitor_price": float(s.competitor_price) if s.competitor_price else None,
+                "spp": float(s.spp) if s.spp else None,
+                "is_in_promo": s.is_in_promo,
+                "in_stock": s.total_quantity > 0 if s.total_quantity else False,
+            }
+            for s in snapshots
+        ],
+        "changes": [
+            {
+                "id": c.id,
+                "old_seller_price": float(c.old_seller_price),
+                "new_seller_price": float(c.new_seller_price) if c.new_seller_price else None,
+                "old_final_price": float(c.old_final_price),
+                "new_final_price": float(c.new_final_price) if c.new_final_price else None,
+                "reason_code": c.reason_code,
+                "reason_message": c.reason_message,
+                "changed_at": c.changed_at.isoformat(),
+            }
+            for c in changes
         ],
     }

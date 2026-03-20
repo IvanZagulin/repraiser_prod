@@ -103,6 +103,9 @@ export const updateProductConfig = (productId, data) =>
 export const getProductHistory = (productId, limit = 100) =>
   api.get(`/api/products/${productId}/history`, { params: { limit } });
 
+export const getProductDetail = (productId) =>
+  api.get(`/api/products/${productId}/detail`);
+
 // Repricer
 export const runRepricer = (sellerSkus) =>
   api.post('/api/repricer/run-sync', { seller_skus: sellerSkus });

@@ -19,6 +19,7 @@ import Analytics from './pages/Analytics';
 import SchedulePage from './pages/SchedulePage';
 import ActivityLogPage from './pages/ActivityLogPage';
 import ReportsPage from './pages/ReportsPage';
+import ProductDetailPage from './pages/ProductDetailPage';
 
 function isTokenExpired(token) {
   try {
@@ -120,6 +121,7 @@ function App() {
         >
           <Route index element={<Dashboard />} />
           <Route path="products" element={<Products />} />
+          <Route path="products/:productId" element={<ProductDetailPage />} />
           <Route path="accounts" element={<Accounts />} />
           <Route path="runs" element={<Runs />} />
           <Route path="analytics" element={<Analytics />} />
