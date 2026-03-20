@@ -12,7 +12,7 @@ from app.utils import get_real_ip
 from app.api import (
     auth, accounts, products, repricer, export,
     settings as settings_api, admin, schedule, analytics, bulk, activity,
-    reports,
+    reports, alerts, groups, audit,
 )
 
 
@@ -183,6 +183,9 @@ app.include_router(analytics.router,    prefix="/api/analytics", tags=["Analytic
 app.include_router(bulk.router,         prefix="/api/products/bulk", tags=["Bulk Operations"])
 app.include_router(activity.router,     prefix="/api/activity",  tags=["Activity Log"])
 app.include_router(reports.router,      prefix="/api/reports",   tags=["Reports"])
+app.include_router(alerts.router,       prefix="/api/alerts",    tags=["Competitor Alerts"])
+app.include_router(groups.router,       prefix="/api/groups",    tags=["Product Groups"])
+app.include_router(audit.router,        prefix="/api/audit",     tags=["Audit Log"])
 
 
 @app.on_event("startup")
@@ -478,6 +481,88 @@ async def startup_db_migration():
             ))
             conn.execute(text(
                 "ALTER TABLE products ADD COLUMN IF NOT EXISTS category VARCHAR(200)"
+            ))
+            conn.commit()
+
+            # 7f. Config change log (F4 audit)
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS config_change_log (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+                    field_name VARCHAR(50) NOT NULL,
+                    old_value VARCHAR(255),
+                    new_value VARCHAR(255),
+                    changed_at TIMESTAMP NOT NULL DEFAULT NOW()
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_config_change_log_user "
+                "ON config_change_log(user_id, changed_at DESC)"
+            ))
+            conn.commit()
+
+            # 7g. Product groups & membership (F6)
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS product_groups (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    name VARCHAR(100) NOT NULL,
+                    color VARCHAR(7) NOT NULL DEFAULT '#7c3aed',
+                    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_product_groups_user "
+                "ON product_groups(user_id)"
+            ))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS product_group_membership (
+                    id SERIAL PRIMARY KEY,
+                    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+                    group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE,
+                    CONSTRAINT uq_product_group UNIQUE (product_id, group_id)
+                )
+            """))
+            conn.commit()
+
+            # 7h. Competitor alerts (F5)
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS competitor_alerts (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+                    competitor_nm_id BIGINT NOT NULL,
+                    old_price NUMERIC(10, 2) NOT NULL,
+                    new_price NUMERIC(10, 2) NOT NULL,
+                    change_pct NUMERIC(5, 1) NOT NULL,
+                    is_read BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_competitor_alerts_user "
+                "ON competitor_alerts(user_id, is_read, created_at DESC)"
+            ))
+            conn.commit()
+
+            # 7i. Pricing rules (F9)
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS pricing_rules (
+                    id SERIAL PRIMARY KEY,
+                    product_config_id INTEGER NOT NULL REFERENCES product_config(id) ON DELETE CASCADE,
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    condition_type VARCHAR(30) NOT NULL,
+                    condition_value VARCHAR(50),
+                    action_type VARCHAR(30) NOT NULL,
+                    action_value VARCHAR(50) NOT NULL,
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_pricing_rules_config "
+                "ON pricing_rules(product_config_id)"
             ))
             conn.commit()
 

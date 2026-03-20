@@ -5,7 +5,7 @@ celery_app = Celery(
     "repricer",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
-    include=["app.tasks.repricer_task", "app.tasks.catalog_sync"],
+    include=["app.tasks.repricer_task", "app.tasks.catalog_sync", "app.tasks.competitor_monitor"],
 )
 
 celery_app.conf.update(

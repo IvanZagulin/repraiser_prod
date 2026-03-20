@@ -252,4 +252,30 @@ export const getDashboardData = () =>
     getActivityLog({ page: 1, page_size: 5 }).catch(() => ({ data: { items: [] } })),
   ]);
 
+// --- Groups / Tags (F6) ---
+export const getGroups = () => api.get('/api/groups');
+export const createGroup = (data) => api.post('/api/groups', data);
+export const updateGroup = (id, data) => api.put(`/api/groups/${id}`, data);
+export const deleteGroup = (id) => api.delete(`/api/groups/${id}`);
+export const addProductsToGroup = (groupId, productIds) =>
+  api.post(`/api/groups/${groupId}/products`, { product_ids: productIds });
+export const removeProductsFromGroup = (groupId, productIds) =>
+  api.delete(`/api/groups/${groupId}/products`, { data: { product_ids: productIds } });
+
+// --- Competitor Alerts (F5) ---
+export const getAlerts = (params) => api.get('/api/alerts', { params });
+export const getAlertCount = () => api.get('/api/alerts/count');
+export const markAlertRead = (id) => api.put(`/api/alerts/${id}/read`);
+export const markAllAlertsRead = () => api.put('/api/alerts/read-all');
+
+// --- Config Audit Log (F4) ---
+export const getProductAuditLog = (productId) => api.get(`/api/audit/product/${productId}`);
+export const getRecentAuditLog = (limit = 50) => api.get('/api/audit/recent', { params: { limit } });
+
+// --- Pricing Rules (F9) ---
+export const getProductRules = (productId) => api.get(`/api/products/${productId}/rules`);
+export const createProductRule = (productId, data) => api.post(`/api/products/${productId}/rules`, data);
+export const updateProductRule = (productId, ruleId, data) => api.put(`/api/products/${productId}/rules/${ruleId}`, data);
+export const deleteProductRule = (productId, ruleId) => api.delete(`/api/products/${productId}/rules/${ruleId}`);
+
 export default api;

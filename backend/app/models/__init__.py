@@ -10,6 +10,10 @@ from app.models.app_setting import AppSetting
 from app.models.plan import Plan
 from app.models.repricer_schedule import RepricerSchedule
 from app.models.activity_log import ActivityLog
+from app.models.config_change_log import ConfigChangeLog
+from app.models.product_group import ProductGroup, ProductGroupMembership
+from app.models.competitor_alert import CompetitorAlert
+from app.models.pricing_rule import PricingRule
 
 __all__ = [
     "User",
@@ -24,4 +28,9 @@ __all__ = [
     "Plan",
     "RepricerSchedule",
     "ActivityLog",
+    "ConfigChangeLog",
+    "ProductGroup",
+    "ProductGroupMembership",
+    "CompetitorAlert",
+    "PricingRule",
 ]
