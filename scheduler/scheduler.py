@@ -236,6 +236,27 @@ async def catalog_sync_job():
     logger.info("=" * 70)
 
 
+async def competitor_monitor_job():
+    """Каждые 30 минут: мониторинг цен конкурентов для всех пользователей."""
+    logger.info("Планировщик: мониторинг цен конкурентов")
+    try:
+        import sys
+        sys.path.insert(0, "/app")
+        from app.database import SessionLocal
+        from app.models.user import User
+        from app.tasks.competitor_monitor import monitor_competitors_task
+        db = SessionLocal()
+        try:
+            user_ids = [uid for (uid,) in db.query(User.id).filter(User.is_active == True).all()]
+        finally:
+            db.close()
+        for uid in user_ids:
+            monitor_competitors_task.delay(uid)
+        logger.info(f"Задача monitor_competitors_task поставлена в очередь для {len(user_ids)} пользователей")
+    except Exception as e:
+        logger.error(f"Ошибка при запуске competitor_monitor_job: {e}", exc_info=True)
+
+
 def setup_scheduler() -> AsyncIOScheduler:
     """Настройка и запуск планировщика"""
     scheduler = AsyncIOScheduler(timezone="UTC")
@@ -269,6 +290,16 @@ def setup_scheduler() -> AsyncIOScheduler:
         max_instances=1,
     )
     logger.info("Задача 'catalog_sync_job' зарегистрирована (раз в неделю)")
+
+    scheduler.add_job(
+        competitor_monitor_job,
+        trigger=IntervalTrigger(minutes=30),
+        id="competitor_monitor_job",
+        name="Competitor Price Monitor (30 min)",
+        replace_existing=True,
+        max_instances=1,
+    )
+    logger.info("Задача 'competitor_monitor_job' зарегистрирована (каждые 30 мин.)")
 
     return scheduler
 

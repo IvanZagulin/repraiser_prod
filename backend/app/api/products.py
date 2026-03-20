@@ -10,6 +10,7 @@ from app.models import Product, ProductConfig, PriceSnapshot, Account
 from app.models.user import User
 from app.models.competitor_entry import CompetitorEntry
 from app.models.price_change import PriceChange
+from app.models.pricing_rule import PricingRule
 from app.schemas.product import (
     ProductCreate, ProductResponse, ProductWithPriceResponse,
     ProductListResponse, ProductConfigCreate, ProductConfigUpdate,
@@ -576,3 +577,130 @@ async def get_product_detail(
             for c in changes
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Pricing Rules (F9) — CRUD на /api/products/{product_id}/rules
+# ---------------------------------------------------------------------------
+
+from pydantic import BaseModel as _BaseModel
+from typing import Optional as _Optional
+
+class RuleCreate(_BaseModel):
+    condition_type: str = "always"
+    condition_value: _Optional[str] = None
+    action_type: str = "set_margin_pct"
+    action_value: str = "10"
+    priority: int = 0
+    is_active: bool = True
+
+class RuleUpdate(_BaseModel):
+    condition_type: _Optional[str] = None
+    condition_value: _Optional[str] = None
+    action_type: _Optional[str] = None
+    action_value: _Optional[str] = None
+    priority: _Optional[int] = None
+    is_active: _Optional[bool] = None
+
+class RuleResponse(_BaseModel):
+    id: int
+    product_config_id: int
+    condition_type: str
+    condition_value: _Optional[str]
+    action_type: str
+    action_value: str
+    priority: int
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+
+
+def _get_product_config_for_user(product_id: int, user: User, db: Session) -> ProductConfig:
+    cfg = (
+        db.query(ProductConfig)
+        .join(Product, ProductConfig.product_id == Product.id)
+        .join(Account, Product.account_id == Account.id)
+        .filter(Product.id == product_id, Account.user_id == user.id)
+        .first()
+    )
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Product config not found")
+    return cfg
+
+
+@router.get("/{product_id}/rules", response_model=list[RuleResponse])
+async def get_product_rules(
+    product_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    cfg = _get_product_config_for_user(product_id, current_user, db)
+    rules = db.query(PricingRule).filter(
+        PricingRule.product_config_id == cfg.id
+    ).order_by(PricingRule.priority).all()
+    return [RuleResponse.model_validate(r) for r in rules]
+
+
+@router.post("/{product_id}/rules", response_model=RuleResponse, status_code=status.HTTP_201_CREATED)
+async def create_product_rule(
+    product_id: int,
+    data: RuleCreate,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    cfg = _get_product_config_for_user(product_id, current_user, db)
+    rule = PricingRule(
+        product_config_id=cfg.id,
+        condition_type=data.condition_type,
+        condition_value=data.condition_value,
+        action_type=data.action_type,
+        action_value=data.action_value,
+        priority=data.priority,
+        is_active=data.is_active,
+    )
+    db.add(rule)
+    db.commit()
+    db.refresh(rule)
+    return RuleResponse.model_validate(rule)
+
+
+@router.put("/{product_id}/rules/{rule_id}", response_model=RuleResponse)
+async def update_product_rule(
+    product_id: int,
+    rule_id: int,
+    data: RuleUpdate,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    cfg = _get_product_config_for_user(product_id, current_user, db)
+    rule = db.query(PricingRule).filter(
+        PricingRule.id == rule_id,
+        PricingRule.product_config_id == cfg.id,
+    ).first()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(rule, field, value)
+    db.commit()
+    db.refresh(rule)
+    return RuleResponse.model_validate(rule)
+
+
+@router.delete("/{product_id}/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_product_rule(
+    product_id: int,
+    rule_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    cfg = _get_product_config_for_user(product_id, current_user, db)
+    rule = db.query(PricingRule).filter(
+        PricingRule.id == rule_id,
+        PricingRule.product_config_id == cfg.id,
+    ).first()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    db.delete(rule)
+    db.commit()
+    return None

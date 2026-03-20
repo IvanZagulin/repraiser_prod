@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react';
 import { differenceInDays, parseISO } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { Separator } from '@/components/ui/separator';
+import AlertsBell from './AlertsBell';
 
 const navItems = [
   { to: '/',              icon: Home,              label: 'Главная' },
@@ -75,7 +76,8 @@ export default function Layout() {
           >
             <span className="w-2 h-2 rounded-full bg-white" />
           </div>
-          <span className="font-mono text-sm font-bold tracking-wider text-foreground">QUASAR-X</span>
+          <span className="font-mono text-sm font-bold tracking-wider text-foreground flex-1">QUASAR-X</span>
+          <AlertsBell />
         </div>
 
         {/* Navigation */}
