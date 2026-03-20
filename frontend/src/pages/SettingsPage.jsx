@@ -298,73 +298,7 @@ export default function SettingsPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-        {/* Расходы для расчёта маржи */}
-        <div className="card">
-          <div className="flex items-center space-x-3 mb-6">
-            <div className="bg-cyan-50 p-2 rounded-lg dark:bg-cyan-950/20">
-              <TrendingUp className="w-5 h-5 text-cyan-600" />
-            </div>
-            <div>
-              <h2 className="text-lg font-semibold text-foreground">Расходы для расчёта маржи</h2>
-              <p className="text-sm text-muted-foreground">
-                Маржа = (Цена − Расходы) / Себестоимость × 100%
-              </p>
-            </div>
-          </div>
-
-          <div className="space-y-3 mb-4">
-            <FeeRow
-              label="Комиссия WB"
-              type={commissionType}
-              value={commissionValue}
-              onTypeChange={setCommissionType}
-              onValueChange={setCommissionValue}
-            />
-            <FeeRow
-              label="Логистика"
-              type={logisticsType}
-              value={logisticsValue}
-              onTypeChange={setLogisticsType}
-              onValueChange={setLogisticsValue}
-            />
-            <FeeRow
-              label="Эквайринг"
-              type={acquiringType}
-              value={acquiringValue}
-              onTypeChange={setAcquiringType}
-              onValueChange={setAcquiringValue}
-            />
-          </div>
-
-          {/* Живой пример */}
-          <div className="p-3 rounded-xl text-xs space-y-1 bg-green-50 border border-green-200 dark:bg-green-950/20 dark:border-green-900">
-            <p className="font-semibold text-foreground">Пример (цена {examplePrice.toLocaleString('ru')}₽, себестоимость {exampleCost.toLocaleString('ru')}₽):</p>
-            <p className="text-muted-foreground">
-              Осн. цена (продавца): <b>{examplePrice.toLocaleString('ru')}₽</b>
-            </p>
-            <p className="text-muted-foreground">
-              − Себестоимость: <b>{exampleCost.toLocaleString('ru')}₽</b>
-            </p>
-            <p className="text-muted-foreground">
-              − Расходы: <b>{totalFees.toFixed(2)}₽</b>
-            </p>
-            <p className="text-muted-foreground border-t border-green-200 pt-1">
-              Остаток: <b>{(examplePrice - exampleCost - totalFees).toFixed(2)}₽</b>
-            </p>
-            <p className="text-muted-foreground">
-              ÷ Себестоимость: <b>{exampleCost.toLocaleString('ru')}₽</b>
-            </p>
-            <p className="font-bold pt-0.5" style={{ color: Number(exampleMargin) >= 0 ? '#16a34a' : '#dc2626' }}>
-              = Маржа: {exampleMargin}%
-            </p>
-          </div>
-
-          <p className="text-xs text-muted-foreground mt-3">
-            Себестоимость товаров загружается через раздел Импорт / Экспорт.
-          </p>
-        </div>
-
-        {/* Правая колонка: Кошелёк + Margin Guard */}
+        {/* Левая колонка: Кошелёк + Margin Guard */}
         <div className="space-y-6">
 
           {/* WB Кошелёк */}
@@ -432,7 +366,73 @@ export default function SettingsPage() {
             </div>
           </div>
 
-        </div>{/* /Правая колонка */}
+        </div>{/* /Левая колонка */}
+
+        {/* Расходы для расчёта маржи */}
+        <div className="card">
+          <div className="flex items-center space-x-3 mb-6">
+            <div className="bg-cyan-50 p-2 rounded-lg dark:bg-cyan-950/20">
+              <TrendingUp className="w-5 h-5 text-cyan-600" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-foreground">Расходы для расчёта маржи</h2>
+              <p className="text-sm text-muted-foreground">
+                Маржа = (Цена − Расходы) / Себестоимость × 100%
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-3 mb-4">
+            <FeeRow
+              label="Комиссия WB"
+              type={commissionType}
+              value={commissionValue}
+              onTypeChange={setCommissionType}
+              onValueChange={setCommissionValue}
+            />
+            <FeeRow
+              label="Логистика"
+              type={logisticsType}
+              value={logisticsValue}
+              onTypeChange={setLogisticsType}
+              onValueChange={setLogisticsValue}
+            />
+            <FeeRow
+              label="Эквайринг"
+              type={acquiringType}
+              value={acquiringValue}
+              onTypeChange={setAcquiringType}
+              onValueChange={setAcquiringValue}
+            />
+          </div>
+
+          {/* Живой пример */}
+          <div className="p-3 rounded-xl text-xs space-y-1 bg-green-50 border border-green-200 dark:bg-green-950/20 dark:border-green-900">
+            <p className="font-semibold text-foreground">Пример (цена {examplePrice.toLocaleString('ru')}₽, себестоимость {exampleCost.toLocaleString('ru')}₽):</p>
+            <p className="text-muted-foreground">
+              Осн. цена (продавца): <b>{examplePrice.toLocaleString('ru')}₽</b>
+            </p>
+            <p className="text-muted-foreground">
+              − Себестоимость: <b>{exampleCost.toLocaleString('ru')}₽</b>
+            </p>
+            <p className="text-muted-foreground">
+              − Расходы: <b>{totalFees.toFixed(2)}₽</b>
+            </p>
+            <p className="text-muted-foreground border-t border-green-200 pt-1">
+              Остаток: <b>{(examplePrice - exampleCost - totalFees).toFixed(2)}₽</b>
+            </p>
+            <p className="text-muted-foreground">
+              ÷ Себестоимость: <b>{exampleCost.toLocaleString('ru')}₽</b>
+            </p>
+            <p className="font-bold pt-0.5" style={{ color: Number(exampleMargin) >= 0 ? '#16a34a' : '#dc2626' }}>
+              = Маржа: {exampleMargin}%
+            </p>
+          </div>
+
+          <p className="text-xs text-muted-foreground mt-3">
+            Себестоимость товаров загружается через раздел Импорт / Экспорт.
+          </p>
+        </div>
 
       </div>{/* /grid */}
 

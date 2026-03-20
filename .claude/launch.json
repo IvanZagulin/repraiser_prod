@@ -3,16 +3,8 @@
   "configurations": [
     {
       "name": "frontend",
-      "runtimeExecutable": "docker",
-      "runtimeArgs": [
-        "run", "--rm",
-        "--name", "repraiser-frontend-preview",
-        "-v", "E:\\репрайсер\\repraiser_prod\\.claude\\worktrees\\quizzical-heyrovsky\\frontend:/app",
-        "-w", "/app",
-        "-p", "5173:5173",
-        "node:18-alpine",
-        "sh", "-c", "npm install --silent && npm run dev -- --host 0.0.0.0 --port 5173"
-      ],
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd frontend && npx vite --host 0.0.0.0 --port 5173"],
       "port": 5173
     }
   ]

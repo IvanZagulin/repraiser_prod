@@ -2,7 +2,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import {
   Home, Package, LogOut, PlayCircle, FileText,
   SlidersHorizontal, Users, BarChart2, Moon, Sun,
-  AlertTriangle, X, Clock, ScrollText,
+  AlertTriangle, X, Clock, ScrollText, FileBarChart,
 } from 'lucide-react';
 import { useAuthStore } from '../store';
 import { getAccounts } from '../api/client';
@@ -20,6 +20,7 @@ const navItems = [
   { to: '/schedule',      icon: Clock,             label: 'Расписание' },
   { to: '/accounts',      icon: Users,             label: 'Аккаунты' },
   { to: '/activity',      icon: ScrollText,        label: 'Журнал' },
+  { to: '/reports',       icon: FileBarChart,      label: 'Отчёты' },
   { to: '/import-export', icon: FileText,          label: 'Импорт/Экспорт' },
   { to: '/settings',      icon: SlidersHorizontal, label: 'Настройки' },
 ];

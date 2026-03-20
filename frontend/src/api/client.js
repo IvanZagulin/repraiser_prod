@@ -149,10 +149,10 @@ export const changePasswordConfirm = (code, new_password) =>
 
 // Schedule
 export const getSchedule = () =>
-  api.get('/api/schedule');
+  api.get('/api/schedule/');
 
 export const updateSchedule = (data) =>
-  api.put('/api/schedule', data);
+  api.put('/api/schedule/', data);
 
 // Analytics
 export const getPriceDynamics = (productId, days = 30) =>
@@ -179,7 +179,7 @@ export const bulkDelete = (productIds) =>
 
 // Activity log
 export const getActivityLog = (params) =>
-  api.get('/api/activity', { params });
+  api.get('/api/activity/', { params });
 
 export const exportActivityLog = () =>
   api.get('/api/activity/export', { responseType: 'blob' });
@@ -234,5 +234,19 @@ export const importCosts = (file) => {
 
 export const downloadCostsTemplate = () =>
   api.get('/api/export/template/costs', { responseType: 'blob' });
+
+// Reports
+export const generateReport = (days = 30) =>
+  api.get('/api/reports/generate', { params: { days }, responseType: 'blob' });
+
+// Dashboard widgets data
+export const getDashboardData = () =>
+  Promise.all([
+    getAccounts().catch(() => ({ data: { accounts: [] } })),
+    getProducts({ page: 1, page_size: 1000 }).catch(() => ({ data: { products: [] } })),
+    getRepricerRuns({ limit: 5 }).catch(() => ({ data: { runs: [] } })),
+    getSavings(7).catch(() => ({ data: { total_savings_rub: 0 } })),
+    getActivityLog({ page: 1, page_size: 5 }).catch(() => ({ data: { items: [] } })),
+  ]);
 
 export default api;

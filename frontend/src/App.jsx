@@ -18,6 +18,7 @@ import SettingsPage from './pages/SettingsPage';
 import Analytics from './pages/Analytics';
 import SchedulePage from './pages/SchedulePage';
 import ActivityLogPage from './pages/ActivityLogPage';
+import ReportsPage from './pages/ReportsPage';
 
 function isTokenExpired(token) {
   try {
@@ -124,6 +125,7 @@ function App() {
           <Route path="analytics" element={<Analytics />} />
           <Route path="schedule" element={<SchedulePage />} />
           <Route path="activity" element={<ActivityLogPage />} />
+          <Route path="reports" element={<ReportsPage />} />
           <Route path="import-export" element={<ImportExport />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>

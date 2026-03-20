@@ -27,7 +27,10 @@
       "Bash(git add backend/app/api/auth.py)",
       "Bash(git add docker-compose.yml)",
       "Bash(git add -A)",
-      "Bash(git add backend/app/api/auth.py backend/app/main.py backend/app/models/user.py backend/requirements.txt)"
+      "Bash(git add backend/app/api/auth.py backend/app/main.py backend/app/models/user.py backend/requirements.txt)",
+      "Bash(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new qvaz.quasar-x.ru \"echo ''SSH_OK'' && whoami && hostname\")",
+      "Bash(ssh qvaz.quasar-x.ru \"echo ''=== OS INFO ==='' && cat /etc/os-release | head -5 && echo && echo ''=== KERNEL ==='' && uname -r && echo && echo ''=== UPTIME ==='' && uptime && echo && echo ''=== DISK ==='' && df -h / && echo && echo ''=== RAM ==='' && free -h && echo && echo ''=== CPU ==='' && nproc\")",
+      "Bash(ssh qvaz.quasar-x.ru \"echo ''=== SSH CONFIG ==='' && sudo cat /etc/ssh/sshd_config 2>/dev/null | grep -E ''\\(PermitRootLogin|PasswordAuthentication|PubkeyAuthentication|Port |AllowUsers|MaxAuthTries|PermitEmptyPasswords\\)'' | grep -v ''^#'' && echo && echo ''=== FIREWALL \\(UFW\\) ==='' && sudo ufw status 2>/dev/null || echo ''ufw not found'' && echo && echo ''=== IPTABLES ==='' && sudo iptables -L -n 2>/dev/null | head -20 || echo ''no iptables access''\")"
     ]
   }
 }

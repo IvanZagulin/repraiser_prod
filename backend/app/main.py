@@ -12,6 +12,7 @@ from app.utils import get_real_ip
 from app.api import (
     auth, accounts, products, repricer, export,
     settings as settings_api, admin, schedule, analytics, bulk, activity,
+    reports,
 )
 
 
@@ -115,7 +116,8 @@ app = FastAPI(
     version="2.0.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json"
+    openapi_url="/api/openapi.json",
+    redirect_slashes=False,
 )
 
 # CORS middleware
@@ -180,6 +182,7 @@ app.include_router(schedule.router,     prefix="/api/schedule",  tags=["Schedule
 app.include_router(analytics.router,    prefix="/api/analytics", tags=["Analytics"])
 app.include_router(bulk.router,         prefix="/api/products/bulk", tags=["Bulk Operations"])
 app.include_router(activity.router,     prefix="/api/activity",  tags=["Activity Log"])
+app.include_router(reports.router,      prefix="/api/reports",   tags=["Reports"])
 
 
 @app.on_event("startup")
