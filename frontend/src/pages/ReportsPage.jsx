@@ -32,8 +32,8 @@ export default function ReportsPage() {
       const cd = res.headers?.['content-disposition'];
       let filename = `QUASAR-X_report_${days}d.pdf`;
       if (cd) {
-        const match = cd.match(/filename="?(.+)"?/);
-        if (match) filename = match[1];
+        const match = cd.match(/filename="?([^"]+)"?/);
+        if (match) filename = match[1].replace(/['"]/g, '');
       }
 
       link.setAttribute('download', filename);
