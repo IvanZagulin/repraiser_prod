@@ -32,6 +32,7 @@ export const useAuthStore = create((set) => ({
   },
 
   logout: () => {
+    console.error('[LOGOUT] called from:', new Error().stack);
     localStorage.removeItem('token');
     set({ token: null, user: null });
   },

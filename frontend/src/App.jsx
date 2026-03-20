@@ -51,6 +51,7 @@ function ProtectedRoute({ children }) {
       return;
     }
     if (isTokenExpired(token)) {
+      console.error('[LOGOUT] isTokenExpired=true, calling logout');
       logout();
       setChecking(false);
       return;
@@ -59,6 +60,7 @@ function ProtectedRoute({ children }) {
     verifyToken()
       .then((res) => {
         const data = res.data;
+        console.log('[VERIFY OK]', { onboarding_completed: data.onboarding_completed, user_id: data.user_id });
         setUser({
           ...user,
           id: data.user_id,
