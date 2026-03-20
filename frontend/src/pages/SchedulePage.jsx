@@ -66,8 +66,11 @@ export default function SchedulePage() {
       } else {
         setPausedDays(new Set());
       }
-    } catch {
-      toast.error('Ошибка загрузки расписания');
+    } catch (err) {
+      // Don't show error if it's just 404 (no schedule yet) — use defaults
+      if (err.response?.status !== 404) {
+        toast.error('Ошибка загрузки расписания');
+      }
     } finally {
       setLoading(false);
     }

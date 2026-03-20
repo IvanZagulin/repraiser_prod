@@ -1,23 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Clock, Save, Wallet, TrendingUp, User, KeyRound, Eye, EyeOff } from 'lucide-react';
+import { Save, Wallet, TrendingUp, User, KeyRound, Eye, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getSettings, updateSettings, changePasswordSendCode, changePasswordConfirm } from '../api/client';
 import { useAuthStore } from '../store';
-
-const INTERVAL_OPTIONS = [
-  { value: 1,    label: '1 минута (тест)' },
-  { value: 5,    label: '5 минут' },
-  { value: 10,   label: '10 минут' },
-  { value: 15,   label: '15 минут' },
-  { value: 20,   label: '20 минут' },
-  { value: 30,   label: '30 минут' },
-  { value: 60,   label: '1 час' },
-  { value: 120,  label: '2 часа' },
-  { value: 180,  label: '3 часа' },
-  { value: 360,  label: '6 часов' },
-  { value: 720,  label: '12 часов' },
-  { value: 1440, label: '24 часа' },
-];
 
 function FeeRow({ label, type, value, onTypeChange, onValueChange }) {
   return (
@@ -221,7 +206,6 @@ function ChangePasswordBlock({ userEmail }) {
 // ─── Основная страница настроек ────────────────────────────────────────────────
 export default function SettingsPage() {
   const { user } = useAuthStore();
-  const [intervalMins, setIntervalMins] = useState(60);
   const [walletPct, setWalletPct] = useState(3.0);
   const [commissionType,  setCommissionType]  = useState('pct');
   const [commissionValue, setCommissionValue] = useState(0.0);
@@ -241,7 +225,6 @@ export default function SettingsPage() {
     try {
       const res = await getSettings();
       const d = res.data;
-      setIntervalMins(d.repricer_interval_minutes);
       setWalletPct(d.wb_wallet_discount_pct);
       setCommissionType(d.commission_type  || 'pct');
       setCommissionValue(d.commission_value ?? 0);
@@ -261,7 +244,6 @@ export default function SettingsPage() {
     setSaving(true);
     try {
       await updateSettings({
-        repricer_interval_minutes: intervalMins,
         wb_wallet_discount_pct: walletPct,
         commission_type:  commissionType,
         commission_value: commissionValue,
@@ -315,40 +297,8 @@ export default function SettingsPage() {
       <ChangePasswordBlock userEmail={user?.email || ''} />
       <div className="grid gap-6 items-start" style={{ gridTemplateColumns: '1fr 1.4fr' }}>
 
-        {/* Левая колонка: Интервал + Кошелёк */}
+        {/* Левая колонка: Кошелёк */}
         <div className="space-y-6">
-
-        {/* Интервал */}
-        <div className="card">
-          <div className="flex items-center space-x-3 mb-6">
-            <div className="bg-primary/10 p-2 rounded-lg">
-              <Clock className="w-5 h-5 text-primary" />
-            </div>
-            <div>
-              <h2 className="text-lg font-semibold text-foreground">Интервал обновления цен</h2>
-              <p className="text-sm text-muted-foreground">Как часто репрайсер будет проверять и менять цены</p>
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-1">
-              Периодичность запуска
-            </label>
-            <select
-              value={intervalMins}
-              onChange={(e) => setIntervalMins(Number(e.target.value))}
-              className="input w-full"
-            >
-              {INTERVAL_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-            <p className="text-xs text-muted-foreground mt-2">
-              Изменение вступает в силу в течение 1 минуты без перезапуска.
-            </p>
-          </div>
-        </div>
 
         {/* WB Кошелёк */}
         <div className="card">

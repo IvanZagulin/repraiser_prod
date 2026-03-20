@@ -81,8 +81,11 @@ export default function ActivityLogPage() {
       setItems(data.items || []);
       setTotal(data.total || 0);
       setPage(data.page || p);
-    } catch {
-      toast.error('Ошибка загрузки журнала');
+    } catch (err) {
+      // Don't show error for 404 (endpoint might not exist yet) — show empty state
+      if (err.response?.status !== 404) {
+        toast.error('Ошибка загрузки журнала');
+      }
     } finally {
       setLoading(false);
     }

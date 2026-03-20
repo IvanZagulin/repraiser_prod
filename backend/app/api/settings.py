@@ -26,7 +26,7 @@ class SettingsResponse(BaseModel):
 
 
 class SettingsUpdate(BaseModel):
-    repricer_interval_minutes: int   = Field(..., ge=1, le=1440)
+    repricer_interval_minutes: Optional[int] = Field(None, ge=1, le=1440)
     wb_wallet_discount_pct: float    = Field(..., ge=0.0, le=10.0)
     commission_type: str             = Field("pct", pattern="^(pct|rub)$")
     commission_value: float          = Field(0.0, ge=0.0, le=100.0)
@@ -95,7 +95,8 @@ async def update_settings(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     uid = current_user.id
-    _set_setting(db, "repricer_interval_minutes", str(data.repricer_interval_minutes), uid, auto_commit=False)
+    if data.repricer_interval_minutes is not None:
+        _set_setting(db, "repricer_interval_minutes", str(data.repricer_interval_minutes), uid, auto_commit=False)
     _set_setting(db, "wb_wallet_discount_pct",    str(data.wb_wallet_discount_pct),    uid, auto_commit=False)
     _set_setting(db, "commission_type",            data.commission_type,                uid, auto_commit=False)
     _set_setting(db, "commission_value",           str(data.commission_value),          uid, auto_commit=False)
@@ -106,7 +107,7 @@ async def update_settings(
     _set_setting(db, "min_margin_pct",             str(data.min_margin_pct),            uid, auto_commit=False)
     db.commit()
     return SettingsResponse(
-        repricer_interval_minutes=data.repricer_interval_minutes,
+        repricer_interval_minutes=data.repricer_interval_minutes or int(_get_setting(db, "repricer_interval_minutes", "60", uid)),
         wb_wallet_discount_pct=data.wb_wallet_discount_pct,
         commission_type=data.commission_type,
         commission_value=data.commission_value,

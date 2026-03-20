@@ -53,14 +53,14 @@ export default function Analytics() {
   // Load all data in parallel on mount
   useEffect(() => {
     Promise.all([
-      getRepricerRuns({ limit: 100 }),
-      getProducts({ page: 1, page_size: 1000 }),
-      getSavings().catch(() => ({ data: { total_savings: 0 } })),
+      getRepricerRuns({ limit: 100 }).catch(() => ({ data: { runs: [] } })),
+      getProducts({ page: 1, page_size: 1000 }).catch(() => ({ data: { products: [] } })),
+      getSavings().catch(() => ({ data: { total_savings_rub: 0 } })),
       getCompetitorTrends(30).catch(() => ({ data: { trends: [] } })),
     ])
       .then(([runsRes, prodRes, savingsRes, trendsRes]) => {
-        setRuns(runsRes.data.runs);
-        setProducts(prodRes.data.products);
+        setRuns(runsRes.data.runs || []);
+        setProducts(prodRes.data.products || []);
         setSavings(savingsRes.data);
         setCompetitorTrends(trendsRes.data.trends || trendsRes.data || []);
       })
@@ -128,7 +128,7 @@ export default function Analytics() {
   const totalUpdated = runs.reduce((a, r) => a + r.updated_count, 0);
   const avgUpdated = totalRuns ? Math.round(totalUpdated / totalRuns) : 0;
   const successRate = totalRuns ? Math.round((completedRuns / totalRuns) * 100) : 0;
-  const totalSavings = savings?.total_savings ?? 0;
+  const totalSavings = savings?.total_savings_rub ?? savings?.total_savings ?? 0;
 
   // Price dynamics chart data
   const priceChartData = priceDynamics.map((p) => ({
