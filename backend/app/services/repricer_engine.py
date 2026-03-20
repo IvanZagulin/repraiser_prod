@@ -771,6 +771,44 @@ class RepricerEngine:
         # Предзагружаем настройки пользователя один раз (избегаем N+1 запросов в цикле)
         self._user_settings = self._load_user_settings()
 
+        # Сначала проверяем, есть ли вообще товары для обработки
+        query = select(Product).join(ProductConfig).filter(
+            ProductConfig.is_active == True
+        )
+        if product_ids:
+            query = query.filter(Product.id.in_(product_ids))
+
+        products = self.db.execute(query).scalars().all()
+
+        if not products:
+            logger.info("Нет активных товаров для обработки — прогон не создаётся")
+            # Если был создан run из API (queued), помечаем его завершённым
+            if existing_run_id:
+                run = self.db.query(RepricerRun).filter(RepricerRun.id == existing_run_id).first()
+                if run:
+                    run.status = "completed"
+                    run.total_products = 0
+                    run.updated_count = 0
+                    run.skipped_count = 0
+                    run.error_count = 0
+                    run.completed_at = datetime.utcnow()
+                    run.error_message = "Нет активных товаров с настроенными стратегиями"
+                    self.db.commit()
+                    return run
+            # Для scheduled прогонов — создаём фиктивный объект без записи в БД
+            dummy = RepricerRun(
+                user_id=self.user_id,
+                run_type=run_type,
+                status="completed",
+                total_products=0,
+                updated_count=0,
+                skipped_count=0,
+                error_count=0,
+                started_at=datetime.utcnow(),
+                completed_at=datetime.utcnow(),
+            )
+            return dummy
+
         # Используем существующую запись (из API) или создаём новую (Fix 6)
         if existing_run_id:
             run = self.db.query(RepricerRun).filter(RepricerRun.id == existing_run_id).first()
@@ -791,16 +829,6 @@ class RepricerEngine:
             self.db.commit()
 
         try:
-            # Получаем товары для обработки
-            query = select(Product).join(ProductConfig).filter(
-                ProductConfig.is_active == True
-            )
-
-            if product_ids:
-                query = query.filter(Product.id.in_(product_ids))
-
-            products = self.db.execute(query).scalars().all()
-
             logger.info(f"Найдено {len(products)} товаров для обработки")
             run.total_products = len(products)
             self.db.commit()

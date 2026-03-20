@@ -91,17 +91,22 @@ async def repricer_job():
         dispatched = 0
         for (user_id,) in users:
             try:
+                # Проверяем наличие товаров С активными конфигами
                 product_rows = db.execute(
                     text("""
                         SELECT p.id FROM products p
                         JOIN accounts a ON p.account_id = a.id
+                        JOIN product_configs pc ON pc.product_id = p.id
                         WHERE a.user_id = :uid
+                          AND a.is_active = TRUE
+                          AND pc.is_active = TRUE
                     """),
                     {"uid": user_id}
                 ).fetchall()
                 product_ids = [r[0] for r in product_rows]
 
                 if not product_ids:
+                    logger.info(f"  user={user_id}: нет активных товаров/аккаунтов, пропускаем")
                     continue
 
                 task = run_repricer_for_user.delay(user_id, product_ids, "scheduled")
