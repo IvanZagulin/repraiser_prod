@@ -364,7 +364,7 @@ export default function Products() {
                 </div>
                 {/* Hover overlay with actions */}
                 <div
-                  className="absolute inset-0 flex items-center justify-center gap-1 opacity-0 hover:opacity-100 transition-opacity"
+                  className="absolute inset-0 flex items-center justify-center gap-1 opacity-0 hover:opacity-100 pointer-events-none hover:pointer-events-auto transition-opacity"
                   style={{ background: 'rgba(0,0,0,.65)' }}
                   onClick={(e) => e.stopPropagation()}
                 >
