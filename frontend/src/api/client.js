@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { useAuthStore } from '../store';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -36,8 +37,9 @@ api.interceptors.response.use(
                          url.includes('/auth/verify');  // не выкидываем при transient 401 на startup-check
       const skipRedirect = error.config?.skipAuthRedirect === true;
       if (!isAuthCall && !skipRedirect) {
-        localStorage.removeItem('token');
-        window.location.href = '/login';
+        // Use store action instead of window.location.href — avoids full page reload.
+        // ProtectedRoute subscribes to token and will redirect via <Navigate> (SPA nav).
+        useAuthStore.getState().logout();
       }
     }
     return Promise.reject(error);
