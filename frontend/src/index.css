@@ -274,14 +274,14 @@
   /* Product card */
   .product-card {
     @apply rounded-[14px] bg-card text-card-foreground overflow-hidden;
-    border: 1px solid hsl(var(--border));
+    border: 2px solid hsl(var(--border));
     transition: all .3s cubic-bezier(.22,1,.36,1);
     animation: fade-in-up 0.3s ease backwards;
     position: relative;
   }
   .product-card:hover {
-    border-color: var(--primary);
-    box-shadow: 0 12px 44px rgba(0,200,255,.12);
+    border-color: var(--neon);
+    box-shadow: 0 8px 32px rgba(0,200,255,.18);
     transform: translateY(-4px);
   }
   .product-card::after {
@@ -289,9 +289,9 @@
     position: absolute;
     bottom: 6px;
     right: 8px;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 700;
-    color: var(--primary);
+    color: var(--neon);
     opacity: 0;
     transform: translateX(-4px);
     transition: all .25s ease;

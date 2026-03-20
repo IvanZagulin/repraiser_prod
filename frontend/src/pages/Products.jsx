@@ -207,7 +207,11 @@ export default function Products() {
   // Filtering is now done server-side via search & strategy params
   const filteredProducts = products;
 
-  const getStatusBadge = (product) => {
+  const getStatusBadge = (product, compact = false) => {
+    if (compact) {
+      const color = !product.config ? '#d97706' : !product.config.is_active ? '#9ca3af' : '#16a34a';
+      return <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, flexShrink: 0 }} title={!product.config ? 'Не настроен' : !product.config.is_active ? 'Отключен' : 'Активен'} />;
+    }
     if (!product.config) return <span className="badge badge-warning">Не настроен</span>;
     if (!product.config.is_active) return <span className="badge">Отключен</span>;
     return <span className="badge badge-success">Активен</span>;
@@ -381,8 +385,6 @@ export default function Products() {
                     <Trash2 className="w-3 h-3" />
                   </button>
                 </div>
-                {/* Status badge */}
-                <div className="absolute top-1 left-1">{getStatusBadge(product)}</div>
               </div>
 
               {/* Info */}
@@ -392,9 +394,12 @@ export default function Products() {
                     {product.name}
                   </p>
                 )}
-                <p className="font-bold truncate" style={{ fontSize: '11px', color: 'var(--primary)' }}>
-                  {product.seller_sku || <span style={{ color: 'var(--text-3)' }}>#{product.nm_id}</span>}
-                </p>
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  {getStatusBadge(product, true)}
+                  <p className="font-bold truncate" style={{ fontSize: '11px', color: 'var(--neon)' }}>
+                    {product.seller_sku || <span style={{ color: 'var(--text-3)' }}>#{product.nm_id}</span>}
+                  </p>
+                </div>
                 {product.current_seller_price ? (
                   <div className="flex items-center justify-between mt-1">
                     <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text)' }}>
