@@ -27,14 +27,14 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       const url = error.config?.url || '';
-      // Не редиректим если 401 пришёл от самих auth-эндпоинтов (login, register, forgot-password)
-      // — там ошибка должна отображаться на странице, а не сбрасывать её
+      // Не редиректим если 401 пришёл от auth-эндпоинтов или фоновых запросов (skipAuthRedirect)
       const isAuthCall = url.includes('/auth/login') ||
                          url.includes('/auth/register') ||
                          url.includes('/auth/forgot-password') ||
                          url.includes('/auth/reset-password') ||
                          url.includes('/auth/verify-email');
-      if (!isAuthCall) {
+      const skipRedirect = error.config?.skipAuthRedirect === true;
+      if (!isAuthCall && !skipRedirect) {
         localStorage.removeItem('token');
         window.location.href = '/login';
       }
@@ -263,10 +263,11 @@ export const removeProductsFromGroup = (groupId, productIds) =>
   api.delete(`/api/groups/${groupId}/products`, { data: { product_ids: productIds } });
 
 // --- Competitor Alerts (F5) ---
-export const getAlerts = (params) => api.get('/api/alerts', { params });
-export const getAlertCount = () => api.get('/api/alerts/count');
-export const markAlertRead = (id) => api.put(`/api/alerts/${id}/read`);
-export const markAllAlertsRead = () => api.put('/api/alerts/read-all');
+// skipAuthRedirect=true — 401 от этих запросов не выкидывает на /login (фоновый поллинг)
+export const getAlerts = (params) => api.get('/api/alerts', { params, skipAuthRedirect: true });
+export const getAlertCount = () => api.get('/api/alerts/count', { skipAuthRedirect: true });
+export const markAlertRead = (id) => api.put(`/api/alerts/${id}/read`, {}, { skipAuthRedirect: true });
+export const markAllAlertsRead = () => api.put('/api/alerts/read-all', {}, { skipAuthRedirect: true });
 
 // --- Config Audit Log (F4) ---
 export const getProductAuditLog = (productId) => api.get(`/api/audit/product/${productId}`);
