@@ -277,11 +277,28 @@
     border: 1px solid hsl(var(--border));
     transition: all .3s cubic-bezier(.22,1,.36,1);
     animation: fade-in-up 0.3s ease backwards;
+    position: relative;
   }
   .product-card:hover {
-    border-color: var(--neon-dim);
-    box-shadow: 0 12px 44px rgba(0,200,255,.08);
+    border-color: var(--primary);
+    box-shadow: 0 12px 44px rgba(0,200,255,.12);
     transform: translateY(-4px);
+  }
+  .product-card::after {
+    content: '→';
+    position: absolute;
+    bottom: 6px;
+    right: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--primary);
+    opacity: 0;
+    transform: translateX(-4px);
+    transition: all .25s ease;
+  }
+  .product-card:hover::after {
+    opacity: 1;
+    transform: translateX(0);
   }
 
   /* Modal */

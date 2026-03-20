@@ -202,23 +202,14 @@ export default function ProductDetailPage() {
             </a>
           </div>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={handleRun}
-            disabled={running}
-            className="btn btn-primary gap-2"
-          >
-            <Play className={`w-4 h-4 ${running ? 'animate-pulse' : ''}`} />
-            {running ? 'Запуск...' : 'Запустить'}
-          </button>
-          <button
-            onClick={() => setShowConfig(true)}
-            className="btn btn-secondary gap-2"
-          >
-            <Settings className="w-4 h-4" />
-            Настроить
-          </button>
-        </div>
+        <button
+          onClick={handleRun}
+          disabled={running}
+          className="btn btn-primary gap-2"
+        >
+          <Play className={`w-4 h-4 ${running ? 'animate-pulse' : ''}`} />
+          {running ? 'Запуск...' : 'Запустить'}
+        </button>
       </div>
 
       {/* Top info row: image + price cards + strategy */}

@@ -386,18 +386,18 @@ export default function Products() {
               </div>
 
               {/* Info */}
-              <div className="p-2">
+              <div className="p-2" style={{ background: 'var(--card)' }}>
                 {product.name && (
-                  <p className="truncate mb-0.5" style={{ fontSize: '11px', color: 'var(--text-2)' }}>
+                  <p className="truncate mb-0.5" style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text)' }}>
                     {product.name}
                   </p>
                 )}
-                <p className="font-semibold truncate" style={{ fontSize: '11px', color: 'var(--text-1)' }}>
+                <p className="font-bold truncate" style={{ fontSize: '11px', color: 'var(--primary)' }}>
                   {product.seller_sku || <span style={{ color: 'var(--text-3)' }}>#{product.nm_id}</span>}
                 </p>
                 {product.current_seller_price ? (
                   <div className="flex items-center justify-between mt-1">
-                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-1)' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text)' }}>
                       {Number(product.current_seller_price).toLocaleString('ru')}₽
                     </span>
                     {product.margin !== null && product.margin !== undefined && (
@@ -407,7 +407,7 @@ export default function Products() {
                     )}
                   </div>
                 ) : (
-                  <span style={{ fontSize: '10px', color: 'var(--text-3)' }}>нет цены</span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-3)' }}>нет цены</span>
                 )}
               </div>
             </div>
