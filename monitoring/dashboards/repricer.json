@@ -35,7 +35,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"total\": *(?P<total>[0-9]+)` | unwrap total [$__range])",
+          "expr": "last_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"total\": *(?P<total>[0-9]+)` | unwrap total [$__range])",
           "legendFormat": "total",
           "refId": "A"
         }
@@ -59,7 +59,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"updated\": *(?P<updated>[0-9]+)` | unwrap updated [$__range])",
+          "expr": "last_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"updated\": *(?P<updated>[0-9]+)` | unwrap updated [$__range])",
           "legendFormat": "updated",
           "refId": "A"
         }
@@ -83,7 +83,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"skipped\": *(?P<skipped>[0-9]+)` | unwrap skipped [$__range])",
+          "expr": "last_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"skipped\": *(?P<skipped>[0-9]+)` | unwrap skipped [$__range])",
           "legendFormat": "skipped",
           "refId": "A"
         }
@@ -107,7 +107,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"errors\": *(?P<errors>[0-9]+)` | unwrap errors [$__range])",
+          "expr": "last_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"errors\": *(?P<errors>[0-9]+)` | unwrap errors [$__range])",
           "legendFormat": "errors",
           "refId": "A"
         }
@@ -131,7 +131,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"duration_ms\": *(?P<duration_ms>[0-9]+)` | unwrap duration_ms [$__range])",
+          "expr": "last_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"duration_ms\": *(?P<duration_ms>[0-9]+)` | unwrap duration_ms [$__range])",
           "legendFormat": "duration_ms",
           "refId": "A"
         }
@@ -156,7 +156,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"products_per_sec\": *(?P<products_per_sec>[0-9.]+)` | unwrap products_per_sec [$__range])",
+          "expr": "last_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"products_per_sec\": *(?P<products_per_sec>[0-9.]+)` | unwrap products_per_sec [$__range])",
           "legendFormat": "products_per_sec",
           "refId": "A"
         }
@@ -183,7 +183,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"duration_ms\": *(?P<duration_ms>[0-9]+)` | unwrap duration_ms [$__interval])",
+          "expr": "last_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"duration_ms\": *(?P<duration_ms>[0-9]+)` | unwrap duration_ms [$__interval])",
           "legendFormat": "duration_ms",
           "refId": "A"
         }
@@ -207,19 +207,19 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"updated\": *(?P<updated>[0-9]+)` | unwrap updated [$__interval])",
+          "expr": "last_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"updated\": *(?P<updated>[0-9]+)` | unwrap updated [$__interval])",
           "legendFormat": "updated",
           "refId": "A"
         },
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"skipped\": *(?P<skipped>[0-9]+)` | unwrap skipped [$__interval])",
+          "expr": "last_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"skipped\": *(?P<skipped>[0-9]+)` | unwrap skipped [$__interval])",
           "legendFormat": "skipped",
           "refId": "B"
         },
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"errors\": *(?P<errors>[0-9]+)` | unwrap errors [$__interval])",
+          "expr": "last_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"errors\": *(?P<errors>[0-9]+)` | unwrap errors [$__interval])",
           "legendFormat": "errors",
           "refId": "C"
         }
@@ -246,7 +246,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "sum by (reason) (count_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"product_done\" | regexp `\"reason\": *\"(?P<reason>[^\"]+)\"` [$__interval]))",
+          "expr": "sum by (reason) (count_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"product_done\" | regexp `\"reason\": *\"(?P<reason>[^\"]+)\"` [$__interval]))",
           "legendFormat": "{{reason}}",
           "refId": "A"
         }
@@ -266,7 +266,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "sum by (reason) (count_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"product_done\" | regexp `\"reason\": *\"(?P<reason>[^\"]+)\"` [$__range]))",
+          "expr": "sum by (reason) (count_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"product_done\" | regexp `\"reason\": *\"(?P<reason>[^\"]+)\"` [$__range]))",
           "legendFormat": "{{reason}}",
           "refId": "A"
         }
@@ -286,13 +286,13 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "avg_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"product_done\" | regexp `\"duration_ms\": *(?P<duration_ms>[0-9]+)` | unwrap duration_ms [$__interval])",
+          "expr": "avg_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"product_done\" | regexp `\"duration_ms\": *(?P<duration_ms>[0-9]+)` | unwrap duration_ms [$__interval])",
           "legendFormat": "avg duration_ms",
           "refId": "A"
         },
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "quantile_over_time(0.95, {service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"product_done\" | regexp `\"duration_ms\": *(?P<duration_ms>[0-9]+)` | unwrap duration_ms [$__interval])",
+          "expr": "quantile_over_time(0.95, {service=\"celery_worker\"} |= \"METRIC\" |= \"product_done\" | regexp `\"duration_ms\": *(?P<duration_ms>[0-9]+)` | unwrap duration_ms [$__interval])",
           "legendFormat": "p95 duration_ms",
           "refId": "B"
         }
@@ -315,7 +315,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "{service=~\"celery_worker|backend\"} |= \"METRIC\"",
+          "expr": "{service=\"celery_worker\"} |= \"METRIC\"",
           "refId": "A"
         }
       ]
