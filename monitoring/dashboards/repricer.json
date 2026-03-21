@@ -35,7 +35,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"total\": *(?P<total>[0-9]+)` | unwrap total [1h])",
+          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"total\": *(?P<total>[0-9]+)` | unwrap total [$__range])",
           "legendFormat": "total",
           "refId": "A"
         }
@@ -59,7 +59,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"updated\": *(?P<updated>[0-9]+)` | unwrap updated [1h])",
+          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"updated\": *(?P<updated>[0-9]+)` | unwrap updated [$__range])",
           "legendFormat": "updated",
           "refId": "A"
         }
@@ -83,7 +83,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"skipped\": *(?P<skipped>[0-9]+)` | unwrap skipped [1h])",
+          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"skipped\": *(?P<skipped>[0-9]+)` | unwrap skipped [$__range])",
           "legendFormat": "skipped",
           "refId": "A"
         }
@@ -107,7 +107,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"errors\": *(?P<errors>[0-9]+)` | unwrap errors [1h])",
+          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"errors\": *(?P<errors>[0-9]+)` | unwrap errors [$__range])",
           "legendFormat": "errors",
           "refId": "A"
         }
@@ -131,7 +131,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"duration_ms\": *(?P<duration_ms>[0-9]+)` | unwrap duration_ms [1h])",
+          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"duration_ms\": *(?P<duration_ms>[0-9]+)` | unwrap duration_ms [$__range])",
           "legendFormat": "duration_ms",
           "refId": "A"
         }
@@ -156,7 +156,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"products_per_sec\": *(?P<products_per_sec>[0-9.]+)` | unwrap products_per_sec [1h])",
+          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"products_per_sec\": *(?P<products_per_sec>[0-9.]+)` | unwrap products_per_sec [$__range])",
           "legendFormat": "products_per_sec",
           "refId": "A"
         }
@@ -183,7 +183,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "{service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"duration_ms\": *(?P<duration_ms>[0-9]+)` | unwrap duration_ms",
+          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"duration_ms\": *(?P<duration_ms>[0-9]+)` | unwrap duration_ms [$__interval])",
           "legendFormat": "duration_ms",
           "refId": "A"
         }
@@ -207,19 +207,19 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "{service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"updated\": *(?P<updated>[0-9]+)` | unwrap updated",
+          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"updated\": *(?P<updated>[0-9]+)` | unwrap updated [$__interval])",
           "legendFormat": "updated",
           "refId": "A"
         },
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "{service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"skipped\": *(?P<skipped>[0-9]+)` | unwrap skipped",
+          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"skipped\": *(?P<skipped>[0-9]+)` | unwrap skipped [$__interval])",
           "legendFormat": "skipped",
           "refId": "B"
         },
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "{service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"errors\": *(?P<errors>[0-9]+)` | unwrap errors",
+          "expr": "last_over_time({service=~\"celery_worker|backend\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"errors\": *(?P<errors>[0-9]+)` | unwrap errors [$__interval])",
           "legendFormat": "errors",
           "refId": "C"
         }
@@ -321,7 +321,7 @@
       ]
     }
   ],
-  "refresh": "10s",
+  "refresh": "1m",
   "schemaVersion": 38,
   "tags": ["repricer", "load-test"],
   "templating": {
@@ -340,7 +340,7 @@
       }
     ]
   },
-  "time": { "from": "now-1h", "to": "now" },
+  "time": { "from": "now-24h", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
   "title": "WB Repricer — Load Test",

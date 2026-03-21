@@ -131,7 +131,10 @@ def _user_should_run(db, user_id: int) -> bool:
     if last_run and last_run[0]:
         elapsed = (datetime.utcnow() - last_run[0]).total_seconds() / 60
         if elapsed < interval_minutes - 2:  # 2-минутный буфер
+            logger.info(f"  user={user_id}: ждём интервал ({elapsed:.0f}/{interval_minutes} мин)")
             return False
+        else:
+            logger.info(f"  user={user_id}: интервал прошёл ({elapsed:.0f}>={interval_minutes} мин), запускаем")
 
     return True
 

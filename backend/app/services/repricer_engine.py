@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import Optional, Dict, List, Tuple
 from decimal import Decimal, ROUND_UP
 from datetime import datetime
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select
 
 from app.models import (
@@ -702,11 +702,11 @@ class RepricerEngine:
         """
         logger.info("Получение снимков цен для всех товаров")
 
-        query = select(Product)
+        query = select(Product).options(joinedload(Product.account))
         if product_ids:
             query = query.filter(Product.id.in_(product_ids))
 
-        products = self.db.execute(query).scalars().all()
+        products = self.db.execute(query).scalars().unique().all()
         logger.info(f"Товаров для обновления цен: {len(products)}")
 
         results = {'updated': 0, 'errors': 0, 'total': len(products)}
@@ -774,11 +774,11 @@ class RepricerEngine:
         # Сначала проверяем, есть ли вообще товары для обработки
         query = select(Product).join(ProductConfig).filter(
             ProductConfig.is_active == True
-        )
+        ).options(joinedload(Product.config), joinedload(Product.account))
         if product_ids:
             query = query.filter(Product.id.in_(product_ids))
 
-        products = self.db.execute(query).scalars().all()
+        products = self.db.execute(query).scalars().unique().all()
 
         if not products:
             logger.info("Нет активных товаров для обработки — прогон не создаётся")

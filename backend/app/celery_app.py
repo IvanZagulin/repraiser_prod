@@ -1,4 +1,8 @@
+import logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s", force=True)
+
 from celery import Celery
+from celery.signals import worker_process_init
 from app.config import settings
 
 celery_app = Celery(
@@ -19,3 +23,17 @@ celery_app.conf.update(
     # Перезапускать воркер каждые 200 задач — защита от утечек памяти
     worker_max_tasks_per_child=200,
 )
+
+
+@worker_process_init.connect
+def dispose_db_connections(**kwargs):
+    """
+    After forking, dispose the inherited DB engine so that each worker
+    process creates its own fresh connections instead of sharing the parent's.
+    """
+    try:
+        from app.database import engine
+        engine.dispose()
+        logging.getLogger(__name__).info("DB engine disposed after fork")
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"dispose_db_connections error: {e}")

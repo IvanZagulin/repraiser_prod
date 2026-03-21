@@ -6,7 +6,7 @@ from sqlalchemy import desc, or_, cast, String, func, and_
 from slowapi import Limiter
 
 from app.database import get_db
-from app.models import Product, ProductConfig, PriceSnapshot, Account
+from app.models import Product, ProductConfig, PriceSnapshot, Account, ConfigChangeLog
 from app.models.user import User
 from app.models.competitor_entry import CompetitorEntry
 from app.models.price_change import PriceChange
@@ -344,6 +344,15 @@ async def update_product_config(
 
     update_data = config_data.model_dump(exclude_unset=True, exclude={"competitors"})
     for field, value in update_data.items():
+        old_value = getattr(product.config, field, None)
+        if str(old_value) != str(value):
+            db.add(ConfigChangeLog(
+                user_id=current_user.id,
+                product_id=product_id,
+                field_name=field,
+                old_value=str(old_value) if old_value is not None else None,
+                new_value=str(value) if value is not None else None,
+            ))
         setattr(product.config, field, value)
 
     if config_data.competitors is not None:

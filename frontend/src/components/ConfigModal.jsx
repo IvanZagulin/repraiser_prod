@@ -2,8 +2,7 @@ import { useState, useEffect } from 'react';
 import { X, Plus, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createProductConfig, updateProductConfig, getSettings } from '../api/client';
-import RuleBuilder from './RuleBuilder';
-import AuditLogModal from './AuditLogModal';
+
 
 // Инициализация списка конкурентов из конфига
 function initCompetitors(config) {
@@ -18,7 +17,6 @@ function initCompetitors(config) {
 
 export default function ConfigModal({ product, onClose }) {
   const [strategy, setStrategy] = useState(product.config?.strategy || 'rrp');
-  const [showAudit, setShowAudit] = useState(false);
   const [formData, setFormData] = useState({
     is_active: product.config?.is_active ?? true,
     min_price: product.config?.min_price || '',
@@ -433,31 +431,10 @@ export default function ConfigModal({ product, onClose }) {
               </div>
             </div>
           )}
-
-          {/* Динамические правила (F9) */}
-          {product?.config && (
-            <div className="pt-4 border-t border-border">
-              <RuleBuilder productId={product.id} />
-            </div>
-          )}
-
-          {showAudit && (
-            <AuditLogModal
-              productId={product.id}
-              productName={product.name}
-              onClose={() => setShowAudit(false)}
             />
           )}
 
-          <div className="flex justify-between gap-2 pt-4 border-t border-border">
-            <button
-              type="button"
-              onClick={() => setShowAudit(true)}
-              className="btn btn-secondary text-xs"
-              title="История изменений конфига"
-            >
-              История изменений
-            </button>
+          <div className="flex justify-end gap-2 pt-4 border-t border-border">
             <div className="flex gap-2">
               <button type="button" onClick={onClose} className="btn btn-secondary">
                 Отмена
