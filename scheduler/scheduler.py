@@ -170,7 +170,7 @@ async def repricer_job():
                     text("""
                         SELECT p.id FROM products p
                         JOIN accounts a ON p.account_id = a.id
-                        JOIN product_configs pc ON pc.product_id = p.id
+                        JOIN product_config pc ON pc.product_id = p.id
                         WHERE a.user_id = :uid
                           AND a.is_active = TRUE
                           AND pc.is_active = TRUE
