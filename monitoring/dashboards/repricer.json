@@ -37,7 +37,8 @@
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
           "expr": "last_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"total\": *(?P<total>[0-9]+)` | unwrap total [$__range])",
           "legendFormat": "total",
-          "refId": "A"
+          "refId": "A",
+          "queryType": "instant"
         }
       ]
     },
@@ -61,7 +62,8 @@
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
           "expr": "last_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"updated\": *(?P<updated>[0-9]+)` | unwrap updated [$__range])",
           "legendFormat": "updated",
-          "refId": "A"
+          "refId": "A",
+          "queryType": "instant"
         }
       ]
     },
@@ -85,7 +87,8 @@
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
           "expr": "last_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"skipped\": *(?P<skipped>[0-9]+)` | unwrap skipped [$__range])",
           "legendFormat": "skipped",
-          "refId": "A"
+          "refId": "A",
+          "queryType": "instant"
         }
       ]
     },
@@ -109,7 +112,8 @@
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
           "expr": "last_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"errors\": *(?P<errors>[0-9]+)` | unwrap errors [$__range])",
           "legendFormat": "errors",
-          "refId": "A"
+          "refId": "A",
+          "queryType": "instant"
         }
       ]
     },
@@ -133,7 +137,8 @@
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
           "expr": "last_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"duration_ms\": *(?P<duration_ms>[0-9]+)` | unwrap duration_ms [$__range])",
           "legendFormat": "duration_ms",
-          "refId": "A"
+          "refId": "A",
+          "queryType": "instant"
         }
       ]
     },
@@ -158,7 +163,8 @@
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
           "expr": "last_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"products_per_sec\": *(?P<products_per_sec>[0-9.]+)` | unwrap products_per_sec [$__range])",
           "legendFormat": "products_per_sec",
-          "refId": "A"
+          "refId": "A",
+          "queryType": "instant"
         }
       ]
     },
