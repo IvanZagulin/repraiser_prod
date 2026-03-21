@@ -165,7 +165,7 @@ export default function Analytics() {
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         {[
           {
-            label: 'Всего прогонов',
+            label: 'Всего запусков',
             value: totalRuns,
             icon: RefreshCw,
             color: '#00c8ff',
@@ -369,10 +369,10 @@ export default function Analytics() {
             <BarChart2 className="w-3.5 h-3.5" style={{ color: '#00c8ff' }} />
           </div>
           <h2 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-            Активность прогонов
+            Активность запусков
           </h2>
           <span className="text-xs ml-auto" style={{ color: 'var(--text-3)' }}>
-            До 30 последних прогонов
+            До 30 последних запусков
           </span>
         </div>
         {runsChart.length === 0 ? (

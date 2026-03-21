@@ -93,7 +93,7 @@ export default function RunDetailModal({ run, onClose }) {
         <div className="flex items-start justify-between mb-5">
           <div>
             <h2 className="text-base font-semibold" style={{ color: 'var(--text)' }}>
-              Детали прогона #{run.id}
+              Детали запуска #{run.id}
             </h2>
             <p className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
               {run.run_type === 'scheduled' ? '🔄 Автоматический' : '👆 Ручной'} ·{' '}
