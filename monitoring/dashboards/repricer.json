@@ -2,7 +2,7 @@
   "__inputs": [],
   "__requires": [],
   "annotations": { "list": [] },
-  "description": "WB Repricer — прогоны и нагрузочные тесты",
+  "description": "WB Repricer — запуски и статистика",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -13,7 +13,7 @@
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
       "id": 100,
-      "title": "Статистика прогонов",
+      "title": "Статистика запусков",
       "type": "row"
     },
     {
@@ -30,13 +30,13 @@
       "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
       "id": 1,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
-      "title": "Последний прогон — всего",
+      "title": "Всего запусков",
       "type": "stat",
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
-          "expr": "last_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" | regexp `\"total\": *(?P<total>[0-9]+)` | unwrap total [$__range])",
-          "legendFormat": "total",
+          "expr": "count_over_time({service=\"celery_worker\"} |= \"METRIC\" |= \"run_complete\" [$__range])",
+          "legendFormat": "запусков",
           "refId": "A",
           "queryType": "instant"
         }
@@ -55,7 +55,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
       "id": 2,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
-      "title": "Обновлено",
+      "title": "Обновлено (послед.)",
       "type": "stat",
       "targets": [
         {
@@ -80,7 +80,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
       "id": 3,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
-      "title": "Пропущено",
+      "title": "Пропущено (послед.)",
       "type": "stat",
       "targets": [
         {
@@ -105,7 +105,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
       "id": 4,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
-      "title": "Ошибок",
+      "title": "Ошибок (послед.)",
       "type": "stat",
       "targets": [
         {
@@ -130,7 +130,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
       "id": 5,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
-      "title": "Длительность (мс)",
+      "title": "Длительность (послед.)",
       "type": "stat",
       "targets": [
         {
@@ -156,7 +156,7 @@
       "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
       "id": 6,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
-      "title": "Throughput (товаров/сек)",
+      "title": "Скорость (тов/сек)",
       "type": "stat",
       "targets": [
         {
@@ -184,7 +184,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
       "id": 10,
       "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "title": "Длительность прогона (мс)",
+      "title": "Длительность запуска (мс)",
       "type": "timeseries",
       "targets": [
         {
@@ -208,7 +208,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
       "id": 11,
       "options": { "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "title": "Результаты прогонов (updated / skipped / errors)",
+      "title": "Результаты запусков (updated / skipped / errors)",
       "type": "timeseries",
       "targets": [
         {
@@ -247,7 +247,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
       "id": 20,
       "options": { "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "title": "Rate reason_codes (товаров/мин)",
+      "title": "Причины по товарам (rate)",
       "type": "timeseries",
       "targets": [
         {
@@ -267,7 +267,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
       "id": 21,
       "options": { "legend": { "displayMode": "table", "placement": "right", "values": ["percent", "value"] }, "pieType": "pie", "tooltip": { "mode": "multi" } },
-      "title": "Распределение reason_codes",
+      "title": "Распределение причин",
       "type": "piechart",
       "targets": [
         {
@@ -349,7 +349,7 @@
   "time": { "from": "now-24h", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
-  "title": "WB Repricer — Load Test",
+  "title": "WB Repricer — Статистика",
   "uid": "wb-repricer-load-test",
   "version": 2
 }
