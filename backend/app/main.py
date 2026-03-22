@@ -172,7 +172,39 @@ async def root():
 
 @app.get("/api/health")
 async def health_check():
-    """Публичный health-check — не возвращает внутренние данные инфраструктуры."""
+    """Health-check с реальной проверкой БД и Redis.
+    Docker healthcheck полагается на этот endpoint —
+    если зависимости недоступны, возвращаем 503 чтобы
+    Docker пометил контейнер как unhealthy и перезапустил.
+    """
+    from app.database import engine
+    from sqlalchemy import text
+    import redis as redis_lib
+
+    errors = []
+
+    # Проверка PostgreSQL
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as e:
+        errors.append(f"db: {e}")
+
+    # Проверка Redis
+    try:
+        r = redis_lib.from_url(settings.REDIS_URL, decode_responses=True, socket_timeout=3)
+        r.ping()
+        r.close()
+    except Exception as e:
+        errors.append(f"redis: {e}")
+
+    if errors:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "errors": errors},
+        )
+
     return {"status": "healthy"}
 
 

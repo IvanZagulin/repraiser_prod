@@ -133,7 +133,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=4
+    command: celery -A app.celery_app worker --loglevel=info --autoscale=8,2
     deploy:
       resources:
         limits:

@@ -265,6 +265,47 @@ async def catalog_sync_job():
     logger.info("=" * 70)
 
 
+async def cleanup_stale_runs():
+    """Помечает зависшие прогоны (status='running' дольше TTL) как failed.
+
+    Если Celery-воркер упал или был убит по time_limit, запись RepricerRun
+    остаётся в статусе 'running' навсегда. Это портит UI и блокирует логику
+    'последний прогон'. TTL = 70 мин (чуть больше Celery time_limit=3900s).
+    """
+    STALE_MINUTES = 70
+    logger.info("Очистка зависших прогонов...")
+    db = SessionLocal()
+    try:
+        result = db.execute(
+            text("""
+                UPDATE repricer_runs
+                SET status = 'failed',
+                    error_message = 'Прогон завис (превышен TTL) — помечен планировщиком',
+                    completed_at = NOW()
+                WHERE status = 'running'
+                  AND started_at < NOW() - INTERVAL ':minutes minutes'
+                RETURNING id, user_id
+            """.replace(":minutes", str(STALE_MINUTES)))
+        )
+        rows = result.fetchall()
+        db.commit()
+        if rows:
+            for run_id, user_id in rows:
+                logger.warning(f"  Зависший прогон id={run_id} user={user_id} → failed")
+                # Освобождаем Redis-лок если он ещё жив
+                try:
+                    _get_redis().delete(f"repricer:run_lock:{user_id}")
+                except Exception:
+                    pass
+            logger.info(f"Очищено зависших прогонов: {len(rows)}")
+        else:
+            logger.info("Зависших прогонов нет")
+    except Exception as e:
+        logger.error(f"Ошибка при очистке зависших прогонов: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
 async def competitor_monitor_job():
     """Каждые 30 минут: мониторинг цен конкурентов для всех пользователей."""
     logger.info("Планировщик: мониторинг цен конкурентов")
@@ -329,6 +370,16 @@ def setup_scheduler() -> AsyncIOScheduler:
         max_instances=1,
     )
     logger.info("Задача 'competitor_monitor_job' зарегистрирована (каждые 30 мин.)")
+
+    scheduler.add_job(
+        cleanup_stale_runs,
+        trigger=IntervalTrigger(minutes=15),
+        id="cleanup_stale_runs",
+        name="Cleanup Stale Runs (15 min)",
+        replace_existing=True,
+        max_instances=1,
+    )
+    logger.info("Задача 'cleanup_stale_runs' зарегистрирована (каждые 15 мин.)")
 
     return scheduler
 
