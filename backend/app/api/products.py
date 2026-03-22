@@ -1,5 +1,5 @@
 from typing import Annotated, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_, cast, String, func, and_
@@ -439,7 +439,7 @@ async def get_product_detail(
     )
 
     # Snapshots for chart (last 30 days)
-    since_30d = datetime.utcnow() - timedelta(days=30)
+    since_30d = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=30)
     snapshots = (
         db.query(PriceSnapshot)
         .filter(PriceSnapshot.product_id == product_id, PriceSnapshot.snapshot_at >= since_30d)
@@ -466,7 +466,7 @@ async def get_product_detail(
         db.query(func.count(PriceChange.id))
         .filter(
             PriceChange.product_id == product_id,
-            PriceChange.changed_at >= datetime.utcnow() - timedelta(days=7),
+            PriceChange.changed_at >= datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=7),
         )
         .scalar() or 0
     )

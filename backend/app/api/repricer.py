@@ -1,5 +1,5 @@
 from typing import Annotated, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
@@ -85,7 +85,7 @@ async def manual_run(
         skipped_count=0,
         error_count=0,
         error_message=None,
-        started_at=datetime.utcnow(),
+        started_at=datetime.now(timezone.utc).replace(tzinfo=None),
     )
     db.add(run)
     db.commit()

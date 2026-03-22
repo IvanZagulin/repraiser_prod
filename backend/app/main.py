@@ -231,12 +231,10 @@ async def startup_db_migration():
     """DB migrations via Alembic + non-DDL seed/ops.
 
     DDL теперь живёт в alembic/versions/. Здесь только:
-      1. Bootstrap минимальной таблицы users (чтобы миграция 006 не упала
-         из-за отсутствия таблицы при fresh install)
-      2. alembic upgrade head — применяет все новые миграции
-      3. Seed admin-юзера (если БД пустая)
-      4. One-time шифрование токенов WB
-      5. Celery-задача синхронизации фото для аккаунтов без image_url
+      1. alembic upgrade head — применяет все миграции (006 сама создаёт users)
+      2. Seed admin-юзера (если БД пустая)
+      3. One-time шифрование токенов WB
+      4. Celery-задача синхронизации фото для аккаунтов без image_url
     """
     import os
     from app.database import engine
@@ -251,20 +249,7 @@ async def startup_db_migration():
         # pg_advisory_lock защищает от гонки при --workers > 1
         conn.execute(text("SELECT pg_advisory_lock(42)"))
         try:
-            # 1. Bootstrap users (минимально, только чтоб FK в миграции 006 не упал)
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id            SERIAL PRIMARY KEY,
-                    email         VARCHAR(255) UNIQUE NOT NULL,
-                    password_hash VARCHAR(255) NOT NULL,
-                    is_active     BOOLEAN NOT NULL DEFAULT TRUE,
-                    is_admin      BOOLEAN NOT NULL DEFAULT FALSE,
-                    created_at    TIMESTAMP NOT NULL DEFAULT NOW()
-                )
-            """))
-            conn.commit()
-
-            # 2. Alembic upgrade head — весь DDL теперь в миграциях
+            # 1. Alembic upgrade head — весь DDL в миграциях (006 создаёт users IF NOT EXISTS)
             try:
                 from alembic.config import Config
                 from alembic import command as alembic_command

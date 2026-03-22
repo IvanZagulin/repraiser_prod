@@ -1,6 +1,6 @@
 """Analytics router — price dynamics, savings, competitor trends, summary."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -68,7 +68,7 @@ def price_dynamics(
     """Time series of price snapshots for a product."""
     _verify_product_ownership(db, product_id, current_user)
 
-    since = datetime.utcnow() - timedelta(days=days)
+    since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
     snapshots = (
         db.query(PriceSnapshot)
         .filter(
@@ -101,7 +101,7 @@ def savings(
     if not product_ids:
         return {"total_savings_rub": 0, "changes_count": 0, "period_days": days}
 
-    since = datetime.utcnow() - timedelta(days=days)
+    since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
     reason_codes = ("UPDATED", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX", "CLAMPED_TO_MARGIN")
 
     changes = (
@@ -137,7 +137,7 @@ def competitor_trends(
     if not product_ids:
         return []
 
-    since = datetime.utcnow() - timedelta(days=days)
+    since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
 
     # Get products that have at least one competitor snapshot
     rows = (

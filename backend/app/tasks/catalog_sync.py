@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.celery_app import celery_app
 from app.database import SessionLocal
@@ -47,7 +47,7 @@ def sync_wb_catalog_task(self, account_id: int):
 
         # Полная замена: удаляем старые записи, вставляем новые
         deleted = db.query(WBCatalog).filter(WBCatalog.account_id == account_id).delete()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         for vendor_code, info in all_cards.items():
             nm_id = info.get("nm_id")
             if not nm_id:

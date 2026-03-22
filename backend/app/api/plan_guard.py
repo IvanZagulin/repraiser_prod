@@ -1,6 +1,6 @@
 """Plan enforcement dependencies for route-level access control."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Depends, HTTPException
@@ -32,7 +32,7 @@ def check_plan_active(
             return current_user
 
     # Check active trial
-    if current_user.trial_ends_at and current_user.trial_ends_at > datetime.utcnow():
+    if current_user.trial_ends_at and current_user.trial_ends_at > datetime.now(timezone.utc).replace(tzinfo=None):
         return current_user
 
     raise HTTPException(status_code=403, detail="plan_expired")
@@ -55,7 +55,7 @@ def get_user_limits(user: User) -> dict:
         }
 
     # Trial — use Business plan defaults
-    if user.trial_ends_at and user.trial_ends_at > datetime.utcnow():
+    if user.trial_ends_at and user.trial_ends_at > datetime.now(timezone.utc).replace(tzinfo=None):
         return {
             "max_sku": TRIAL_MAX_SKU,
             "max_accounts": TRIAL_MAX_ACCOUNTS,

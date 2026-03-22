@@ -5,7 +5,7 @@ import time
 from types import SimpleNamespace
 from typing import Optional, Dict, List, Tuple
 from decimal import Decimal, ROUND_UP
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select
 
@@ -406,57 +406,47 @@ class RepricerEngine:
             logger.info(f"Цена ограничена максимумом: {original_price}₽ → {new_price}₽")
 
         # Проверка минимальной маржи (Margin Guard) — per-user настройки (из кеша)
+        # Все расчёты в Decimal для точности финансовой математики
         s = self._user_settings or {}
-        min_margin_pct = float(s.get("min_margin_pct", "0.0"))
+        min_margin_pct = Decimal(s.get("min_margin_pct", "0"))
 
         if min_margin_pct > 0 and config.product and config.product.cost_price:
-            cost_price = float(config.product.cost_price)
+            cost_price = Decimal(str(config.product.cost_price))
             if cost_price > 0:
                 commission_type  = s.get("commission_type",  "pct")
-                commission_value = float(s.get("commission_value", "0.0"))
+                commission_value = Decimal(s.get("commission_value", "0"))
                 logistics_type   = s.get("logistics_type",   "rub")
-                logistics_value  = float(s.get("logistics_value",  "0.0"))
+                logistics_value  = Decimal(s.get("logistics_value",  "0"))
                 acquiring_type   = s.get("acquiring_type",   "pct")
-                acquiring_value  = float(s.get("acquiring_value",  "0.0"))
+                acquiring_value  = Decimal(s.get("acquiring_value",  "0"))
 
-                sp = float(new_price)
-                fees = 0.0
-                for ftype, fval in [
+                sp = Decimal(str(new_price))
+                fees = Decimal("0")
+                fee_items = [
                     (commission_type, commission_value),
                     (logistics_type,  logistics_value),
                     (acquiring_type,  acquiring_value),
-                ]:
+                ]
+                for ftype, fval in fee_items:
                     fees += sp * fval / 100 if ftype == "pct" else fval
 
                 current_margin = (sp - cost_price - fees) / cost_price * 100
 
                 if current_margin < min_margin_pct:
                     # Минимальная цена при которой маржа = min_margin_pct
-                    # fees = fixed_fees + sp * pct_rate
-                    # margin = (sp - cost - fees) / cost = min_margin_pct/100
-                    # sp*(1 - pct_rate) - cost - fixed_fees = cost * min_margin_pct/100
-                    # sp*(1 - pct_rate) = cost*(1 + min_margin_pct/100) + fixed_fees
                     pct_rate = sum(
-                        fval / 100 if ftype == "pct" else 0
-                        for ftype, fval in [
-                            (commission_type, commission_value),
-                            (logistics_type,  logistics_value),
-                            (acquiring_type,  acquiring_value),
-                        ]
+                        (fval / 100 if ftype == "pct" else Decimal("0"))
+                        for ftype, fval in fee_items
                     )
                     fixed_fees = sum(
-                        fval if ftype == "rub" else 0
-                        for ftype, fval in [
-                            (commission_type, commission_value),
-                            (logistics_type,  logistics_value),
-                            (acquiring_type,  acquiring_value),
-                        ]
+                        (fval if ftype == "rub" else Decimal("0"))
+                        for ftype, fval in fee_items
                     )
-                    denominator = 1 - pct_rate
+                    denominator = Decimal("1") - pct_rate
                     if denominator > 0:
-                        min_price_by_margin = Decimal(str(
-                            (cost_price * (1 + min_margin_pct / 100) + fixed_fees) / denominator
-                        ))
+                        min_price_by_margin = (
+                            cost_price * (1 + min_margin_pct / 100) + fixed_fees
+                        ) / denominator
                         # Округляем вверх до целого рубля
                         min_price_by_margin = Decimal(self._round_up(min_price_by_margin))
                         if new_price < min_price_by_margin:
@@ -524,7 +514,7 @@ class RepricerEngine:
             competitor_in_stock=competitor_in_stock,
             is_in_promo=current_data.get('is_in_promo', False),
             total_quantity=current_data.get('total_quantity'),
-            snapshot_at=datetime.utcnow()
+            snapshot_at=datetime.now(timezone.utc).replace(tzinfo=None)
         )
         self.db.add(snapshot)
     
@@ -548,7 +538,7 @@ class RepricerEngine:
             new_final_price=new_final_price,
             reason_code=reason_code,
             reason_message=reason_message,
-            changed_at=datetime.utcnow()
+            changed_at=datetime.now(timezone.utc).replace(tzinfo=None)
         )
         self.db.add(change)
     
@@ -822,7 +812,7 @@ class RepricerEngine:
                     run.updated_count = 0
                     run.skipped_count = 0
                     run.error_count = 0
-                    run.completed_at = datetime.utcnow()
+                    run.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
                     run.error_message = "Нет активных товаров с настроенными стратегиями"
                     self.db.commit()
                     return run
@@ -835,8 +825,8 @@ class RepricerEngine:
                 updated_count=0,
                 skipped_count=0,
                 error_count=0,
-                started_at=datetime.utcnow(),
-                completed_at=datetime.utcnow(),
+                started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                completed_at=datetime.now(timezone.utc).replace(tzinfo=None),
             )
             return dummy
 
@@ -854,7 +844,7 @@ class RepricerEngine:
                 user_id=self.user_id,
                 run_type=run_type,
                 status="running",
-                started_at=datetime.utcnow()
+                started_at=datetime.now(timezone.utc).replace(tzinfo=None)
             )
             self.db.add(run)
             self.db.commit()
@@ -899,7 +889,7 @@ class RepricerEngine:
             run.skipped_count = results['skipped']
             run.error_count = results['errors']
             run.status = "completed"
-            run.completed_at = datetime.utcnow()
+            run.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
             self.db.commit()
 
             logger.info(
@@ -925,7 +915,7 @@ class RepricerEngine:
             logger.error(f"Критическая ошибка в репрайсере: {e}", exc_info=True)
             run.status = "failed"
             run.error_message = str(e)
-            run.completed_at = datetime.utcnow()
+            run.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
             self.db.commit()
             
             # Уведомление в Telegram

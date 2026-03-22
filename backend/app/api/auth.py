@@ -1,8 +1,8 @@
 import secrets
 import string
-from datetime import datetime, timedelta
-from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, Request, status, BackgroundTasks
+from datetime import datetime, timedelta, timezone
+from typing import Annotated, Optional
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -22,9 +22,15 @@ from app.schemas.auth import (
 )
 
 router = APIRouter()
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)  # auto_error=False — не кидаем 403 если нет заголовка (кука может быть)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=14)
 limiter = Limiter(key_func=get_real_ip)
+
+# Cookie settings
+_COOKIE_NAME = "access_token"
+_COOKIE_MAX_AGE = settings.JWT_EXPIRE_HOURS * 3600
+_COOKIE_SECURE = True   # only over HTTPS
+_COOKIE_SAMESITE = "lax"
 
 # Максимум неудачных попыток ввода кода до инвалидации
 MAX_CODE_ATTEMPTS = 5
@@ -46,7 +52,7 @@ def generate_code() -> str:
 
 
 def create_access_token(user: User) -> str:
-    expire = datetime.utcnow() + timedelta(hours=settings.JWT_EXPIRE_HOURS)
+    expire = datetime.now(timezone.utc) + timedelta(hours=settings.JWT_EXPIRE_HOURS)
     payload = {
         "sub": user.email,
         "user_id": user.id,
@@ -57,20 +63,61 @@ def create_access_token(user: User) -> str:
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
+def _set_auth_cookie(response: Response, token: str) -> None:
+    """Ставит httpOnly cookie с JWT-токеном."""
+    response.set_cookie(
+        key=_COOKIE_NAME,
+        value=token,
+        max_age=_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=_COOKIE_SECURE,
+        samesite=_COOKIE_SAMESITE,
+        path="/",
+    )
+
+
+def _clear_auth_cookie(response: Response) -> None:
+    """Удаляет httpOnly cookie."""
+    response.delete_cookie(
+        key=_COOKIE_NAME,
+        httponly=True,
+        secure=_COOKIE_SECURE,
+        samesite=_COOKIE_SAMESITE,
+        path="/",
+    )
+
+
 async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
+    request: Request,
+    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(security)],
     db: Annotated[Session, Depends(get_db)],
 ) -> User:
-    """Dependency — возвращает объект User из JWT токена"""
+    """Dependency — возвращает объект User из JWT.
+
+    Проверяет токен из двух источников (приоритет):
+    1. Authorization: Bearer <token>  (обратная совместимость)
+    2. httpOnly cookie 'access_token'  (основной путь)
+    """
     exc = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    token_preview = credentials.credentials[:20] if credentials.credentials else "NONE"
+
+    # Извлекаем токен: header > cookie
+    raw_token: Optional[str] = None
+    if credentials and credentials.credentials:
+        raw_token = credentials.credentials
+    else:
+        raw_token = request.cookies.get(_COOKIE_NAME)
+
+    if not raw_token:
+        raise exc
+
+    token_preview = raw_token[:20]
     try:
         payload = jwt.decode(
-            credentials.credentials,
+            raw_token,
             settings.JWT_SECRET,
             algorithms=[settings.JWT_ALGORITHM],
         )
@@ -114,9 +161,9 @@ async def register(
         )
 
     code = generate_code()
-    expires_at = datetime.utcnow() + timedelta(minutes=15)
+    expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=15)
 
-    trial_start = datetime.utcnow()
+    trial_start = datetime.now(timezone.utc).replace(tzinfo=None)
     trial_end = trial_start + timedelta(days=7)
 
     user = User(
@@ -159,6 +206,7 @@ async def register(
 @limiter.limit("10/minute")
 async def verify_email(
     request: Request,
+    response: Response,
     body: VerifyEmailRequest,
     db: Annotated[Session, Depends(get_db)],
 ):
@@ -170,7 +218,7 @@ async def verify_email(
     if user.is_verified:
         raise HTTPException(status_code=400, detail="Email уже подтверждён")
 
-    if user.verification_code_expires_at and user.verification_code_expires_at < datetime.utcnow():
+    if user.verification_code_expires_at and user.verification_code_expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
         raise HTTPException(status_code=400, detail="Код истёк. Запросите новый")
 
     if not user.verification_code or not secrets.compare_digest(user.verification_code, body.code):
@@ -191,6 +239,7 @@ async def verify_email(
     db.commit()
 
     token = create_access_token(user)
+    _set_auth_cookie(response, token)
     return TokenResponse(
         access_token=token,
         token_type="bearer",
@@ -213,7 +262,7 @@ async def resend_code(
 
     code = generate_code()
     user.verification_code = code
-    user.verification_code_expires_at = datetime.utcnow() + timedelta(minutes=15)
+    user.verification_code_expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=15)
     user.verification_attempts = 0
     db.commit()
 
@@ -227,6 +276,7 @@ async def resend_code(
 @limiter.limit("10/minute")
 async def login(
     request: Request,
+    response: Response,
     body: LoginRequest,
     db: Annotated[Session, Depends(get_db)],
 ):
@@ -251,6 +301,7 @@ async def login(
         )
 
     token = create_access_token(user)
+    _set_auth_cookie(response, token)
     return TokenResponse(
         access_token=token,
         token_type="bearer",
@@ -273,7 +324,7 @@ async def forgot_password(
 
     code = generate_code()
     user.reset_code = code
-    user.reset_code_expires_at = datetime.utcnow() + timedelta(minutes=15)
+    user.reset_code_expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=15)
     user.reset_attempts = 0
     db.commit()
 
@@ -287,6 +338,7 @@ async def forgot_password(
 @limiter.limit("10/minute")
 async def reset_password(
     request: Request,
+    response: Response,
     body: ResetPasswordRequest,
     background_tasks: BackgroundTasks,
     db: Annotated[Session, Depends(get_db)],
@@ -296,7 +348,8 @@ async def reset_password(
     if not user:
         raise HTTPException(status_code=400, detail="Неверный email или код")
 
-    if not user.reset_code_expires_at or user.reset_code_expires_at < datetime.utcnow():
+    _now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if not user.reset_code_expires_at or user.reset_code_expires_at < _now:
         raise HTTPException(status_code=400, detail="Код истёк. Запросите новый")
 
     if not user.reset_code or not secrets.compare_digest(user.reset_code, body.code):
@@ -323,6 +376,7 @@ async def reset_password(
     background_tasks.add_task(send_password_changed_notification, user.email)
 
     token = create_access_token(user)
+    _set_auth_cookie(response, token)
     return TokenResponse(
         access_token=token,
         token_type="bearer",
@@ -340,7 +394,7 @@ async def change_password_send_code(
     """Отправляет код подтверждения смены пароля на email текущего пользователя."""
     code = generate_code()
     current_user.reset_code = code
-    current_user.reset_code_expires_at = datetime.utcnow() + timedelta(minutes=15)
+    current_user.reset_code_expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=15)
     current_user.reset_attempts = 0
     db.commit()
 
@@ -360,7 +414,7 @@ async def change_password_confirm(
     db: Annotated[Session, Depends(get_db)],
 ):
     """Подтверждает смену пароля по коду из email."""
-    if not current_user.reset_code_expires_at or current_user.reset_code_expires_at < datetime.utcnow():
+    if not current_user.reset_code_expires_at or current_user.reset_code_expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
         raise HTTPException(status_code=400, detail="Код истёк. Запросите новый")
 
     if not current_user.reset_code or not secrets.compare_digest(current_user.reset_code, body.code):
@@ -443,12 +497,14 @@ async def complete_onboarding(
 
 @router.post("/logout", response_model=MessageResponse)
 async def logout(
+    response: Response,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    """Logout — инкрементирует token_version, инвалидируя все текущие JWT."""
+    """Logout — инкрементирует token_version, инвалидируя все текущие JWT + чистит cookie."""
     current_user.token_version = (current_user.token_version or 1) + 1
     db.commit()
+    _clear_auth_cookie(response)
     return MessageResponse(message="Вы вышли из системы. Все сессии аннулированы.")
 
 

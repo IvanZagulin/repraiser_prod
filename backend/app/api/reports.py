@@ -1,7 +1,7 @@
 """Reports router — PDF report generation for clients."""
 
 import io
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
@@ -38,7 +38,7 @@ def generate_report(
     """Generate a branded PDF report for the given period."""
     from fpdf import FPDF
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     since = now - timedelta(days=days)
     product_ids = _user_product_ids(db, current_user)
     account_ids = _user_account_ids(db, current_user)

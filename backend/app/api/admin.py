@@ -1,6 +1,6 @@
 """Admin API router — user management and plan assignment."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -117,7 +117,7 @@ def set_user_plan(
         raise HTTPException(status_code=404, detail="plan_not_found")
 
     user.plan_id = plan.id
-    user.plan_assigned_at = datetime.utcnow()
+    user.plan_assigned_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.commit()
     db.refresh(user)
 

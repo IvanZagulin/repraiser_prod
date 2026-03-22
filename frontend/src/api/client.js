@@ -8,9 +8,10 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  withCredentials: true,  // отправлять httpOnly cookies на каждый запрос
 });
 
-// Interceptor для добавления токена
+// Interceptor: fallback на localStorage-токен (обратная совместимость на время миграции)
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token');

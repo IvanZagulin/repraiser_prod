@@ -84,7 +84,7 @@ def get_token_ttl_days(token: str) -> Optional[int]:
     if not expiration:
         return None
     
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     delta = expiration - now
     
     return delta.days if delta.days >= 0 else 0
@@ -104,7 +104,7 @@ def is_token_expired(token: str) -> bool:
     if not expiration:
         return True
     
-    return datetime.utcnow() >= expiration
+    return datetime.now(timezone.utc).replace(tzinfo=None) >= expiration
 
 
 def is_token_expiring_soon(token: str, days_threshold: int = 7) -> bool:
