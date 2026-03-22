@@ -61,10 +61,10 @@ class ProxyPool:
                     password=parts[3]
                 )
             else:
-                logger.error(f"Неверный формат прокси: {proxy_str}")
+                logger.error(f"Неверный формат прокси: {proxy_str.split(':')[0]}:***")
                 return None
         except (ValueError, IndexError) as e:
-            logger.error(f"Ошибка парсинга прокси '{proxy_str}': {e}")
+            logger.error(f"Ошибка парсинга прокси '{proxy_str.split(':')[0]}:***': {e}")
             return None
     
     def load_from_config(self):
