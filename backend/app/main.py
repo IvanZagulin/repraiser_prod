@@ -196,12 +196,17 @@ app.include_router(audit.router,        prefix="/api/audit",     tags=["Audit Lo
 
 @app.on_event("startup")
 async def startup_db_migration():
-    """Idempotent DB migrations + admin seed.
+    """DB migrations via Alembic + non-DDL seed/ops.
 
-    Используем pg_advisory_lock(42) чтобы при --workers 2
-    только один процесс выполнял ALTER TABLE одновременно —
-    иначе возникает DeadlockDetected между воркерами.
+    DDL теперь живёт в alembic/versions/. Здесь только:
+      1. Bootstrap минимальной таблицы users (чтобы миграция 006 не упала
+         из-за отсутствия таблицы при fresh install)
+      2. alembic upgrade head — применяет все новые миграции
+      3. Seed admin-юзера (если БД пустая)
+      4. One-time шифрование токенов WB
+      5. Celery-задача синхронизации фото для аккаунтов без image_url
     """
+    import os
     from app.database import engine
     from sqlalchemy import text
     from passlib.context import CryptContext
@@ -211,368 +216,35 @@ async def startup_db_migration():
     pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
     with engine.connect() as conn:
-        # Блокируем до завершения миграции другим воркером (если он уже бежит)
+        # pg_advisory_lock защищает от гонки при --workers > 1
         conn.execute(text("SELECT pg_advisory_lock(42)"))
         try:
-            # 1. users table
+            # 1. Bootstrap users (минимально, только чтоб FK в миграции 006 не упал)
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS users (
-                    id SERIAL PRIMARY KEY,
-                    email VARCHAR(255) UNIQUE NOT NULL,
+                    id            SERIAL PRIMARY KEY,
+                    email         VARCHAR(255) UNIQUE NOT NULL,
                     password_hash VARCHAR(255) NOT NULL,
-                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-                    is_admin BOOLEAN NOT NULL DEFAULT FALSE,
-                    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-                )
-            """))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_users_email ON users(email)"
-            ))
-
-            # 1b. Email verification & password reset columns
-            conn.execute(text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
-                "is_verified BOOLEAN NOT NULL DEFAULT TRUE"
-            ))
-            conn.execute(text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
-                "verification_code VARCHAR(6)"
-            ))
-            conn.execute(text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
-                "verification_code_expires_at TIMESTAMP"
-            ))
-            conn.execute(text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
-                "reset_code VARCHAR(6)"
-            ))
-            conn.execute(text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
-                "reset_code_expires_at TIMESTAMP"
-            ))
-            conn.execute(text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
-                "verification_attempts SMALLINT NOT NULL DEFAULT 0"
-            ))
-            conn.execute(text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
-                "reset_attempts SMALLINT NOT NULL DEFAULT 0"
-            ))
-            conn.execute(text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
-                "token_version SMALLINT NOT NULL DEFAULT 1"
-            ))
-
-            # 2. accounts.user_id FK
-            conn.execute(text(
-                "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS "
-                "user_id INTEGER REFERENCES users(id) ON DELETE CASCADE"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_accounts_user_id ON accounts(user_id)"
-            ))
-
-            # 3. app_settings.user_id + new unique constraint
-            conn.execute(text(
-                "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS "
-                "user_id INTEGER REFERENCES users(id) ON DELETE CASCADE"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_app_settings_user_id ON app_settings(user_id)"
-            ))
-            # Сносим старый уникальный индекс/constraint по одному key (любое из возможных имён)
-            conn.execute(text("""
-                DO $$
-                BEGIN
-                    IF EXISTS (
-                        SELECT 1 FROM pg_constraint
-                        WHERE conname = 'app_settings_key_key'
-                          AND conrelid = 'app_settings'::regclass
-                    ) THEN
-                        ALTER TABLE app_settings DROP CONSTRAINT app_settings_key_key;
-                    END IF;
-                    IF EXISTS (
-                        SELECT 1 FROM pg_constraint
-                        WHERE conname = 'ix_app_settings_key'
-                          AND conrelid = 'app_settings'::regclass
-                    ) THEN
-                        ALTER TABLE app_settings DROP CONSTRAINT ix_app_settings_key;
-                    END IF;
-                    IF EXISTS (
-                        SELECT 1 FROM pg_indexes
-                        WHERE indexname = 'ix_app_settings_key'
-                          AND tablename = 'app_settings'
-                    ) THEN
-                        DROP INDEX ix_app_settings_key;
-                    END IF;
-                END$$;
-            """))
-            # Добавляем составной уникальный constraint
-            conn.execute(text("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM pg_constraint
-                        WHERE conname = 'uq_app_settings_key_user'
-                    ) THEN
-                        ALTER TABLE app_settings
-                        ADD CONSTRAINT uq_app_settings_key_user UNIQUE (key, user_id);
-                    END IF;
-                END$$;
-            """))
-
-            # 4. Legacy columns from v1
-            conn.execute(text(
-                "ALTER TABLE products ADD COLUMN IF NOT EXISTS cost_price NUMERIC(10, 2)"
-            ))
-            conn.execute(text(
-                "ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url VARCHAR(500)"
-            ))
-            conn.execute(text(
-                "ALTER TABLE product_config ADD COLUMN IF NOT EXISTS "
-                "competitor_select_rule VARCHAR(20) DEFAULT 'min_price'"
-            ))
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS competitor_entries (
-                    id SERIAL PRIMARY KEY,
-                    product_config_id INTEGER NOT NULL
-                        REFERENCES product_config(id) ON DELETE CASCADE,
-                    nm_id BIGINT NOT NULL,
-                    alias VARCHAR(100)
-                )
-            """))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_competitor_entries_product_config_id "
-                "ON competitor_entries(product_config_id)"
-            ))
-
-            conn.commit()
-
-            # 5. WB Catalog (кэш карточек для быстрого импорта)
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS wb_catalog (
-                    id SERIAL PRIMARY KEY,
-                    account_id INTEGER NOT NULL
-                        REFERENCES accounts(id) ON DELETE CASCADE,
-                    nm_id BIGINT NOT NULL,
-                    vendor_code VARCHAR(255) NOT NULL,
-                    synced_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                    CONSTRAINT uq_wb_catalog_account_sku UNIQUE (account_id, vendor_code)
-                )
-            """))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_wb_catalog_account_id ON wb_catalog(account_id)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_wb_catalog_nm_id ON wb_catalog(account_id, nm_id)"
-            ))
-            conn.execute(text(
-                "ALTER TABLE wb_catalog ADD COLUMN IF NOT EXISTS "
-                "image_url VARCHAR(512)"
-            ))
-            # Backfill products.image_url from wb_catalog where available
-            conn.execute(text("""
-                UPDATE products p
-                SET image_url = c.image_url
-                FROM wb_catalog c
-                WHERE p.account_id = c.account_id
-                  AND p.nm_id = c.nm_id
-                  AND p.image_url IS NULL
-                  AND c.image_url IS NOT NULL
-            """))
-            conn.commit()
-
-            # 6. Performance indexes
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_products_account_id ON products(account_id)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_price_snapshots_product_snapshot "
-                "ON price_snapshots(product_id, snapshot_at DESC)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_repricer_runs_status_started "
-                "ON repricer_runs(status, started_at DESC)"
-            ))
-            conn.commit()
-
-            # 7. Plans table + seed data
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS plans (
-                    id SERIAL PRIMARY KEY,
-                    code VARCHAR(50) UNIQUE NOT NULL,
-                    name VARCHAR(100) NOT NULL,
-                    max_sku INTEGER,
-                    max_accounts INTEGER,
-                    price_rub NUMERIC(10,2),
-                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-                    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-                )
-            """))
-            # Seed plans if empty
-            plan_count = conn.execute(text("SELECT COUNT(*) FROM plans")).scalar()
-            if plan_count == 0:
-                conn.execute(text("""
-                    INSERT INTO plans (code, name, max_sku, max_accounts, price_rub) VALUES
-                    ('start',      'Старт',      500,  1, 2990),
-                    ('business',   'Бизнес',     5000, 5, 6990),
-                    ('enterprise', 'Энтерпрайз', NULL, NULL, NULL)
-                """))
-            conn.commit()
-
-            # 7b. User plan/trial/onboarding columns
-            conn.execute(text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
-                "plan_id INTEGER REFERENCES plans(id)"
-            ))
-            conn.execute(text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
-                "plan_assigned_at TIMESTAMP"
-            ))
-            conn.execute(text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
-                "trial_started_at TIMESTAMP"
-            ))
-            conn.execute(text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
-                "trial_ends_at TIMESTAMP"
-            ))
-            conn.execute(text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
-                "onboarding_completed BOOLEAN NOT NULL DEFAULT FALSE"
-            ))
-            conn.commit()
-
-            # 7c. Repricer schedules table
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS repricer_schedules (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
-                    interval_minutes INTEGER NOT NULL DEFAULT 60,
-                    work_start_hour INTEGER NOT NULL DEFAULT 0,
-                    work_end_hour INTEGER NOT NULL DEFAULT 24,
-                    timezone VARCHAR(50) NOT NULL DEFAULT 'Europe/Moscow',
-                    paused_days VARCHAR(50),
-                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-                    updated_at TIMESTAMP DEFAULT NOW()
+                    is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+                    is_admin      BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at    TIMESTAMP NOT NULL DEFAULT NOW()
                 )
             """))
             conn.commit()
 
-            # 7d. Activity logs table
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS activity_logs (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    event_type VARCHAR(50) NOT NULL,
-                    product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
-                    account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
-                    details TEXT,
-                    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-                )
-            """))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_activity_logs_user_created "
-                "ON activity_logs(user_id, created_at DESC)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_activity_logs_event_type "
-                "ON activity_logs(event_type)"
-            ))
-            conn.commit()
+            # 2. Alembic upgrade head — весь DDL теперь в миграциях
+            try:
+                from alembic.config import Config
+                from alembic import command as alembic_command
+                backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                alembic_cfg = Config(os.path.join(backend_dir, "alembic.ini"))
+                alembic_command.upgrade(alembic_cfg, "head")
+                log.info("[startup] alembic upgrade head — OK")
+            except Exception as e:
+                log.error(f"[startup] alembic upgrade head failed: {e}", exc_info=True)
+                raise
 
-            # 7e. Products: brand/category columns for filtering
-            conn.execute(text(
-                "ALTER TABLE products ADD COLUMN IF NOT EXISTS brand VARCHAR(200)"
-            ))
-            conn.execute(text(
-                "ALTER TABLE products ADD COLUMN IF NOT EXISTS category VARCHAR(200)"
-            ))
-            conn.commit()
-
-            # 7f. Config change log (F4 audit)
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS config_change_log (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-                    field_name VARCHAR(50) NOT NULL,
-                    old_value VARCHAR(255),
-                    new_value VARCHAR(255),
-                    changed_at TIMESTAMP NOT NULL DEFAULT NOW()
-                )
-            """))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_config_change_log_user "
-                "ON config_change_log(user_id, changed_at DESC)"
-            ))
-            conn.commit()
-
-            # 7g. Product groups & membership (F6)
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS product_groups (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    name VARCHAR(100) NOT NULL,
-                    color VARCHAR(7) NOT NULL DEFAULT '#7c3aed',
-                    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-                )
-            """))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_product_groups_user "
-                "ON product_groups(user_id)"
-            ))
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS product_group_membership (
-                    id SERIAL PRIMARY KEY,
-                    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-                    group_id INTEGER NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE,
-                    CONSTRAINT uq_product_group UNIQUE (product_id, group_id)
-                )
-            """))
-            conn.commit()
-
-            # 7h. Competitor alerts (F5)
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS competitor_alerts (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-                    competitor_nm_id BIGINT NOT NULL,
-                    old_price NUMERIC(10, 2) NOT NULL,
-                    new_price NUMERIC(10, 2) NOT NULL,
-                    change_pct NUMERIC(5, 1) NOT NULL,
-                    is_read BOOLEAN NOT NULL DEFAULT FALSE,
-                    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-                )
-            """))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_competitor_alerts_user "
-                "ON competitor_alerts(user_id, is_read, created_at DESC)"
-            ))
-            conn.commit()
-
-            # 7i. Pricing rules (F9)
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS pricing_rules (
-                    id SERIAL PRIMARY KEY,
-                    product_config_id INTEGER NOT NULL REFERENCES product_config(id) ON DELETE CASCADE,
-                    priority INTEGER NOT NULL DEFAULT 0,
-                    condition_type VARCHAR(30) NOT NULL,
-                    condition_value VARCHAR(50),
-                    action_type VARCHAR(30) NOT NULL,
-                    action_value VARCHAR(50) NOT NULL,
-                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-                    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-                )
-            """))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_pricing_rules_config "
-                "ON pricing_rules(product_config_id)"
-            ))
-            conn.commit()
-
-            # 8. Seed admin user if no users exist
+            # 3. Seed admin user if no users exist
             count = conn.execute(text("SELECT COUNT(*) FROM users")).scalar()
             if count == 0:
                 hashed = pwd.hash(settings.ADMIN_PASSWORD)
@@ -583,7 +255,7 @@ async def startup_db_migration():
                 conn.commit()
                 log.info(f"[startup] Admin user created: {settings.ADMIN_EMAIL}")
 
-            # 8. Encrypt existing plaintext WB API tokens (one-time migration)
+            # 4. One-time: шифруем plaintext WB API токены
             if settings.FERNET_KEY:
                 try:
                     from app.utils.crypto import encrypt_field
@@ -603,9 +275,7 @@ async def startup_db_migration():
                     log.warning(f"[startup] Token encryption migration failed: {e}")
                     conn.rollback()
 
-            # 9. Ставим в очередь синхронизацию каталога (фото) для аккаунтов,
-            #    у которых есть товары без image_url.
-            #    Задача запускается в фоне через Celery — не блокирует старт.
+            # 5. Ставим в очередь синхронизацию фото для аккаунтов без image_url
             try:
                 missing_img_accounts = conn.execute(text("""
                     SELECT DISTINCT p.account_id
@@ -626,7 +296,6 @@ async def startup_db_migration():
                 log.warning(f"[startup] Failed to queue catalog sync for images: {e}")
 
         finally:
-            # Снимаем advisory lock в любом случае (даже при ошибке)
             conn.execute(text("SELECT pg_advisory_unlock(42)"))
             conn.commit()
 
