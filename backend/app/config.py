@@ -30,8 +30,9 @@ class Settings(BaseSettings):
     PRICE_CHECK_ATTEMPTS: int = 3  # Попыток проверки применения
 
     # Admin (создаётся автоматически при первом запуске)
-    ADMIN_EMAIL: str = "admin@example.com"
-    ADMIN_PASSWORD: str = "changeme123"
+    # Нет дефолтов — ОБЯЗАТЕЛЬНО задать в .env / docker-compose
+    ADMIN_EMAIL: str = ""
+    ADMIN_PASSWORD: str = ""
 
     # Redis / Celery
     REDIS_URL: str = "redis://redis:6379/0"

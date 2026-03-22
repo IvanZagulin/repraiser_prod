@@ -23,7 +23,7 @@ from app.schemas.auth import (
 
 router = APIRouter()
 security = HTTPBearer()
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=14)
 limiter = Limiter(key_func=get_real_ip)
 
 # Максимум неудачных попыток ввода кода до инвалидации
@@ -439,6 +439,17 @@ async def complete_onboarding(
     current_user.onboarding_completed = True
     db.commit()
     return MessageResponse(message="Онбординг завершён")
+
+
+@router.post("/logout", response_model=MessageResponse)
+async def logout(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Logout — инкрементирует token_version, инвалидируя все текущие JWT."""
+    current_user.token_version = (current_user.token_version or 1) + 1
+    db.commit()
+    return MessageResponse(message="Вы вышли из системы. Все сессии аннулированы.")
 
 
 # ─── internal helpers ─────────────────────────────────────────────────────────

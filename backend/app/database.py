@@ -9,6 +9,8 @@ engine = create_engine(
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,
+    pool_timeout=30,       # макс. ожидание свободного коннекта из пула (сек)
+    pool_recycle=1800,     # пересоздавать коннекты каждые 30 мин (защита от stale)
     # 30s timeout на SQL-запросы — защита от зависших/долгих запросов
     connect_args={"options": "-c statement_timeout=30000"},
 )

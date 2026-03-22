@@ -252,7 +252,9 @@ async def search_wb_product(
     try:
         cards = await wb_client.search_cards(text_search=text, limit=100)
     except WBAPIError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        import logging
+        logging.getLogger(__name__).error(f"WB API search error: {e}")
+        raise HTTPException(status_code=502, detail="Ошибка при обращении к WB API")
 
     if cards:
         card = cards[0]
@@ -270,7 +272,9 @@ async def search_wb_product(
     try:
         prices = await wb_client.get_prices(nm_ids=[nm_id_int])
     except WBAPIError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        import logging
+        logging.getLogger(__name__).error(f"WB API get_prices error: {e}")
+        raise HTTPException(status_code=502, detail="Ошибка при обращении к WB API")
 
     if not prices:
         raise HTTPException(status_code=404, detail="Товар не найден в WB")

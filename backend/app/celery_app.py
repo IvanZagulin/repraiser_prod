@@ -22,6 +22,12 @@ celery_app.conf.update(
     result_expires=3600,
     # Перезапускать воркер каждые 200 задач — защита от утечек памяти
     worker_max_tasks_per_child=200,
+    # Ack задачу ПОСЛЕ выполнения — если воркер упал, задача вернётся в очередь
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    # Автореконнект к Redis-брокеру при разрыве
+    broker_connection_retry_on_startup=True,
+    broker_connection_max_retries=10,
 )
 
 

@@ -17,7 +17,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Копирование scheduler
 COPY . .
 
-# Создание директории для логов
-RUN mkdir -p /app/logs
+# Создание директории для логов + non-root user
+RUN mkdir -p /app/logs && \
+    addgroup --system appgroup && \
+    adduser --system --ingroup appgroup appuser && \
+    chown -R appuser:appgroup /app
+
+USER appuser
 
 CMD ["python", "scheduler.py"]

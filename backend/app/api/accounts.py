@@ -148,7 +148,9 @@ async def sync_catalog(
         sync_wb_catalog_task.delay(account_id)
         return {"status": "queued", "message": "Синхронизация каталога запущена"}
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Celery недоступен: {e}")
+        import logging
+        logging.getLogger(__name__).error(f"Celery недоступен при sync account_id={account_id}: {e}")
+        raise HTTPException(status_code=503, detail="Сервис временно недоступен, попробуйте позже")
 
 
 @router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT)

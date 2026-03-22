@@ -276,9 +276,9 @@ async def startup_db_migration():
                 log.error(f"[startup] alembic upgrade head failed: {e}", exc_info=True)
                 raise
 
-            # 3. Seed admin user if no users exist
+            # 3. Seed admin user if no users exist (и если credentials заданы)
             count = conn.execute(text("SELECT COUNT(*) FROM users")).scalar()
-            if count == 0:
+            if count == 0 and settings.ADMIN_EMAIL and settings.ADMIN_PASSWORD:
                 hashed = pwd.hash(settings.ADMIN_PASSWORD)
                 conn.execute(text(
                     "INSERT INTO users (email, password_hash, is_active, is_admin) "
