@@ -101,6 +101,12 @@ class CatalogParser:
             f"?appType=1&curr=rub&dest=-1257786&nm={nm_id}"
         )
 
+    def _build_batch_url(self, nm_ids: list[int]) -> str:
+        """URL для батчевого запроса — WB принимает nm=id1;id2;id3 (до 100 шт.)."""
+        base = settings.WB_CATALOG_BASE_URL
+        nm_param = ";".join(str(n) for n in nm_ids)
+        return f"{base}/cards/v4/detail?appType=1&curr=rub&dest=-1257786&nm={nm_param}"
+
     @staticmethod
     def _extract_products(data: dict) -> list:
         """
@@ -203,6 +209,67 @@ class CatalogParser:
         except (KeyError, IndexError, ValueError) as e:
             logger.error(f"Ошибка парсинга данных nm_id={nm_id}: {e}")
             return None
+
+    async def parse_batch_ids(
+        self,
+        nm_ids: list[int],
+        chunk_size: int = 100,
+        delay_between_chunks: float = 0.5,
+    ) -> Dict[int, Optional[ProductData]]:
+        """
+        Батчевый парсинг: объединяет nm_ids в чанки по chunk_size и делает
+        один HTTP-запрос на чанк вместо N отдельных. Резко снижает RPS на WB API.
+        """
+        if not nm_ids:
+            return {}
+
+        logger.info(f"Батч-парсинг {len(nm_ids)} товаров (чанки по {chunk_size})")
+        result: Dict[int, Optional[ProductData]] = {}
+
+        chunks = [nm_ids[i:i + chunk_size] for i in range(0, len(nm_ids), chunk_size)]
+        for idx, chunk in enumerate(chunks):
+            if idx > 0:
+                await asyncio.sleep(delay_between_chunks)
+
+            url = self._build_batch_url(chunk)
+            data = None
+
+            proxies_available = proxy_pool._initialized and proxy_pool.get_stats()['alive'] > 0
+            if proxies_available:
+                for attempt in range(1, self.max_retries + 1):
+                    proxy = await proxy_pool.get_next_proxy()
+                    if not proxy:
+                        break
+                    data = await self._request_with_proxy(url, proxy)
+                    if data is not None:
+                        break
+                    await asyncio.sleep(0.5)
+
+            if data is None:
+                data = await self._request_direct(url)
+
+            if data is None:
+                logger.error(f"Батч чанк {idx + 1}/{len(chunks)}: не удалось получить данные")
+                for nm_id in chunk:
+                    result[nm_id] = None
+                continue
+
+            products_raw = self._extract_products(data)
+            products_map = {p_raw.get('id'): p_raw for p_raw in products_raw}
+            for nm_id in chunk:
+                raw = products_map.get(nm_id)
+                if raw:
+                    try:
+                        result[nm_id] = ProductData(raw)
+                    except Exception as e:
+                        logger.error(f"Ошибка парсинга nm_id={nm_id} из батча: {e}")
+                        result[nm_id] = None
+                else:
+                    result[nm_id] = None
+
+        success = sum(1 for v in result.values() if v is not None)
+        logger.info(f"Батч-парсинг завершён: {success}/{len(nm_ids)} успешно")
+        return result
 
     async def parse_multiple(self, nm_ids: list[int]) -> Dict[int, Optional[ProductData]]:
         """Последовательный парсинг товаров — каждый через следующий прокси по кругу"""

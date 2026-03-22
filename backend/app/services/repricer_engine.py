@@ -783,6 +783,34 @@ class RepricerEngine:
 
         products = self.db.execute(query).scalars().unique().all()
 
+        # Pre-fetch цен конкурентов батчами перед основным циклом.
+        # Собираем все уникальные nm_id конкурентов, исключаем уже закешированные,
+        # затем делаем batch-запросы к WB (100 товаров за раз) и кладём в Redis-кеш.
+        # _cached_parse_product в цикле ниже будет читать только из кеша.
+        if products:
+            from app.models.competitor_entry import CompetitorEntry
+            config_ids = [p.config.id for p in products if p.config]
+            competitor_nm_ids: set[int] = set()
+            if config_ids:
+                entries = self.db.query(CompetitorEntry.nm_id).filter(
+                    CompetitorEntry.product_config_id.in_(config_ids)
+                ).all()
+                competitor_nm_ids.update(e.nm_id for e in entries)
+                for p in products:
+                    if p.config and p.config.competitor_nm_id:
+                        competitor_nm_ids.add(p.config.competitor_nm_id)
+            cold_ids = [
+                nm_id for nm_id in competitor_nm_ids
+                if cache_get(f"wb_catalog:{nm_id}") is None
+            ]
+            if cold_ids:
+                logger.info(f"Pre-fetch конкурентов: {len(cold_ids)} холодных из {len(competitor_nm_ids)} уникальных")
+                batch_results = await catalog_parser.parse_batch_ids(cold_ids)
+                for nm_id, product_data in batch_results.items():
+                    if product_data is not None:
+                        cache_set(f"wb_catalog:{nm_id}", product_data.to_dict(), ttl=180)
+                logger.info(f"Pre-fetch завершён: {sum(1 for v in batch_results.values() if v)} / {len(cold_ids)}")
+
         if not products:
             logger.info("Нет активных товаров для обработки — прогон не создаётся")
             # Если был создан run из API (queued), помечаем его завершённым

@@ -16,9 +16,30 @@ except ImportError:
 # Добавляем путь к приложению
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'backend'))
 
+import redis as redis_lib
+
 from app.config import settings
 from app.services.telegram import telegram_notifier
 from app.services.proxy_pool import proxy_pool
+
+# Redis-клиент для проверки run-локов перед постановкой задач в очередь
+_redis_client: redis_lib.Redis = None
+
+
+def _get_redis() -> redis_lib.Redis:
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = redis_lib.from_url(settings.REDIS_URL, decode_responses=True)
+    return _redis_client
+
+
+def _is_run_locked(user_id: int) -> bool:
+    """Проверяет, идёт ли уже прогон для пользователя (без захвата лока)."""
+    try:
+        return bool(_get_redis().exists(f"repricer:run_lock:{user_id}"))
+    except Exception as e:
+        logger.warning(f"Redis exists check failed for user={user_id}: {e}")
+        return False  # при недоступности Redis — разрешаем (воркер сам защитится)
 
 # Настройка логирования
 logging.basicConfig(
@@ -163,6 +184,11 @@ async def repricer_job():
             try:
                 # Проверяем расписание, план, рабочие часы
                 if not _user_should_run(db, user_id):
+                    continue
+
+                # Не ставим задачу в очередь если прогон уже идёт — защита от мусорных дублей
+                if _is_run_locked(user_id):
+                    logger.info(f"  user={user_id}: прогон уже идёт (Redis-лок), пропускаем")
                     continue
 
                 # Проверяем наличие товаров С активными конфигами
