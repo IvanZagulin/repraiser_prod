@@ -23,8 +23,8 @@ import { Badge } from '@/components/ui/badge';
 
 const WIDGET_DEFS = [
   { id: 'stats',       label: 'Статистика',          icon: BarChart2 },
-  { id: 'chart',       label: 'График прогонов',     icon: Activity },
-  { id: 'runs',        label: 'Последние прогоны',   icon: PlayCircle },
+  { id: 'chart',       label: 'График запусков',     icon: Activity },
+  { id: 'runs',        label: 'Последние запуски',   icon: PlayCircle },
   { id: 'strategies',  label: 'Стратегии товаров',   icon: Package },
   { id: 'activity',    label: 'Последние действия',  icon: ScrollText },
 ];
@@ -380,10 +380,10 @@ export default function Dashboard() {
             <div className="flex items-center justify-between">
               <CardTitle className="flex items-center gap-2 text-sm font-semibold">
                 <BarChart2 className="h-4 w-4 text-muted-foreground" />
-                Активность прогонов
+                Активность запусков
               </CardTitle>
               <span className="text-xs text-muted-foreground">
-                Последние {runsChartData.length} прогонов
+                Последние {runsChartData.length} запусков
               </span>
             </div>
           </CardHeader>
@@ -446,10 +446,10 @@ export default function Dashboard() {
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2 text-sm font-semibold">
               <PlayCircle className="h-4 w-4 text-muted-foreground" />
-              Последние прогоны
+              Последние запуски
             </CardTitle>
             <Button variant="ghost" size="xs" onClick={() => navigate('/runs')} className="gap-1">
-              Все прогоны <ChevronRight className="h-3.5 w-3.5" />
+              Все запуски <ChevronRight className="h-3.5 w-3.5" />
             </Button>
           </div>
         </CardHeader>
@@ -457,7 +457,7 @@ export default function Dashboard() {
           {recentRuns.length === 0 ? (
             <div className="py-10 text-center">
               <PlayCircle className="mx-auto mb-3 h-10 w-10 text-muted-foreground/20" />
-              <p className="text-sm text-muted-foreground">Прогоны ещё не выполнялись</p>
+              <p className="text-sm text-muted-foreground">Запуски ещё не выполнялись</p>
             </div>
           ) : (
             <div className="space-y-1.5">

@@ -68,7 +68,7 @@ export default function ReportsPage() {
               <div>
                 <h2 className="text-lg font-semibold text-foreground">Сводный отчёт</h2>
                 <p className="text-sm text-muted-foreground">
-                  Полный отчёт с аналитикой, прогонами и изменениями цен
+                  Полный отчёт с аналитикой, запусками и изменениями цен
                 </p>
               </div>
             </div>
@@ -76,12 +76,12 @@ export default function ReportsPage() {
             {/* What's included */}
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6">
               {[
-                'Сводка по прогонам',
+                'Сводка по запускам',
                 'Изменения цен',
                 'Топ товаров по изменениям',
                 'Стратегии товаров',
                 'Список аккаунтов',
-                'История прогонов',
+                'История запусков',
               ].map((item) => (
                 <div key={item} className="flex items-center gap-2 text-sm text-muted-foreground">
                   <CheckCircle2 className="w-3.5 h-3.5 text-[#00c8ff] shrink-0" />
@@ -162,7 +162,7 @@ export default function ReportsPage() {
               <p className="text-sm font-medium text-foreground mb-1">Как использовать отчёты</p>
               <ul className="text-sm text-muted-foreground space-y-1">
                 <li>• Отчёт содержит брендированную шапку QUASAR-X с логотипом</li>
-                <li>• Таблицы с данными по аккаунтам, товарам и прогонам</li>
+                <li>• Таблицы с данными по аккаунтам, товарам и запускам</li>
                 <li>• Можно отправить клиенту как подтверждение работы репрайсера</li>
                 <li>• Для аналитики за больший период выберите 90 или 365 дней</li>
               </ul>

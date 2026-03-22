@@ -20,7 +20,7 @@ export default function Runs() {
       const response = await getRepricerRuns({ limit: 50 });
       setRuns(response.data.runs);
     } catch {
-      toast.error('Ошибка загрузки прогонов');
+      toast.error('Ошибка загрузки запусков');
     } finally {
       setLoading(false);
     }
@@ -60,7 +60,7 @@ export default function Runs() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="page-h1">Прогоны репрайсера</h1>
+          <h1 className="page-h1">Запуски репрайсера</h1>
           <p className="text-sm mt-1 text-muted-foreground">История запусков и результаты</p>
         </div>
         <button onClick={loadRuns} className="btn btn-secondary gap-2">
@@ -76,7 +76,7 @@ export default function Runs() {
       ) : runs.length === 0 ? (
         <div className="card text-center py-16">
           <PlayCircle className="w-10 h-10 mx-auto mb-3" style={{ color: '#e5e7eb' }} />
-          <p style={{ color: 'var(--text-3)' }}>Прогоны не найдены</p>
+          <p style={{ color: 'var(--text-3)' }}>Запуски не найдены</p>
         </div>
       ) : (
         <div className="card overflow-hidden p-0">

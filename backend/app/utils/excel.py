@@ -357,7 +357,7 @@ class ExcelExporter:
         output.seek(0)
         return output
 
-    # ─────────────────── ИСТОРИЯ / ПРОГОН ───────────────────
+    # ─────────────────── ИСТОРИЯ / ЗАПУСК ───────────────────
 
     @staticmethod
     def export_price_history(
@@ -404,12 +404,12 @@ class ExcelExporter:
         wb = ExcelExporter.create_workbook()
 
         ws_summary = wb.create_sheet("Сводка")
-        ws_summary.append(["Прогон репрайсера"])
+        ws_summary.append(["Запуск репрайсера"])
         ws_summary.append([])
         ws_summary.append(["Параметр", "Значение"])
         ExcelExporter._style_header(ws_summary, row=3)
         for k, v in [
-            ("ID прогона",      run_data.get("id")),
+            ("ID запуска",      run_data.get("id")),
             ("Тип",             run_data.get("run_type")),
             ("Статус",          run_data.get("status")),
             ("Начало",          run_data.get("started_at")),

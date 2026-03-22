@@ -15,7 +15,7 @@ const EVENT_CONFIG = {
   account_created:       { icon: User,       color: '#3b82f6', label: 'Аккаунт создан' },
   product_created:       { icon: Package,    color: '#3b82f6', label: 'Товар добавлен' },
   product_deleted:       { icon: Trash2,     color: '#ef4444', label: 'Товар удалён' },
-  repricer_run:          { icon: Play,       color: '#00c8ff', label: 'Прогон репрайсера' },
+  repricer_run:          { icon: Play,       color: '#00c8ff', label: 'Запуск репрайсера' },
   login:                 { icon: LogIn,      color: '#9ca3af', label: 'Вход в систему' },
 };
 

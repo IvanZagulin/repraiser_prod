@@ -629,6 +629,7 @@ class RepricerEngine:
             )
         else:
             logger.error(f"Неизвестная стратегия: {config.strategy}")
+            logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": "PARSE_ERROR", "duration_ms": int((time.monotonic() - _t0) * 1000)}))
             return "PARSE_ERROR"
         
         # Если цена не изменилась
@@ -638,6 +639,7 @@ class RepricerEngine:
                 run, product, current_data, None, None,
                 reason_code, reason_msg
             )
+            logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": reason_code, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
             return reason_code
         
         # Применяем лимиты
@@ -650,6 +652,7 @@ class RepricerEngine:
                 run, product, current_data, final_new_price, None,
                 "NO_CHANGE", f"После применения лимитов цена осталась прежней ({final_new_price}₽)"
             )
+            logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": "NO_CHANGE", "duration_ms": int((time.monotonic() - _t0) * 1000)}))
             return "NO_CHANGE"
         
         # Обновляем цену в WB (в dry_run пропускаем реальный вызов)

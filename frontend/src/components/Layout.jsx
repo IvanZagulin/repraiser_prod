@@ -17,7 +17,7 @@ const navItems = [
   { to: '/',              icon: Home,              label: 'Главная' },
   { to: '/products',      icon: Package,           label: 'Товары' },
   { to: '/analytics',     icon: BarChart2,         label: 'Аналитика' },
-  { to: '/runs',          icon: PlayCircle,        label: 'Прогоны' },
+  { to: '/runs',          icon: PlayCircle,        label: 'Запуски' },
   { to: '/schedule',      icon: Clock,             label: 'Расписание' },
   { to: '/accounts',      icon: Users,             label: 'Аккаунты' },
   { to: '/activity',      icon: ScrollText,        label: 'Журнал' },

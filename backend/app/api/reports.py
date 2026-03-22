@@ -191,7 +191,7 @@ def generate_report(
     card_w = page_w / 4
     card_h = 28
     cards = [
-        ("Прогонов", str(total_runs), NEON),
+        ("Запусков", str(total_runs), NEON),
         ("Успешных", f"{completed_runs} ({round(completed_runs / total_runs * 100) if total_runs else 0}%)", (34, 197, 94)),
         ("Обновлений", f"{total_updated:,}".replace(",", " "), (0, 102, 255)),
         ("Изменений цен", str(changes_count), (139, 92, 246)),
@@ -335,7 +335,7 @@ def generate_report(
     if runs:
         pdf.set_font(FONT, "B", 14)
         pdf.set_text_color(*DARK)
-        pdf.cell(0, 10, "История прогонов (последние 20)", ln=True)
+        pdf.cell(0, 10, "История запусков (последние 20)", ln=True)
         pdf.ln(2)
 
         col_w3 = [page_w * 0.08, page_w * 0.25, page_w * 0.15, page_w * 0.17, page_w * 0.17, page_w * 0.18]
