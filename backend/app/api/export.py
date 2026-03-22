@@ -203,13 +203,18 @@ async def export_history(
             detail="No products found"
         )
 
-    # Batch-загрузка снимков (fix N+1)
+    # Batch-загрузка снимков (fix N+1) с ограничением общего кол-ва строк
+    # чтобы не тянуть миллионы снимков в память при большом историческом объёме
     product_ids = [p.id for p in products]
+    MAX_TOTAL_SNAPSHOTS = limit * len(product_ids)
+    if MAX_TOTAL_SNAPSHOTS > 500_000:
+        MAX_TOTAL_SNAPSHOTS = 500_000  # hard cap: защита от OOM
     from sqlalchemy import and_
     all_snapshots = (
         db.query(PriceSnapshot)
         .filter(PriceSnapshot.product_id.in_(product_ids))
         .order_by(desc(PriceSnapshot.snapshot_at))
+        .limit(MAX_TOTAL_SNAPSHOTS)
         .all()
     )
     # Группируем по product_id с лимитом

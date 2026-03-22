@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     # JWT
     JWT_SECRET: str
     JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRE_HOURS: int = 720  # 30 дней
+    JWT_EXPIRE_HOURS: int = 24  # 1 сутки (docker-compose может перекрыть)
     
     # Telegram
     TELEGRAM_BOT_TOKEN: Optional[str] = None

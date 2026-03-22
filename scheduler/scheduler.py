@@ -306,6 +306,46 @@ async def cleanup_stale_runs():
         db.close()
 
 
+async def cleanup_old_snapshots():
+    """Удаляет price_snapshots старше 180 дней.
+
+    При 1000 товаров × 24 прогона/день × 180 дней ≈ 4.3M строк —
+    без очистки таблица растёт бесконечно и замедляет запросы.
+    Запуск раз в сутки, батчами по 50K строк чтобы не блокировать БД.
+    """
+    RETENTION_DAYS = 180
+    BATCH_SIZE = 50_000
+    logger.info(f"Очистка снимков цен старше {RETENTION_DAYS} дней...")
+    db = SessionLocal()
+    total_deleted = 0
+    try:
+        while True:
+            result = db.execute(
+                text(f"""
+                    DELETE FROM price_snapshots
+                    WHERE id IN (
+                        SELECT id FROM price_snapshots
+                        WHERE snapshot_at < NOW() - INTERVAL '{RETENTION_DAYS} days'
+                        LIMIT {BATCH_SIZE}
+                    )
+                """)
+            )
+            deleted = result.rowcount
+            db.commit()
+            total_deleted += deleted
+            if deleted < BATCH_SIZE:
+                break
+        if total_deleted > 0:
+            logger.info(f"Удалено старых снимков: {total_deleted}")
+        else:
+            logger.info("Старых снимков нет")
+    except Exception as e:
+        logger.error(f"Ошибка очистки снимков: {e}", exc_info=True)
+        db.rollback()
+    finally:
+        db.close()
+
+
 async def competitor_monitor_job():
     """Каждые 30 минут: мониторинг цен конкурентов для всех пользователей."""
     logger.info("Планировщик: мониторинг цен конкурентов")
@@ -380,6 +420,16 @@ def setup_scheduler() -> AsyncIOScheduler:
         max_instances=1,
     )
     logger.info("Задача 'cleanup_stale_runs' зарегистрирована (каждые 15 мин.)")
+
+    scheduler.add_job(
+        cleanup_old_snapshots,
+        trigger=IntervalTrigger(hours=24),
+        id="cleanup_old_snapshots",
+        name="Cleanup Old Snapshots (daily)",
+        replace_existing=True,
+        max_instances=1,
+    )
+    logger.info("Задача 'cleanup_old_snapshots' зарегистрирована (раз в сутки)")
 
     return scheduler
 
