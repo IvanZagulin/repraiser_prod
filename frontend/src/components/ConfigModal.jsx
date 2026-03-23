@@ -168,10 +168,9 @@ export default function ConfigModal({ product, onClose }) {
                   key={s.id}
                   type="button"
                   onClick={() => setStrategy(s.id)}
-                  className="p-3.5 rounded-lg text-left transition-all"
-                  className={strategy === s.id
+                  className={`p-3.5 rounded-lg text-left transition-all ${strategy === s.id
                     ? 'border border-primary/40 bg-primary/5'
-                    : 'border border-border bg-muted/30'}
+                    : 'border border-border bg-muted/30'}`}
                 >
                   <div className="font-medium text-sm text-foreground">{s.label}</div>
                   <div className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>{s.desc}</div>
