@@ -49,11 +49,13 @@ async def list_products(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=1000),
 ):
+    from sqlalchemy.orm import joinedload as _jl
     query = (
         db.query(Product)
         .join(Account, Product.account_id == Account.id)
         .filter(Account.user_id == current_user.id)
         .join(ProductConfig, Product.id == ProductConfig.product_id, isouter=True)
+        .options(_jl(Product.config))  # fix N+1: загружаем config в одном запросе
     )
 
     if account_id:
@@ -73,14 +75,27 @@ async def list_products(
     total = query.count()
     products = query.offset((page - 1) * page_size).limit(page_size).all()
 
-    # Настройки для расчёта маржи (per-user)
+    # Настройки для расчёта маржи — батчевая загрузка (1 запрос вместо 6-12)
     uid = current_user.id
-    commission_type  = _get_setting(db, "commission_type",  "pct", uid)
-    commission_value = float(_get_setting(db, "commission_value", "0.0", uid))
-    logistics_type   = _get_setting(db, "logistics_type",   "rub", uid)
-    logistics_value  = float(_get_setting(db, "logistics_value",  "0.0", uid))
-    acquiring_type   = _get_setting(db, "acquiring_type",   "pct", uid)
-    acquiring_value  = float(_get_setting(db, "acquiring_value",  "0.0", uid))
+    from app.models.app_setting import AppSetting as _AS
+    _fee_keys = ["commission_type", "commission_value", "logistics_type",
+                 "logistics_value", "acquiring_type", "acquiring_value"]
+    _fee_defaults = {"commission_type": "pct", "commission_value": "0.0",
+                     "logistics_type": "rub", "logistics_value": "0.0",
+                     "acquiring_type": "pct", "acquiring_value": "0.0"}
+    _fee_rows = db.query(_AS).filter(_AS.key.in_(_fee_keys), _AS.user_id.in_([uid, None])).all()
+    _fee_map = dict(_fee_defaults)  # start with defaults
+    for row in _fee_rows:
+        if row.user_id is None and row.key not in {r.key for r in _fee_rows if r.user_id == uid}:
+            _fee_map[row.key] = row.value
+        elif row.user_id == uid:
+            _fee_map[row.key] = row.value
+    commission_type  = _fee_map["commission_type"]
+    commission_value = float(_fee_map["commission_value"])
+    logistics_type   = _fee_map["logistics_type"]
+    logistics_value  = float(_fee_map["logistics_value"])
+    acquiring_type   = _fee_map["acquiring_type"]
+    acquiring_value  = float(_fee_map["acquiring_value"])
 
     # Batch-загрузка последних снимков цен (fix N+1: 1 запрос вместо N)
     from sqlalchemy import func as sa_func

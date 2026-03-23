@@ -1,0 +1,52 @@
+name: Deploy to Production
+
+on:
+  workflow_dispatch:  # Ручной запуск из GitHub UI
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "scheduler/**"
+      - "frontend/**"
+      - "docker-compose.yml"
+      - "deploy.sh"
+
+# Только один деплой за раз
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    # Не деплоим на push если CI не прошёл (зависимость через needs не работает
+    # для push-triggered workflow, поэтому полагаемся на branch protection rules)
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            cd ~/repraiser_prod/repraiser_prod
+            bash deploy.sh
+
+      - name: Verify deployment
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            cd ~/repraiser_prod/repraiser_prod
+            # Проверяем что backend healthy
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' wb_repricer_backend_prod 2>/dev/null)
+            if [ "$STATUS" != "healthy" ]; then
+              echo "ERROR: Backend is $STATUS, not healthy!"
+              docker-compose logs backend --tail=20
+              exit 1
+            fi
+            echo "Deploy successful — backend is healthy"
+            docker-compose ps --format 'table {{.Name}}\t{{.Status}}'

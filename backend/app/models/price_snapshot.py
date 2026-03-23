@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, BigInteger, Numeric, DateTime, ForeignKey, String, Boolean
+from sqlalchemy import Column, Integer, BigInteger, Numeric, DateTime, ForeignKey, String, Boolean, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
@@ -7,6 +7,10 @@ from app.database import Base
 class PriceSnapshot(Base):
     """Снимок цены товара"""
     __tablename__ = "price_snapshots"
+    __table_args__ = (
+        # Ускоряет "get latest snapshot per product" запрос в list_products
+        Index("ix_price_snapshots_product_snapshot", "product_id", "snapshot_at"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)

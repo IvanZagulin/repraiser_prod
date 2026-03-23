@@ -23,29 +23,26 @@ function tokenToUser(token) {
 }
 
 export const useAuthStore = create((set, get) => ({
-  token: localStorage.getItem('token'),
-  user: tokenToUser(localStorage.getItem('token')),
+  // token хранится только в памяти (для parseJwt на фронте), не в localStorage.
+  // Реальная аутентификация — через httpOnly cookie.
+  token: null,
+  user: null,
 
   login: (token) => {
-    // Сохраняем в localStorage как fallback (основной путь — httpOnly cookie от сервера)
-    localStorage.setItem('token', token);
+    // token приходит из API response body — храним в памяти для UI (парсинг payload)
+    // httpOnly cookie уже установлена сервером
     set({ token, user: tokenToUser(token) });
   },
 
   logout: async () => {
     // Вызываем API logout (чистит cookie + инвалидирует token_version)
     try {
-      const token = get().token || localStorage.getItem('token');
-      if (token) {
-        const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-        await fetch(`${API_URL}/api/auth/logout`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Authorization': `Bearer ${token}` },
-        });
-      }
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+      await fetch(`${API_URL}/api/auth/logout`, {
+        method: 'POST',
+        credentials: 'include',
+      });
     } catch { /* ignore — мы всё равно чистим стейт ниже */ }
-    localStorage.removeItem('token');
     set({ token: null, user: null });
   },
 

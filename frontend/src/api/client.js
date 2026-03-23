@@ -11,17 +11,8 @@ const api = axios.create({
   withCredentials: true,  // отправлять httpOnly cookies на каждый запрос
 });
 
-// Interceptor: fallback на localStorage-токен (обратная совместимость на время миграции)
-api.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
-  },
-  (error) => Promise.reject(error)
-);
+// JWT теперь передаётся через httpOnly cookie (withCredentials: true выше).
+// Authorization header больше не нужен — cookie отправляется автоматически.
 
 // Interceptor для обработки ошибок
 api.interceptors.response.use(
@@ -34,8 +25,7 @@ api.interceptors.response.use(
                          url.includes('/auth/register') ||
                          url.includes('/auth/forgot-password') ||
                          url.includes('/auth/reset-password') ||
-                         url.includes('/auth/verify-email') ||
-                         url.includes('/auth/verify');  // не выкидываем при transient 401 на startup-check
+                         url.includes('/auth/verify-email');
       const skipRedirect = error.config?.skipAuthRedirect === true;
       if (!isAuthCall && !skipRedirect) {
         // Use store action instead of window.location.href — avoids full page reload.

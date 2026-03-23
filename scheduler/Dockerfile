@@ -1,23 +1,34 @@
+### ---- build stage ---- ###
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+### ---- runtime stage ---- ###
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Установка системных зависимостей
-RUN apt-get update && apt-get install -y \
-    gcc \
-    postgresql-client \
+# Runtime-only system deps (no gcc, no build tools)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-# Копирование requirements
-COPY requirements.txt .
+# Copy pre-built Python packages from builder
+COPY --from=builder /install /usr/local
 
-# Установка Python зависимостей
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Копирование scheduler
+# Copy application code
 COPY . .
 
-# Создание директории для логов + non-root user
+# Create logs dir + non-root user
 RUN mkdir -p /app/logs && \
     addgroup --system appgroup && \
     adduser --system --ingroup appgroup appuser && \

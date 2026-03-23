@@ -695,9 +695,15 @@ class RepricerEngine:
         """
         logger.info("Получение снимков цен для всех товаров")
 
-        query = select(Product).options(joinedload(Product.account))
+        from sqlalchemy.orm import contains_eager
+        query = select(Product).join(Account, Product.account_id == Account.id).options(
+            contains_eager(Product.account)
+        )
         if product_ids:
             query = query.filter(Product.id.in_(product_ids))
+        # Defense-in-depth: фильтр по user_id чтобы не обработать чужие товары
+        if self.user_id is not None:
+            query = query.filter(Account.user_id == self.user_id)
 
         products = self.db.execute(query).scalars().unique().all()
         logger.info(f"Товаров для обновления цен: {len(products)}")
@@ -765,11 +771,19 @@ class RepricerEngine:
         self._user_settings = self._load_user_settings()
 
         # Сначала проверяем, есть ли вообще товары для обработки
-        query = select(Product).join(ProductConfig).filter(
-            ProductConfig.is_active == True
-        ).options(joinedload(Product.config), joinedload(Product.account))
+        from sqlalchemy.orm import contains_eager
+        query = (
+            select(Product)
+            .join(ProductConfig)
+            .join(Account, Product.account_id == Account.id)
+            .filter(ProductConfig.is_active == True)
+            .options(joinedload(Product.config), contains_eager(Product.account))
+        )
         if product_ids:
             query = query.filter(Product.id.in_(product_ids))
+        # Defense-in-depth: фильтр по user_id чтобы не обработать чужие товары
+        if self.user_id is not None:
+            query = query.filter(Account.user_id == self.user_id)
 
         products = self.db.execute(query).scalars().unique().all()
 

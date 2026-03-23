@@ -9,7 +9,7 @@ class Product(Base):
     __tablename__ = "products"
 
     id = Column(Integer, primary_key=True, index=True)
-    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     nm_id = Column(BigInteger, nullable=False, index=True, comment="Артикул WB (nmID)")
     seller_sku = Column(String(255), nullable=True, index=True, comment="Артикул продавца (может быть заполнен автоматически)")
     name = Column(String(500), nullable=True, comment="Название товара (может быть заполнено автоматически)")
