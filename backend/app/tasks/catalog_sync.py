@@ -103,6 +103,9 @@ def sync_wb_catalog_task(self, account_id: int):
                 batch_result = asyncio.run(wb.get_cards_batch(missing_nm_ids, concurrency=3))
 
                 targeted_updated = 0
+                # Оба UPDATE (products + wb_catalog) для одного товара должны
+                # фиксироваться атомарно — используем один commit на весь batch.
+                # При исключении внешний except откатит сессию.
                 for product_id, nm_id in ((r.id, r.nm_id) for r in missing_rows):
                     info = batch_result.get(nm_id)
                     if not info:
@@ -110,11 +113,10 @@ def sync_wb_catalog_task(self, account_id: int):
                     image_url = info.get("image_url")
                     if not image_url:
                         continue
-                    # Обновляем product
+                    # Обновляем product и wb_catalog в одной транзакции
                     db.execute(sa_text(
                         "UPDATE products SET image_url = :url WHERE id = :id"
                     ), {"url": image_url, "id": product_id})
-                    # Обновляем/вставляем в wb_catalog
                     db.execute(sa_text("""
                         INSERT INTO wb_catalog (account_id, nm_id, vendor_code, image_url, synced_at)
                         VALUES (:acc, :nm_id, :vc, :url, NOW())
@@ -128,6 +130,7 @@ def sync_wb_catalog_task(self, account_id: int):
                     })
                     targeted_updated += 1
 
+                # Один commit фиксирует все изменения атомарно
                 if targeted_updated:
                     db.commit()
                     logger.info(

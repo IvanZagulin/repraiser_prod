@@ -70,34 +70,43 @@ def list_users(
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),
 ):
-    """List all users with plan info and counts."""
+    """List all users with plan info and counts.
+
+    Uses 3 queries total instead of 2*N to avoid N+1:
+      1. Fetch all users
+      2. COUNT accounts grouped by user_id
+      3. COUNT products grouped by user_id (via join through accounts)
+    """
     users = db.query(User).all()
-    result = []
-    for u in users:
-        accounts_count = (
-            db.query(func.count(Account.id))
-            .filter(Account.user_id == u.id)
-            .scalar()
+
+    # Batch query: accounts count per user_id
+    acc_counts: dict[int, int] = dict(
+        db.query(Account.user_id, func.count(Account.id))
+        .group_by(Account.user_id)
+        .all()
+    )
+
+    # Batch query: products count per user_id (via accounts join)
+    prod_counts: dict[int, int] = dict(
+        db.query(Account.user_id, func.count(Product.id))
+        .join(Product, Product.account_id == Account.id)
+        .group_by(Account.user_id)
+        .all()
+    )
+
+    return [
+        UserOut(
+            id=u.id,
+            email=u.email,
+            plan_code=u.plan.code if u.plan else None,
+            trial_ends_at=u.trial_ends_at,
+            is_active=u.is_active,
+            created_at=u.created_at,
+            accounts_count=acc_counts.get(u.id, 0),
+            products_count=prod_counts.get(u.id, 0),
         )
-        products_count = (
-            db.query(func.count(Product.id))
-            .join(Account, Product.account_id == Account.id)
-            .filter(Account.user_id == u.id)
-            .scalar()
-        )
-        result.append(
-            UserOut(
-                id=u.id,
-                email=u.email,
-                plan_code=u.plan.code if u.plan else None,
-                trial_ends_at=u.trial_ends_at,
-                is_active=u.is_active,
-                created_at=u.created_at,
-                accounts_count=accounts_count,
-                products_count=products_count,
-            )
-        )
-    return result
+        for u in users
+    ]
 
 
 @router.put("/users/{user_id}/plan")

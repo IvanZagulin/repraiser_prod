@@ -1,7 +1,12 @@
 from sqlalchemy import Column, Integer, BigInteger, String, DateTime, ForeignKey, Numeric
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 from app.database import Base
+
+
+def _utcnow():
+    """Текущее UTC-время без tzinfo (для naive-datetime колонок в БД)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class Product(Base):
@@ -15,8 +20,8 @@ class Product(Base):
     name = Column(String(500), nullable=True, comment="Название товара (может быть заполнено автоматически)")
     image_url = Column(String(500), nullable=True, comment="URL фото товара из WB Content API")
     cost_price = Column(Numeric(10, 2), nullable=True, comment="Себестоимость товара")
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
     # Relationships
     account = relationship("Account", back_populates="products")

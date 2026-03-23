@@ -35,7 +35,7 @@ def upgrade() -> None:
     op.execute("CREATE INDEX IF NOT EXISTS ix_users_email ON users(email)")
 
     for col_ddl in [
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified          BOOLEAN   NOT NULL DEFAULT TRUE",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified          BOOLEAN   NOT NULL DEFAULT FALSE",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_code    VARCHAR(6)",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_code_expires_at TIMESTAMP",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_code           VARCHAR(6)",

@@ -77,6 +77,12 @@ class RepricerEngine:
         """
         return int(value.quantize(Decimal('1'), rounding=ROUND_UP))
     
+    # Допустимый диапазон СПП: WB не даёт скидку больше 95%,
+    # отрицательные значения технически возможны (клиент доплачивает)
+    # но на практике не встречаются — ставим нижнюю границу -10%.
+    _SPP_MIN = Decimal("-10")
+    _SPP_MAX = Decimal("95")
+
     def _calculate_seller_price_from_final(
         self,
         final_price: Decimal,
@@ -84,20 +90,31 @@ class RepricerEngine:
     ) -> Decimal:
         """
         Обратный расчет цены продавца из финальной цены
-        
+
         final_price = seller_price * (1 - spp/100)
         seller_price = final_price / (1 - spp/100)
-        
+
         Args:
             final_price: Желаемая финальная цена покупателя
-            spp: СПП в процентах
-            
+            spp: СПП в процентах (допустимый диапазон: -10% … 95%)
+
         Returns:
             Цена продавца (округленная вверх)
+
+        Raises:
+            ValueError: если spp вне допустимого диапазона
         """
-        if spp >= 100:
-            raise ValueError(f"СПП {spp}% >= 100%, невозможно рассчитать цену продавца")
-        
+        if spp < self._SPP_MIN or spp >= 100:
+            raise ValueError(
+                f"СПП {spp}% вне допустимого диапазона"
+                f" [{self._SPP_MIN}%; 100%), невозможно рассчитать цену продавца"
+            )
+        if spp > self._SPP_MAX:
+            logger.warning(
+                f"СПП {spp}% выше нормального максимума ({self._SPP_MAX}%) — "
+                f"расчёт продолжается, но проверьте данные"
+            )
+
         seller_price = final_price / (1 - spp / 100)
         return Decimal(self._round_up(seller_price))
     
@@ -410,9 +427,13 @@ class RepricerEngine:
         s = self._user_settings or {}
         min_margin_pct = Decimal(s.get("min_margin_pct", "0"))
 
+        # Минимальный порог себестоимости: 1 руб.
+        # При cost_price < 1 деление даёт некорректно огромную маржу.
+        _COST_PRICE_MIN = Decimal("1")
+
         if min_margin_pct > 0 and config.product and config.product.cost_price:
             cost_price = Decimal(str(config.product.cost_price))
-            if cost_price > 0:
+            if cost_price >= _COST_PRICE_MIN:
                 commission_type  = s.get("commission_type",  "pct")
                 commission_value = Decimal(s.get("commission_value", "0"))
                 logistics_type   = s.get("logistics_type",   "rub")
