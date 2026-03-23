@@ -1,7 +1,10 @@
 from sqlalchemy import Column, Integer, String, Boolean, Numeric, BigInteger, DateTime, ForeignKey, CheckConstraint
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 from app.database import Base
+
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class ProductConfig(Base):
@@ -33,7 +36,7 @@ class ProductConfig(Base):
                                     comment="Правило выбора цены: min_price, avg_price, cheapest_instock")
 
     # Метаданные
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
     # Relationships
     product = relationship("Product", back_populates="config")

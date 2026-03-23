@@ -3,9 +3,10 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, desc
+from slowapi import Limiter
 
 from app.database import get_db
 from app.models import Account, Product, User
@@ -13,8 +14,10 @@ from app.models.price_snapshot import PriceSnapshot
 from app.models.price_change import PriceChange
 from app.models.repricer_run import RepricerRun
 from app.api.auth import get_current_user
+from app.utils import get_real_ip
 
 router = APIRouter()
+limiter = Limiter(key_func=get_real_ip)
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +62,9 @@ def _verify_product_ownership(db: Session, product_id: int, user: User) -> Produ
 # ---------------------------------------------------------------------------
 
 @router.get("/product/{product_id}/price-dynamics")
+@limiter.limit("60/minute")
 def price_dynamics(
+    request: Request,
     product_id: int,
     days: int = Query(30, ge=1, le=365),
     db: Session = Depends(get_db),
@@ -91,7 +96,9 @@ def price_dynamics(
 
 
 @router.get("/savings")
+@limiter.limit("60/minute")
 def savings(
+    request: Request,
     days: int = Query(30, ge=1, le=365),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -127,7 +134,9 @@ def savings(
 
 
 @router.get("/competitor-trends")
+@limiter.limit("30/minute")
 def competitor_trends(
+    request: Request,
     days: int = Query(30, ge=1, le=365),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -183,7 +192,9 @@ def competitor_trends(
 
 
 @router.get("/summary")
+@limiter.limit("60/minute")
 def summary(
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

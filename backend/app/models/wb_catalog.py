@@ -1,6 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, BigInteger, String, DateTime, ForeignKey, UniqueConstraint, Index
 from app.database import Base
+
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class WBCatalog(Base):
@@ -16,7 +19,7 @@ class WBCatalog(Base):
     nm_id       = Column(BigInteger, nullable=False)
     vendor_code = Column(String(255), nullable=False)
     image_url   = Column(String(512), nullable=True)   # первое фото из WB Content API
-    synced_at   = Column(DateTime, default=datetime.utcnow, nullable=False)
+    synced_at   = Column(DateTime, default=_utcnow, nullable=False)
 
     __table_args__ = (
         UniqueConstraint("account_id", "vendor_code", name="uq_wb_catalog_account_sku"),

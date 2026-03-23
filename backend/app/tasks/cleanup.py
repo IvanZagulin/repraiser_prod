@@ -5,7 +5,7 @@ Registered as Celery beat tasks in scheduler or called manually via API.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.celery_app import celery_app
 from app.database import SessionLocal
@@ -31,7 +31,7 @@ def cleanup_old_snapshots(retention_days: int = SNAPSHOT_RETENTION_DAYS) -> dict
     """
     from app.models.price_snapshot import PriceSnapshot
 
-    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=retention_days)
     db = SessionLocal()
     total_deleted = 0
     batch_size = 5000
@@ -79,7 +79,7 @@ def cleanup_old_activity_logs(retention_days: int = ACTIVITY_RETENTION_DAYS) -> 
     """Удаляет записи activity log старше retention_days."""
     from sqlalchemy import text
 
-    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=retention_days)
     db = SessionLocal()
     total_deleted = 0
 

@@ -1,6 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
 from app.database import Base
+
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class ConfigChangeLog(Base):
@@ -12,4 +15,4 @@ class ConfigChangeLog(Base):
     field_name = Column(String(50), nullable=False)
     old_value = Column(String(255), nullable=True)
     new_value = Column(String(255), nullable=True)
-    changed_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    changed_at = Column(DateTime, default=_utcnow, nullable=False, index=True)

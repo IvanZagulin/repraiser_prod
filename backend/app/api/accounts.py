@@ -1,6 +1,7 @@
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
+from slowapi import Limiter
 
 from app.database import get_db
 from app.models import Account
@@ -9,9 +10,11 @@ from app.schemas.account import (
     AccountCreate, AccountUpdate, AccountResponse, AccountListResponse
 )
 from app.api.auth import get_current_user
+from app.utils import get_real_ip
 from app.utils.jwt import get_token_expiration, get_token_ttl_days
 
 router = APIRouter()
+limiter = Limiter(key_func=get_real_ip)
 
 
 def _check_ownership(account: Account, current_user: User):
@@ -34,7 +37,9 @@ def _build_response(account: Account) -> AccountResponse:
 
 
 @router.get("", response_model=AccountListResponse)
+@limiter.limit("60/minute")
 async def list_accounts(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
     skip: int = 0,
@@ -51,7 +56,9 @@ async def list_accounts(
 
 
 @router.post("", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("20/minute")
 async def create_account(
+    request: Request,
     account_data: AccountCreate,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],

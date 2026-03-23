@@ -1,7 +1,10 @@
 from sqlalchemy import Column, Integer, Numeric, String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 from app.database import Base
+
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class PriceChange(Base):
@@ -25,7 +28,7 @@ class PriceChange(Base):
     reason_message = Column(Text, nullable=True, comment="Подробное описание")
     
     # Метаданные
-    changed_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    changed_at = Column(DateTime, default=_utcnow, nullable=False, index=True)
 
     # Relationships
     run = relationship("RepricerRun", back_populates="price_changes")

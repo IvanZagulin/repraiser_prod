@@ -40,8 +40,12 @@ def generate_report(
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     since = now - timedelta(days=days)
-    product_ids = _user_product_ids(db, current_user)
+    # Считаем account_ids один раз и переиспользуем — не вызываем _user_account_ids дважды
     account_ids = _user_account_ids(db, current_user)
+    product_ids = (
+        [pid for (pid,) in db.query(Product.id).filter(Product.account_id.in_(account_ids)).all()]
+        if account_ids else []
+    )
 
     # ── Gather data ──────────────────────────────────────────────────
 

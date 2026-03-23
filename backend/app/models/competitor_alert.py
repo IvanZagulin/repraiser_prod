@@ -1,6 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, BigInteger, Numeric, Boolean, DateTime, ForeignKey
 from app.database import Base
+
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class CompetitorAlert(Base):
@@ -14,4 +17,4 @@ class CompetitorAlert(Base):
     new_price = Column(Numeric(10, 2), nullable=False)
     change_pct = Column(Numeric(5, 1), nullable=False)
     is_read = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)

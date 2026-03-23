@@ -127,13 +127,11 @@ app = FastAPI(
 )
 
 # CORS middleware
-ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:8000",
-    "https://qvaz.quasar-x.ru",
-    "http://qvaz.quasar-x.ru",
-]
+# Доп. origins можно добавить через env-переменную CORS_ORIGINS (через запятую)
+# например для локальной разработки: CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+import os as _os
+_extra_origins = [o.strip() for o in _os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+ALLOWED_ORIGINS = ["https://qvaz.quasar-x.ru"] + _extra_origins
 
 # Rate limiter
 app.state.limiter = limiter

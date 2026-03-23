@@ -4,7 +4,7 @@ from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
-from datetime import datetime
+from datetime import datetime, timezone
 from slowapi import Limiter
 
 from app.database import get_db
@@ -66,7 +66,9 @@ async def download_strategy_template(
 # ─────────────────── ЭКСПОРТ ТОВАРОВ ───────────────────
 
 @router.get("/products")
+@limiter.limit("10/minute")
 async def export_products(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
     status_filter: Optional[str] = Query(
@@ -161,7 +163,7 @@ async def export_products(
         })
 
     excel_file = await run_in_threadpool(excel_exporter.export_products_with_config, products_data)
-    filename = f"products_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    filename = f"products_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.xlsx"
 
     return Response(
         content=excel_file.getvalue(),
@@ -171,7 +173,9 @@ async def export_products(
 
 
 @router.get("/history")
+@limiter.limit("10/minute")
 async def export_history(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
     seller_skus: Optional[str] = Query(None, description="Comma-separated SKUs"),
@@ -243,7 +247,7 @@ async def export_history(
             })
 
     excel_file = await run_in_threadpool(excel_exporter.export_price_history, history_data)
-    filename = f"price_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    filename = f"price_history_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.xlsx"
 
     return Response(
         content=excel_file.getvalue(),
@@ -253,7 +257,9 @@ async def export_history(
 
 
 @router.get("/run/{run_id}")
+@limiter.limit("20/minute")
 async def export_run(
+    request: Request,
     run_id: int,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)]
@@ -312,7 +318,7 @@ async def export_run(
         })
 
     excel_file = await run_in_threadpool(excel_exporter.export_repricer_run, run_data, changes_data)
-    filename = f"repricer_run_{run_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    filename = f"repricer_run_{run_id}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.xlsx"
 
     return Response(
         content=excel_file.getvalue(),

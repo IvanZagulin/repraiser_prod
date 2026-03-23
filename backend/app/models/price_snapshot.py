@@ -1,7 +1,10 @@
 from sqlalchemy import Column, Integer, BigInteger, Numeric, DateTime, ForeignKey, String, Boolean, Index
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 from app.database import Base
+
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class PriceSnapshot(Base):
@@ -31,7 +34,7 @@ class PriceSnapshot(Base):
     total_quantity = Column(Integer, nullable=True, comment="Остаток на складах WB")
     
     # Метаданные
-    snapshot_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True, comment="Время снимка")
+    snapshot_at = Column(DateTime, default=_utcnow, nullable=False, index=True, comment="Время снимка")
 
     # Relationships
     product = relationship("Product", back_populates="price_snapshots")

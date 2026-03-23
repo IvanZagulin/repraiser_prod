@@ -2,17 +2,20 @@
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from slowapi import Limiter
 
 from app.database import get_db
 from app.models import Account, Product, User
 from app.models.plan import Plan
 from app.api.auth import get_current_user
+from app.utils import get_real_ip
 
 router = APIRouter()
+limiter = Limiter(key_func=get_real_ip)
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +69,9 @@ class PlanOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.get("/users", response_model=list[UserOut])
+@limiter.limit("30/minute")
 def list_users(
+    request: Request,
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),
 ):
@@ -110,7 +115,9 @@ def list_users(
 
 
 @router.put("/users/{user_id}/plan")
+@limiter.limit("30/minute")
 def set_user_plan(
+    request: Request,
     user_id: int,
     body: SetPlanBody,
     db: Session = Depends(get_db),
@@ -139,7 +146,9 @@ def set_user_plan(
 
 
 @router.get("/plans", response_model=list[PlanOut])
+@limiter.limit("30/minute")
 def list_plans(
+    request: Request,
     db: Session = Depends(get_db),
     _admin: User = Depends(require_admin),
 ):

@@ -16,7 +16,13 @@ logger = logging.getLogger(__name__)
     time_limit=1800,
 )
 def monitor_competitors_task(self, user_id: int):
-    """Мониторинг цен конкурентов — создаёт алерты при значительных изменениях."""
+    """Мониторинг цен конкурентов — создаёт алерты при значительных изменениях.
+
+    Оптимизации:
+    - Один batch-запрос к WB API вместо asyncio.run() на каждого конкурента.
+    - Дедупликация: новый алерт создаётся только если нет непрочитанного
+      алерта для той же пары (product_id, competitor_nm_id).
+    """
     db = SessionLocal()
     try:
         from app.models import Product, ProductConfig, Account, PriceSnapshot
@@ -55,24 +61,73 @@ def monitor_competitors_task(self, user_id: int):
         if not products:
             return {"status": "ok", "monitored": 0, "alerts": 0}
 
+        # ── Шаг 1: собираем все уникальные nm_id конкурентов ───────────────────
+        # Структура: {product_id: [nm_id, ...]}
+        product_competitor_map: dict[int, list[int]] = {}
+        all_nm_ids: set[int] = set()
+
+        for product in products:
+            config = product.config
+            if not config:
+                continue
+            nm_ids: list[int] = []
+
+            entries = db.query(CompetitorEntry).filter(
+                CompetitorEntry.product_config_id == config.id
+            ).all()
+            for e in entries:
+                nm_ids.append(e.nm_id)
+                all_nm_ids.add(e.nm_id)
+
+            if not entries and config.competitor_nm_id:
+                nm_ids.append(config.competitor_nm_id)
+                all_nm_ids.add(config.competitor_nm_id)
+
+            if nm_ids:
+                product_competitor_map[product.id] = nm_ids
+
+        if not all_nm_ids:
+            return {"status": "ok", "monitored": len(products), "alerts": 0}
+
+        # ── Шаг 2: один batch-запрос к WB вместо asyncio.run() в цикле ─────────
+        loop = asyncio.new_event_loop()
+        try:
+            batch_results: dict = loop.run_until_complete(
+                catalog_parser.parse_batch_ids(list(all_nm_ids))
+            )
+        finally:
+            loop.close()
+
+        # ── Шаг 3: предзагружаем непрочитанные алерты (дедупликация) ───────────
+        product_ids = list(product_competitor_map.keys())
+        existing_alerts: set[tuple] = set()
+        if product_ids:
+            rows = db.query(
+                CompetitorAlert.product_id,
+                CompetitorAlert.competitor_nm_id,
+            ).filter(
+                CompetitorAlert.user_id == user_id,
+                CompetitorAlert.product_id.in_(product_ids),
+                CompetitorAlert.is_read == False,
+            ).all()
+            existing_alerts = {(r.product_id, r.competitor_nm_id) for r in rows}
+
+        # ── Шаг 4: обрабатываем результаты ─────────────────────────────────────
         alerts_created = 0
 
         for product in products:
             config = product.config
             if not config:
                 continue
+            nm_ids = product_competitor_map.get(product.id, [])
 
-            # Получаем конкурентов
-            competitors = db.query(CompetitorEntry).filter(
-                CompetitorEntry.product_config_id == config.id
-            ).all()
-
-            if not competitors and config.competitor_nm_id:
-                competitors = [type('obj', (object,), {'nm_id': config.competitor_nm_id})]
-
-            for comp in competitors:
+            for nm_id in nm_ids:
                 try:
-                    parsed = asyncio.run(catalog_parser.parse_product(comp.nm_id))
+                    # Пропускаем если уже есть непрочитанный алерт — дедупликация
+                    if (product.id, nm_id) in existing_alerts:
+                        continue
+
+                    parsed = batch_results.get(nm_id)
                     if not parsed:
                         continue
 
@@ -83,7 +138,7 @@ def monitor_competitors_task(self, user_id: int):
                         db.query(PriceSnapshot)
                         .filter(
                             PriceSnapshot.product_id == product.id,
-                            PriceSnapshot.competitor_nm_id == comp.nm_id,
+                            PriceSnapshot.competitor_nm_id == nm_id,
                             PriceSnapshot.competitor_price.isnot(None),
                         )
                         .order_by(desc(PriceSnapshot.snapshot_at))
@@ -103,16 +158,18 @@ def monitor_competitors_task(self, user_id: int):
                         alert = CompetitorAlert(
                             user_id=user_id,
                             product_id=product.id,
-                            competitor_nm_id=comp.nm_id,
+                            competitor_nm_id=nm_id,
                             old_price=old_price,
                             new_price=current_price,
                             change_pct=round(Decimal(str(change_pct)), 1),
                         )
                         db.add(alert)
                         alerts_created += 1
+                        # Помечаем как уже созданный чтобы не дублировать внутри этого прогона
+                        existing_alerts.add((product.id, nm_id))
 
                 except Exception as e:
-                    logger.warning(f"[CompMonitor] Failed to check competitor {comp.nm_id}: {e}")
+                    logger.warning(f"[CompMonitor] Failed to check competitor {nm_id}: {e}")
                     continue
 
         db.commit()
@@ -120,6 +177,7 @@ def monitor_competitors_task(self, user_id: int):
         return {"status": "ok", "monitored": len(products), "alerts": alerts_created}
 
     except Exception as exc:
+        db.rollback()
         logger.error(f"[CompMonitor] user={user_id} failed: {exc}", exc_info=True)
         return {"status": "error", "reason": str(exc)}
     finally:

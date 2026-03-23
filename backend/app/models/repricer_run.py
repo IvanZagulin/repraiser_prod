@@ -1,7 +1,10 @@
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, ForeignKey
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 from app.database import Base
+
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class RepricerRun(Base):
@@ -27,7 +30,7 @@ class RepricerRun(Base):
     error_message = Column(Text, nullable=True, comment="Сообщение об ошибке")
 
     # Метаданные
-    started_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    started_at = Column(DateTime, default=_utcnow, nullable=False, index=True)
     completed_at = Column(DateTime, nullable=True)
 
     # Relationships

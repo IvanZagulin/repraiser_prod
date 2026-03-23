@@ -1,7 +1,10 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 from app.database import Base
+
+def _utcnow():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 from app.utils.crypto import EncryptedText
 
 
@@ -15,8 +18,8 @@ class Account(Base):
     wb_api_token = Column(EncryptedText, nullable=False, comment="JWT токен WB API (зашифрован Fernet)")
     token_expires_at = Column(DateTime, nullable=True, comment="Срок действия токена")
     is_active = Column(Boolean, default=True, nullable=False, comment="Активен ли аккаунт")
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
     # Relationships
     user = relationship("User", back_populates="accounts")

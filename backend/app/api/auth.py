@@ -1,3 +1,4 @@
+import logging
 import secrets
 import string
 from datetime import datetime, timedelta, timezone
@@ -25,6 +26,7 @@ router = APIRouter()
 security = HTTPBearer(auto_error=False)  # auto_error=False — не кидаем 403 если нет заголовка (кука может быть)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=14)
 limiter = Limiter(key_func=get_real_ip)
+logger = logging.getLogger(__name__)
 
 # Cookie settings
 _COOKIE_NAME = "access_token"
@@ -123,20 +125,20 @@ async def get_current_user(
         )
         user_id: int = payload.get("user_id")
         if user_id is None:
-            print(f"[AUTH 401] token={token_preview}... — no user_id in payload", flush=True)
+            logger.warning("[AUTH 401] no user_id in token payload")
             raise exc
     except JWTError as e:
-        print(f"[AUTH 401] token={token_preview}... — JWTError: {e}", flush=True)
+        logger.warning(f"[AUTH 401] JWTError: {e}")
         raise exc
 
     user = db.query(User).filter(User.id == user_id, User.is_active == True).first()
     if user is None:
-        print(f"[AUTH 401] user_id={user_id} — not found or inactive", flush=True)
+        logger.warning(f"[AUTH 401] user_id={user_id} — not found or inactive")
         raise exc
 
     # Проверка версии токена — инвалидирует старые JWT после смены пароля
     if payload.get("token_version", 1) != (user.token_version or 1):
-        print(f"[AUTH 401] user_id={user_id} — token_version mismatch: jwt={payload.get('token_version',1)} db={user.token_version or 1}", flush=True)
+        logger.warning(f"[AUTH 401] user_id={user_id} — token_version mismatch")
         raise exc
 
     return user
