@@ -13,11 +13,16 @@ if _is_sqlite:
         connect_args={"check_same_thread": False},
     )
 else:
+    # Расчёт пула: pool_size=5 + max_overflow=10 = макс 15 соединений на процесс.
+    # 4 gunicorn воркера × 15 = 60
+    # 4 Celery воркера   × 15 = 60
+    # scheduler + flower      ~ 15
+    # Итого: ~135 < postgres max_connections=200 — запас есть.
     engine = create_engine(
         _db_url,
         pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=20,
+        pool_size=5,
+        max_overflow=10,
         pool_timeout=30,       # макс. ожидание свободного коннекта из пула (сек)
         pool_recycle=1800,     # пересоздавать коннекты каждые 30 мин (защита от stale)
         # 30s timeout на SQL-запросы — защита от зависших/долгих запросов

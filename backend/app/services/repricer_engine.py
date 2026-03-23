@@ -791,39 +791,37 @@ class RepricerEngine:
         # Предзагружаем настройки пользователя один раз (избегаем N+1 запросов в цикле)
         self._user_settings = self._load_user_settings()
 
-        # Сначала проверяем, есть ли вообще товары для обработки
-        from sqlalchemy.orm import contains_eager
-        query = (
-            select(Product)
+        # Шаг 1: получаем только ID товаров + config_id (без загрузки ORM-объектов в память).
+        # На 100к товаров это ~3-5 MB вместо ~800 MB при полной загрузке.
+        id_query = (
+            select(Product.id, ProductConfig.id, ProductConfig.competitor_nm_id)
             .join(ProductConfig)
             .join(Account, Product.account_id == Account.id)
             .filter(ProductConfig.is_active == True)
-            .options(joinedload(Product.config), contains_eager(Product.account))
         )
         if product_ids:
-            query = query.filter(Product.id.in_(product_ids))
+            id_query = id_query.filter(Product.id.in_(product_ids))
         # Defense-in-depth: фильтр по user_id чтобы не обработать чужие товары
         if self.user_id is not None:
-            query = query.filter(Account.user_id == self.user_id)
+            id_query = id_query.filter(Account.user_id == self.user_id)
 
-        products = self.db.execute(query).scalars().unique().all()
+        id_rows = self.db.execute(id_query).all()
+        all_product_ids              = [r[0] for r in id_rows]
+        all_config_ids               = [r[1] for r in id_rows]
+        direct_competitor_nm_ids     = {r[2] for r in id_rows if r[2]}
 
-        # Pre-fetch цен конкурентов батчами перед основным циклом.
+        # Шаг 2: Pre-fetch цен конкурентов батчами перед основным циклом.
         # Собираем все уникальные nm_id конкурентов, исключаем уже закешированные,
         # затем делаем batch-запросы к WB (100 товаров за раз) и кладём в Redis-кеш.
         # _cached_parse_product в цикле ниже будет читать только из кеша.
-        if products:
+        if all_product_ids:
             from app.models.competitor_entry import CompetitorEntry
-            config_ids = [p.config.id for p in products if p.config]
-            competitor_nm_ids: set[int] = set()
-            if config_ids:
+            competitor_nm_ids: set[int] = set(direct_competitor_nm_ids)
+            if all_config_ids:
                 entries = self.db.query(CompetitorEntry.nm_id).filter(
-                    CompetitorEntry.product_config_id.in_(config_ids)
+                    CompetitorEntry.product_config_id.in_(all_config_ids)
                 ).all()
                 competitor_nm_ids.update(e.nm_id for e in entries)
-                for p in products:
-                    if p.config and p.config.competitor_nm_id:
-                        competitor_nm_ids.add(p.config.competitor_nm_id)
             cold_ids = [
                 nm_id for nm_id in competitor_nm_ids
                 if cache_get(f"wb_catalog:{nm_id}") is None
@@ -836,7 +834,7 @@ class RepricerEngine:
                         cache_set(f"wb_catalog:{nm_id}", product_data.to_dict(), ttl=180)
                 logger.info(f"Pre-fetch завершён: {sum(1 for v in batch_results.values() if v)} / {len(cold_ids)}")
 
-        if not products:
+        if not all_product_ids:
             logger.info("Нет активных товаров для обработки — прогон не создаётся")
             # Если был создан run из API (queued), помечаем его завершённым
             if existing_run_id:
@@ -885,38 +883,70 @@ class RepricerEngine:
             self.db.commit()
 
         try:
-            logger.info(f"Найдено {len(products)} товаров для обработки")
-            run.total_products = len(products)
+            total_count = len(all_product_ids)
+            logger.info(f"Найдено {total_count} товаров для обработки")
+            run.total_products = total_count
             self.db.commit()
 
             logger.info("METRIC " + json.dumps({
                 "metric": "run_start",
                 "run_id": run.id,
-                "total": len(products),
+                "total": total_count,
                 "run_type": run_type,
                 "dry_run": dry_run,
             }))
 
-            # Обрабатываем товары
+            # Обрабатываем товары чанками по CHUNK_SIZE штук:
+            # — не грузим всё в RAM разом (100к товаров × ~8 KB = ~800 MB → OOM)
+            # — коммитим каждые COMMIT_EVERY товаров вместо round-trip на каждый
             results = {'updated': 0, 'skipped': 0, 'errors': 0}
+            CHUNK_SIZE  = 500   # товаров за один SELECT
+            COMMIT_EVERY = 50   # товаров между коммитами
 
-            for product in products:
-                try:
-                    reason_code = await self.process_product(product, run, dry_run=dry_run)
+            total_chunks = (total_count + CHUNK_SIZE - 1) // CHUNK_SIZE
+            for chunk_idx, chunk_start in enumerate(range(0, total_count, CHUNK_SIZE)):
+                chunk_ids = all_product_ids[chunk_start:chunk_start + CHUNK_SIZE]
+                chunk_query = (
+                    select(Product)
+                    .filter(Product.id.in_(chunk_ids))
+                    .options(joinedload(Product.config), joinedload(Product.account))
+                )
+                chunk_products = self.db.execute(chunk_query).scalars().unique().all()
 
-                    if reason_code in ['UPDATED', 'CLAMPED_TO_MIN', 'CLAMPED_TO_MAX', 'CLAMPED_TO_MARGIN']:
-                        results['updated'] += 1
-                    elif reason_code in ['SKIPPED_PROMO', 'SKIPPED_INACTIVE', 'NO_CHANGE', 'COMPETITOR_OOS']:
-                        results['skipped'] += 1
-                    else:
+                pending = 0
+                for product in chunk_products:
+                    try:
+                        reason_code = await self.process_product(product, run, dry_run=dry_run)
+
+                        if reason_code in ['UPDATED', 'CLAMPED_TO_MIN', 'CLAMPED_TO_MAX', 'CLAMPED_TO_MARGIN']:
+                            results['updated'] += 1
+                        elif reason_code in ['SKIPPED_PROMO', 'SKIPPED_INACTIVE', 'NO_CHANGE', 'COMPETITOR_OOS']:
+                            results['skipped'] += 1
+                        else:
+                            results['errors'] += 1
+
+                        pending += 1
+                        if pending >= COMMIT_EVERY:
+                            self.db.commit()
+                            pending = 0
+
+                    except Exception as e:
+                        logger.error(f"Ошибка обработки товара {product.seller_sku}: {e}", exc_info=True)
                         results['errors'] += 1
+                        self.db.rollback()
+                        pending = 0
 
+                # Коммит остатка чанка
+                if pending:
                     self.db.commit()
 
-                except Exception as e:
-                    logger.error(f"Ошибка обработки товара {product.seller_sku}: {e}", exc_info=True)
-                    results['errors'] += 1
-                    self.db.rollback()
+                # Сбрасываем кеш атрибутов ORM-объектов чанка — освобождаем RAM
+                self.db.expire_all()
+
+                logger.info(
+                    f"Чанк {chunk_idx + 1}/{total_chunks} готов "
+                    f"({min(chunk_start + CHUNK_SIZE, total_count)}/{total_count} товаров)"
+                )
 
             # Обновляем статус прогона
             _duration_ms = int((time.monotonic() - _run_start) * 1000)
