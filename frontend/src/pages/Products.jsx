@@ -379,8 +379,8 @@ export default function Products() {
                   <div
                     key={groupKey}
                     className="product-card"
-                    style={{ cursor: isMulti ? 'default' : 'pointer' }}
-                    onClick={isMulti ? undefined : () => navigate(`/products/${first.id}`)}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => navigate(`/products/${first.id}`)}
                   >
                     {/* Image */}
                     <div className="relative overflow-hidden bg-muted" style={{ paddingBottom: '120%' }}>
@@ -407,84 +407,41 @@ export default function Products() {
                           <path d="M21 15l-5-5L5 21" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                         </svg>
                       </div>
-                      {/* Hover actions — only for single-account products */}
-                      {!isMulti && (
-                        <div
-                          className="absolute inset-0 flex items-center justify-center gap-1 opacity-0 hover:opacity-100 pointer-events-none hover:pointer-events-auto transition-opacity"
-                          style={{ background: 'rgba(0,0,0,.65)' }}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <button onClick={() => handleRunRepricer(first.seller_sku)} className="btn btn-xs btn-primary p-1" title="Запустить">
-                            <Play className="w-3 h-3" />
-                          </button>
-                          <button onClick={() => handleHistoryClick(first)} className="btn btn-xs btn-secondary p-1" title="История цен">
-                            <LineChart className="w-3 h-3" />
-                          </button>
-                          <button onClick={() => handleConfigClick(first)} className="btn btn-xs btn-secondary p-1" title="Настроить">
-                            <Settings className="w-3 h-3" />
-                          </button>
-                          <button onClick={() => handleDelete(first.id, first.seller_sku)} className="btn btn-xs btn-danger p-1" title="Удалить">
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </div>
-                      )}
+                      {/* Hover actions */}
+                      <div
+                        className="absolute inset-0 flex items-center justify-center gap-1 opacity-0 hover:opacity-100 pointer-events-none hover:pointer-events-auto transition-opacity"
+                        style={{ background: 'rgba(0,0,0,.65)' }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button onClick={() => handleRunRepricer(first.seller_sku)} className="btn btn-xs btn-primary p-1" title="Запустить">
+                          <Play className="w-3 h-3" />
+                        </button>
+                        <button onClick={() => handleHistoryClick(first)} className="btn btn-xs btn-secondary p-1" title="История цен">
+                          <LineChart className="w-3 h-3" />
+                        </button>
+                        {!isMulti && (
+                          <>
+                            <button onClick={() => handleConfigClick(first)} className="btn btn-xs btn-secondary p-1" title="Настроить">
+                              <Settings className="w-3 h-3" />
+                            </button>
+                            <button onClick={() => handleDelete(first.id, first.seller_sku)} className="btn btn-xs btn-danger p-1" title="Удалить">
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
 
-                    {/* Info */}
+                    {/* Info — photo + code + name only */}
                     <div className="p-2" style={{ background: 'var(--card)' }}>
                       {first.name && (
                         <p className="truncate mb-0.5" style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text)' }}>
                           {first.name}
                         </p>
                       )}
-                      <p className="font-bold truncate mb-1" style={{ fontSize: '11px', color: 'var(--neon)' }}>
+                      <p className="font-bold truncate" style={{ fontSize: '11px', color: 'var(--neon)' }}>
                         {first.seller_sku || <span style={{ color: 'var(--text-3)' }}>#{first.nm_id}</span>}
                       </p>
-
-                      {/* Per-account rows */}
-                      {groupProds.map(product => (
-                        <div
-                          key={product.id}
-                          className={isMulti ? 'cursor-pointer hover:bg-muted/40 rounded px-1 -mx-1' : ''}
-                          onClick={isMulti ? (e) => { e.stopPropagation(); navigate(`/products/${product.id}`); } : undefined}
-                        >
-                          {isMulti && (
-                            <p className="truncate" style={{ fontSize: '9px', color: 'var(--text-3)', marginBottom: '1px' }}>
-                              {product.account_name || '—'}
-                            </p>
-                          )}
-                          <div className="flex items-center gap-1 mb-0.5">
-                            {getStatusBadge(product, true)}
-                            {product.current_seller_price ? (
-                              <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text)' }}>
-                                {Number(product.current_seller_price).toLocaleString('ru')}₽
-                              </span>
-                            ) : (
-                              <span style={{ fontSize: '10px', color: 'var(--text-3)' }}>нет цены</span>
-                            )}
-                            {product.margin !== null && product.margin !== undefined && (
-                              <span style={{ fontSize: '9px', fontWeight: 700, color: getMarginColor(product.margin), marginLeft: 'auto' }}>
-                                {product.margin}%
-                              </span>
-                            )}
-                          </div>
-                          {isMulti && (
-                            <div className="flex gap-1 mb-1" onClick={(e) => e.stopPropagation()}>
-                              <button onClick={() => handleHistoryClick(product)} className="btn btn-xs btn-secondary p-0.5" title="История цен" style={{ width: '20px', height: '20px' }}>
-                                <LineChart className="w-2.5 h-2.5" />
-                              </button>
-                              <button onClick={() => handleConfigClick(product)} className="btn btn-xs btn-secondary p-0.5" title="Настроить" style={{ width: '20px', height: '20px' }}>
-                                <Settings className="w-2.5 h-2.5" />
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-
-                      {/* Single-account: show account name */}
-                      {!isMulti && first.account_name && (
-                        <p className="truncate" style={{ fontSize: '9px', color: 'var(--text-3)' }}>{first.account_name}</p>
-                      )}
                     </div>
                   </div>
                 );
