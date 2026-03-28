@@ -243,8 +243,10 @@ class RepricerEngine:
         current_final = current_data['final_price']
         spp = current_data['spp']
 
+        # spp=None означает, что WB не применяет скидку (СПП=0%) — это нормально,
+        # работаем как будто скидки нет (final_price == seller_price)
         if spp is None:
-            return None, "PARSE_ERROR", "Не удалось определить СПП"
+            spp = Decimal(0)
 
         consider_wallet = bool(getattr(config, 'rrp_consider_wallet', False))
 

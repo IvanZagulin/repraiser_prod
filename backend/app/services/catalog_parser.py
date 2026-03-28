@@ -62,7 +62,7 @@ class ProductData:
             'total_quantity': self.total_quantity,
             'in_stock': self.in_stock,
             'is_in_promo': self.is_in_promo,
-            'spp': float(self.spp) if self.spp else None,
+            'spp': float(self.spp) if self.spp is not None else None,
             'promotions': self.promotions,
         }
 
