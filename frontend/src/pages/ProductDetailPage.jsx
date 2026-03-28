@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Play, Settings, ExternalLink, TrendingUp, TrendingDown,
-  Minus, Package, Shield, Clock, BarChart3, Tag, AlertTriangle,
+  Minus, Package, Shield, Clock, BarChart3, AlertTriangle,
   CheckCircle, XCircle, ArrowUpRight, ArrowDownRight, Copy, Edit3, Store,
 } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  ResponsiveContainer, ReferenceDot, AreaChart, Area,
+  ResponsiveContainer, AreaChart, Area,
 } from 'recharts';
 import toast from 'react-hot-toast';
 import { getProductDetail, getProductsBySku, runRepricer, updateProductConfig, createProductConfig, getSettings } from '../api/client';
@@ -51,11 +51,6 @@ const ChartTooltip = ({ active, payload, label }) => {
           </span>
         </div>
       ))}
-      {d?.promo && (
-        <div className="mt-1 flex items-center gap-1 text-orange-500 text-xs">
-          <Tag className="w-3 h-3" /> В акции
-        </div>
-      )}
     </div>
   );
 };
@@ -152,7 +147,6 @@ export default function ProductDetailPage() {
     competitor: s.competitor_price ? Math.round(s.competitor_price) : null,
     spp: s.spp != null ? Math.round(Number(s.spp)) : null,
     discount: s.discount != null ? Math.round(Number(s.discount)) : null,
-    promo: s.is_in_promo,
     stock: s.in_stock,
   }));
 
@@ -541,11 +535,6 @@ export default function ProductDetailPage() {
           <span className={`badge ${current_price.in_stock ? 'badge-success' : 'badge-warning'}`}>
             {current_price.in_stock ? 'В наличии' : 'Нет в наличии'}
           </span>
-          {current_price.is_in_promo && (
-            <span className="badge" style={{ background: 'rgba(249,115,22,0.1)', color: '#f97316' }}>
-              В акции WB
-            </span>
-          )}
           {config?.is_active && (
             <span className="badge badge-success">Репрайсер активен</span>
           )}
@@ -596,9 +585,6 @@ export default function ProductDetailPage() {
               <YAxis tick={{ fontSize: 10, fill: 'var(--text-3)' }} tickLine={false} axisLine={false} tickFormatter={(v) => `${v.toLocaleString('ru')}₽`} width={72} />
               <Tooltip content={<ChartTooltip />} />
               <Legend formatter={(v) => v === 'seller' ? 'Цена продавца' : v === 'final' ? 'Цена покупателя' : 'Конкурент'} wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
-              {chartData.filter((h) => h.promo).map((h, i) => (
-                <ReferenceDot key={i} x={h.date} y={h.seller} r={4} fill="#f97316" stroke="#fff" strokeWidth={1.5} />
-              ))}
               <Line type="monotone" dataKey="seller" name="seller" stroke="#7c3aed" strokeWidth={2} dot={false} activeDot={{ r: 4, strokeWidth: 0 }} />
               <Line type="monotone" dataKey="final" name="final" stroke="#16a34a" strokeWidth={2} dot={false} activeDot={{ r: 4, strokeWidth: 0 }} strokeDasharray="5 3" />
               <Line type="monotone" dataKey="competitor" name="competitor" stroke="#f97316" strokeWidth={1.5} dot={false} activeDot={{ r: 4, strokeWidth: 0 }} strokeDasharray="4 3" connectNulls={false} />

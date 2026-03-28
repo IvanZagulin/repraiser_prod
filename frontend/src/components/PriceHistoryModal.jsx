@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { X, TrendingUp, TrendingDown, Minus, Tag } from 'lucide-react';
+import { X, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, Legend, ResponsiveContainer, ReferenceDot,
+  Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
 import { getProductHistory } from '../api/client';
 import { formatMsk } from '../utils/date';
@@ -33,12 +33,6 @@ const CustomTooltip = ({ active, payload, label }) => {
       {d?.competitor_nm_id && (
         <div className="mt-0.5" style={{ color: 'var(--text-3)' }}>
           Конкурент: #{d.competitor_nm_id}
-        </div>
-      )}
-      {d?.promo && (
-        <div className="mt-1.5 flex items-center gap-1 text-orange-500">
-          <Tag className="w-3 h-3" />
-          <span>В акции</span>
         </div>
       )}
       {d?.discount != null && d.discount > 0 && (
@@ -73,7 +67,6 @@ export default function PriceHistoryModal({ product, onClose }) {
           competitor_nm_id: s.competitor_nm_id,
           spp: s.spp != null ? Math.round(Number(s.spp)) : null,
           discount: s.discount != null ? Math.round(Number(s.discount)) : null,
-          promo: s.is_in_promo,
           stock: s.in_stock,
         }));
         setHistory(data);
@@ -85,8 +78,6 @@ export default function PriceHistoryModal({ product, onClose }) {
   const latest = history[history.length - 1];
   const first = history[0];
   const priceDiff = latest && first ? latest.final - first.final : 0;
-  const promoCount = history.filter((h) => h.promo).length;
-
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div
@@ -156,9 +147,9 @@ export default function PriceHistoryModal({ product, onClose }) {
                     ),
                 },
                 {
-                  label: 'Снимков / акций',
-                  value: `${history.length} / ${promoCount}`,
-                  color: promoCount > 0 ? '#d97706' : '#9ca3af',
+                  label: 'Снимков',
+                  value: history.length,
+                  color: '#9ca3af',
                 },
               ].map((s, i) => (
                 <div
@@ -205,20 +196,6 @@ export default function PriceHistoryModal({ product, onClose }) {
                   }
                   wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
                 />
-                {/* Promo markers */}
-                {history
-                  .filter((h) => h.promo)
-                  .map((h, i) => (
-                    <ReferenceDot
-                      key={i}
-                      x={h.date}
-                      y={h.seller}
-                      r={4}
-                      fill="#f97316"
-                      stroke="#fff"
-                      strokeWidth={1.5}
-                    />
-                  ))}
                 <Line
                   type="monotone"
                   dataKey="seller"
@@ -252,11 +229,6 @@ export default function PriceHistoryModal({ product, onClose }) {
               </LineChart>
             </ResponsiveContainer>
 
-            {promoCount > 0 && (
-              <p className="text-xs mt-2" style={{ color: '#f97316' }}>
-                🟠 Оранжевые точки — участие в акции WB
-              </p>
-            )}
           </>
         )}
       </div>

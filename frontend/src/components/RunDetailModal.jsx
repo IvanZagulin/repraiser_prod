@@ -10,7 +10,7 @@ const REASON_MAP = {
   CLAMPED_TO_MAX:   { label: 'Ограничено макс.',  color: '#d97706', bg: '#fef3c7' },
   NO_CHANGE:        { label: 'Без изменений',     color: '#6b7280', bg: '#f3f4f6' },
   SKIPPED_INACTIVE: { label: 'Не активен',        color: '#9ca3af', bg: '#f9fafb' },
-  SKIPPED_PROMO:    { label: 'В акции',           color: '#f97316', bg: '#fff7ed' },
+  SKIPPED_PROMO:    { label: 'Пропущено',          color: '#9ca3af', bg: '#f3f4f6' },
   COMPETITOR_OOS:   { label: 'Конкурент не в наличии', color: '#8b5cf6', bg: '#f5f3ff' },
   PARSE_ERROR:      { label: 'Ошибка парсинга',   color: '#ef4444', bg: '#fef2f2' },
   WB_API_ERROR:     { label: 'Ошибка WB API',     color: '#ef4444', bg: '#fef2f2' },
@@ -78,7 +78,6 @@ export default function RunDetailModal({ run, onClose }) {
     { key: 'all', label: 'Все' },
     { key: 'updated', label: 'Обновлено' },
     { key: 'NO_CHANGE', label: 'Без изменений' },
-    { key: 'SKIPPED_PROMO', label: 'Акция' },
     { key: 'errors', label: 'Ошибки' },
   ];
 
