@@ -57,6 +57,7 @@ def sync_wb_catalog_task(self, account_id: int):
                 nm_id=nm_id,
                 vendor_code=vendor_code,
                 image_url=info.get("image_url"),   # первое фото с WB Content API
+                name=info.get("name") or None,
                 synced_at=now,
             ))
 
@@ -64,23 +65,27 @@ def sync_wb_catalog_task(self, account_id: int):
         count = len(all_cards)
         logger.info(f"[catalog.sync] account_id={account_id}: удалено {deleted}, добавлено {count} карточек")
 
-        # Backfill image_url в products из только что синхронизированного каталога
+        # Backfill image_url и name в products из только что синхронизированного каталога
         try:
             from sqlalchemy import text as sa_text
             updated = db.execute(sa_text("""
                 UPDATE products p
-                SET image_url = c.image_url
+                SET image_url = COALESCE(p.image_url, c.image_url),
+                    name = CASE
+                        WHEN (p.name IS NULL OR p.name LIKE 'Товар %') AND c.name IS NOT NULL AND c.name != ''
+                        THEN c.name
+                        ELSE p.name
+                    END
                 FROM wb_catalog c
                 WHERE p.account_id = c.account_id
                   AND p.nm_id = c.nm_id
-                  AND p.image_url IS NULL
-                  AND c.image_url IS NOT NULL
+                  AND (p.image_url IS NULL OR p.name IS NULL OR p.name LIKE 'Товар %')
             """)).rowcount
             db.commit()
             if updated:
-                logger.info(f"[catalog.sync] account_id={account_id}: заполнено image_url у {updated} товаров")
+                logger.info(f"[catalog.sync] account_id={account_id}: обновлено image_url/name у {updated} товаров")
         except Exception as e:
-            logger.warning(f"[catalog.sync] backfill image_url failed: {e}")
+            logger.warning(f"[catalog.sync] backfill image_url/name failed: {e}")
             db.rollback()
 
         # Targeted-backfill: дозапрашиваем по nm_id товары, у которых image_url всё ещё пустой.

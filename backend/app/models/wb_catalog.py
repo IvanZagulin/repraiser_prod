@@ -19,6 +19,7 @@ class WBCatalog(Base):
     nm_id       = Column(BigInteger, nullable=False)
     vendor_code = Column(String(255), nullable=False)
     image_url   = Column(String(512), nullable=True)   # первое фото из WB Content API
+    name        = Column(String(512), nullable=True)   # название карточки из WB Content API
     synced_at   = Column(DateTime, default=_utcnow, nullable=False)
 
     __table_args__ = (

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Plus, Trash2, AlertCircle, X, KeyRound, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getAccounts, createAccount, deleteAccount, syncAccountCatalog, syncAccountProducts } from '../api/client';
-import { format } from 'date-fns';
+import { formatMsk } from '../utils/date';
 
 export default function Accounts() {
   const [accounts, setAccounts] = useState([]);
@@ -106,7 +106,7 @@ export default function Accounts() {
                     <div>
                       <h3 className="font-semibold text-foreground">{account.name}</h3>
                       <p className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
-                        Создан {format(new Date(account.created_at), 'dd.MM.yyyy')}
+                        Создан {formatMsk(account.created_at, 'dd.MM.yyyy')}
                       </p>
                     </div>
                     {account.is_active

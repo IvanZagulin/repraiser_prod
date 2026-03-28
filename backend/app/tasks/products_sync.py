@@ -61,7 +61,7 @@ def sync_products_from_catalog_task(self, account_id: int):
                 account_id=account_id,
                 nm_id=entry.nm_id,
                 seller_sku=entry.vendor_code,
-                name=f"Товар {entry.nm_id}",
+                name=entry.name or f"Товар {entry.nm_id}",
                 image_url=entry.image_url,
             ))
             existing_nm_ids.add(entry.nm_id)
@@ -73,6 +73,25 @@ def sync_products_from_catalog_task(self, account_id: int):
 
         if created % BATCH != 0 or created == 0:
             db.commit()
+
+        # Backfill имён для уже существующих товаров с placeholder-именами
+        try:
+            from sqlalchemy import text as sa_text
+            name_updated = db.execute(sa_text("""
+                UPDATE products p
+                SET name = c.name
+                FROM wb_catalog c
+                WHERE p.account_id = c.account_id
+                  AND p.nm_id = c.nm_id
+                  AND (p.name IS NULL OR p.name LIKE 'Товар %')
+                  AND c.name IS NOT NULL AND c.name != ''
+            """)).rowcount
+            if name_updated:
+                db.commit()
+                logger.info(f"[products.sync] account_id={account_id}: backfill имён для {name_updated} товаров")
+        except Exception as e:
+            logger.warning(f"[products.sync] backfill names failed: {e}")
+            db.rollback()
 
         logger.info(
             f"[products.sync] account_id={account_id}: "
@@ -191,8 +210,37 @@ def import_products_task(self, file_bytes_b64: str, user_id: int):
             if not nm_id and seller_sku:
                 nm_id = catalog_by_sku.get(account_id, {}).get(seller_sku)
                 if not nm_id:
+                    # Fallback: пробуем получить nm_id напрямую с WB API
+                    try:
+                        import asyncio
+                        from app.services.wb_api import create_wb_client
+                        wb = create_wb_client(account.wb_api_token)
+                        cards = asyncio.run(wb.get_cards_batch_by_skus([seller_sku]))
+                        info = cards.get(seller_sku, {})
+                        nm_id = info.get("nm_id")
+                        if nm_id:
+                            # Сохраняем в кэш каталога
+                            from app.models.wb_catalog import WBCatalog
+                            exists = db.query(WBCatalog).filter(
+                                WBCatalog.account_id == account_id,
+                                WBCatalog.vendor_code == seller_sku
+                            ).first()
+                            if not exists:
+                                db.add(WBCatalog(
+                                    account_id=account_id,
+                                    nm_id=nm_id,
+                                    vendor_code=seller_sku,
+                                    name=info.get("name") or None,
+                                    image_url=info.get("image_url") or None,
+                                ))
+                                db.commit()
+                            catalog_by_sku.setdefault(account_id, {})[seller_sku] = nm_id
+                            logger.info(f"[import] артикул={seller_sku!r}: nm_id={nm_id} получен напрямую с WB API")
+                    except Exception as wb_exc:
+                        logger.warning(f"[import] WB API fallback failed for {seller_sku!r}: {wb_exc}")
+                if not nm_id:
                     results["errors"].append(
-                        f"артикул={seller_sku!r}: не найден в каталоге WB — запустите синхронизацию каталога"
+                        f"артикул={seller_sku!r}: не найден в каталоге WB и не удалось получить с WB API"
                     )
                     continue
 

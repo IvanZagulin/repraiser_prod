@@ -254,7 +254,7 @@ async def health_check_proxies():
 
 
 async def catalog_sync_job():
-    """Раз в неделю: синхронизирует каталог карточек WB для всех аккаунтов."""
+    """Ежедневно в 02:00 UTC (05:00 МСК): синхронизирует каталог карточек WB для всех аккаунтов."""
     logger.info("=" * 70)
     logger.info("Планировщик: еженедельная синхронизация каталога WB")
     try:
@@ -415,6 +415,16 @@ def setup_scheduler() -> AsyncIOScheduler:
         max_instances=1,
     )
     logger.info("Задача 'catalog_sync_job' зарегистрирована (ежедневно в 02:00 UTC)")
+
+    scheduler.add_job(
+        products_sync_job,
+        trigger=CronTrigger(hour=3, minute=0),
+        id="products_sync_job",
+        name="Products Sync from Catalog (daily 03:00 UTC)",
+        replace_existing=True,
+        max_instances=1,
+    )
+    logger.info("Задача 'products_sync_job' зарегистрирована (ежедневно в 03:00 UTC = 06:00 МСК)")
 
     scheduler.add_job(
         competitor_monitor_job,
