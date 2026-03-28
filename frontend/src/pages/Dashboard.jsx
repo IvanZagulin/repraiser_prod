@@ -580,6 +580,41 @@ export default function Dashboard() {
                   details = typeof item.details === 'string' ? JSON.parse(item.details) : item.details;
                 } catch {}
 
+                const getEventLabel = (type, d) => {
+                  if (!d) return type?.replace(/_/g, ' ');
+                  switch (type) {
+                    case 'price_changed':
+                      return d.product_name
+                        ? `Цена изменена: ${d.product_name}`
+                        : d.nm_id
+                        ? `Цена изменена: арт. ${d.nm_id}`
+                        : 'Цена изменена';
+                    case 'repricer_run':
+                      return `Запуск репрайсера${d.updated_count != null ? ` — обновлено ${d.updated_count}` : ''}`;
+                    case 'strategy_activated':
+                      return d.name ? `Стратегия включена: ${d.name}` : 'Стратегия включена';
+                    case 'strategy_deactivated':
+                      return d.name ? `Стратегия отключена: ${d.name}` : 'Стратегия отключена';
+                    case 'account_created':
+                      return d.name ? `Добавлен кабинет: ${d.name}` : 'Добавлен кабинет';
+                    case 'product_created':
+                      return d.name ? `Добавлен товар: ${d.name}` : 'Добавлен товар';
+                    case 'product_deleted':
+                      return d.name ? `Удалён товар: ${d.name}` : 'Удалён товар';
+                    default:
+                      return type?.replace(/_/g, ' ');
+                  }
+                };
+
+                const getEventSub = (type, d) => {
+                  if (!d) return null;
+                  if (type === 'price_changed' && d.old_price != null && d.new_price != null)
+                    return `${Math.round(d.old_price).toLocaleString('ru')}₽ → ${Math.round(d.new_price).toLocaleString('ru')}₽`;
+                  if (type === 'repricer_run' && d.run_type)
+                    return d.run_type === 'manual' ? 'Ручной запуск' : 'Автозапуск';
+                  return null;
+                };
+
                 return (
                   <div
                     key={item.id || i}
@@ -594,10 +629,12 @@ export default function Dashboard() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium text-foreground truncate">
-                        {item.event_type?.replace(/_/g, ' ')}
+                        {getEventLabel(item.event_type, details)}
                       </p>
-                      {details?.message && (
-                        <p className="text-[11px] text-muted-foreground truncate">{details.message}</p>
+                      {getEventSub(item.event_type, details) && (
+                        <p className="text-[11px] text-muted-foreground truncate">
+                          {getEventSub(item.event_type, details)}
+                        </p>
                       )}
                     </div>
                     <span className="text-[11px] text-muted-foreground whitespace-nowrap shrink-0">
