@@ -8,6 +8,7 @@ import { useAuthStore } from '../store';
 import { getAccounts } from '../api/client';
 import toast from 'react-hot-toast';
 import { useEffect, useState } from 'react';
+import { formatMsk } from '../utils/date';
 import { differenceInDays, parseISO } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { Separator } from '@/components/ui/separator';
@@ -126,7 +127,7 @@ export default function Layout() {
                 <span className="font-semibold" style={{ color: 'var(--neon)' }}>Пробный период</span>
                 <br />
                 <span className="text-muted-foreground">
-                  до {new Date(user.trialEndsAt).toLocaleDateString('ru-RU')}
+                  до {formatMsk(user.trialEndsAt, 'dd.MM.yyyy')}
                 </span>
               </>
             ) : (

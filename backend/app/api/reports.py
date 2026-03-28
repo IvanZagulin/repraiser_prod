@@ -291,7 +291,7 @@ def generate_report(
             pdf.cell(col_w[1], 7, str(acc.name or "—")[:30], fill=True)
             status = "Активен" if acc.is_active else "Неактивен"
             pdf.cell(col_w[2], 7, status, fill=True)
-            created = acc.created_at.strftime("%d.%m.%Y") if acc.created_at else "—"
+            created = (acc.created_at + timedelta(hours=3)).strftime("%d.%m.%Y") if acc.created_at else "—"
             pdf.cell(col_w[3], 7, created, fill=True)
             pdf.ln()
     else:

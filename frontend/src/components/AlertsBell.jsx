@@ -1,3 +1,4 @@
+import { formatMsk } from '../utils/date';
 import { Bell } from 'lucide-react';
 import { useEffect, useState, useRef } from 'react';
 import { getAlertCount, getAlerts, markAlertRead, markAllAlertsRead } from '../api/client';
@@ -62,14 +63,6 @@ export default function AlertsBell() {
       .catch(() => {});
   };
 
-  const formatDate = (iso) => {
-    if (!iso) return '';
-    const d = new Date(iso);
-    return d.toLocaleString('ru-RU', {
-      day: '2-digit', month: '2-digit',
-      hour: '2-digit', minute: '2-digit',
-    });
-  };
 
   const formatChange = (oldPrice, newPrice) => {
     if (!oldPrice || !newPrice) return '';
@@ -228,7 +221,7 @@ export default function AlertsBell() {
                       nmID: {alert.competitor_nm_id}
                     </span>
                     <span style={{ fontSize: 10, color: 'var(--text-3)' }}>
-                      {formatDate(alert.created_at)}
+                      {formatMsk(alert.created_at, 'dd.MM HH:mm')}
                     </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

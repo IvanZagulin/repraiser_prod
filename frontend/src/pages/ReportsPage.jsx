@@ -1,3 +1,4 @@
+import { formatMsk } from '../utils/date';
 import { useState } from 'react';
 import { FileText, Download, Loader2, Calendar, Clock, CheckCircle2 } from 'lucide-react';
 import { generateReport } from '../api/client';
@@ -37,7 +38,7 @@ export default function ReportsPage() {
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
-      setLastGenerated(new Date());
+      setLastGenerated(new Date().toISOString());
       toast.success('Отчёт сгенерирован');
     } catch {
       toast.error('Ошибка генерации отчёта');
@@ -143,7 +144,7 @@ export default function ReportsPage() {
                 {lastGenerated && (
                   <span className="text-xs text-muted-foreground flex items-center gap-1.5">
                     <Clock className="w-3.5 h-3.5" />
-                    Последний отчёт: {lastGenerated.toLocaleTimeString('ru-RU')}
+                    Последний отчёт: {formatMsk(lastGenerated, 'HH:mm')}
                   </span>
                 )}
               </div>

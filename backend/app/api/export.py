@@ -4,7 +4,7 @@ from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from slowapi import Limiter
 
 from app.database import get_db
@@ -159,7 +159,7 @@ async def export_products(
             "config":               cfg_dict,
             "current_seller_price": last_snapshot.seller_price if last_snapshot else None,
             "current_final_price":  last_snapshot.final_price  if last_snapshot else None,
-            "last_updated":         last_snapshot.snapshot_at.strftime('%Y-%m-%d %H:%M:%S') if last_snapshot else "",
+            "last_updated":         (last_snapshot.snapshot_at + timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S') if last_snapshot else "",
         })
 
     excel_file = await run_in_threadpool(excel_exporter.export_products_with_config, products_data)
@@ -243,7 +243,7 @@ async def export_history(
                 'spp': snapshot.spp,
                 'in_stock': snapshot.total_quantity > 0 if snapshot.total_quantity else False,
                 'is_in_promo': snapshot.is_in_promo,
-                'snapshot_at': snapshot.snapshot_at.strftime('%Y-%m-%d %H:%M:%S')
+                'snapshot_at': (snapshot.snapshot_at + timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S')
             })
 
     excel_file = await run_in_threadpool(excel_exporter.export_price_history, history_data)
@@ -288,8 +288,8 @@ async def export_run(
         'id': run.id,
         'run_type': run.run_type,
         'status': run.status,
-        'started_at': run.started_at.strftime('%Y-%m-%d %H:%M:%S'),
-        'completed_at': run.completed_at.strftime('%Y-%m-%d %H:%M:%S') if run.completed_at else '',
+        'started_at': (run.started_at + timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S'),
+        'completed_at': (run.completed_at + timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S') if run.completed_at else '',
         'total_products': run.total_products,
         'updated_count': run.updated_count,
         'skipped_count': run.skipped_count,
@@ -314,7 +314,7 @@ async def export_run(
             'new_final_price': change.new_final_price,
             'reason_code': change.reason_code,
             'reason_message': change.reason_message,
-            'changed_at': change.changed_at.strftime('%Y-%m-%d %H:%M:%S')
+            'changed_at': (change.changed_at + timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S')
         })
 
     excel_file = await run_in_threadpool(excel_exporter.export_repricer_run, run_data, changes_data)
