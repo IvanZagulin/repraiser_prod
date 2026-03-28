@@ -36,6 +36,7 @@ class RepricerEngine:
         self.db = db
         self.user_id = user_id  # None → глобальные/дефолтные настройки
         self._user_settings: Optional[Dict] = None  # loaded once per run
+        self._prefetched_prices: Dict[int, object] = {}  # nm_id -> PriceData, cleared per chunk
 
     def _load_user_settings(self) -> Dict:
         """Load all repricer settings in 2 queries to avoid N+1 per product."""
@@ -139,6 +140,39 @@ class RepricerEngine:
             cache_set(cache_key, product_data.to_dict(), ttl=180)
         return product_data
 
+    async def _prefetch_own_prices(self, products: list) -> None:
+        # Fetch ALL seller prices per account (no filterNmID - WB rejects 100+ ids with 400)
+        by_token = {}
+        want_nm_ids = set()
+        for product in products:
+            account = product.account
+            if not account or not account.is_active:
+                continue
+            if is_token_expired(account.wb_api_token):
+                continue
+            token = account.wb_api_token
+            if token not in by_token:
+                by_token[token] = account
+            want_nm_ids.add(product.nm_id)
+
+        for token, account in by_token.items():
+            try:
+                fetched = 0
+                async with create_wb_client(token) as client:
+                    offset = 0
+                    while True:
+                        prices = await client.get_prices(nm_ids=None, limit=1000, offset=offset)
+                        for p in prices:
+                            if p.nm_id in want_nm_ids:
+                                self._prefetched_prices[p.nm_id] = p
+                                fetched += 1
+                        if len(prices) < 1000:
+                            break
+                        offset += 1000
+                logger.info("Pre-fetch цен: %d/%d для аккаунта %s", fetched, len(want_nm_ids), account.name)
+            except Exception as e:
+                logger.warning("Ошибка pre-fetch цен для %s: %s", account.name, e)
+
     async def _get_current_price_data(
         self,
         product: Product,
@@ -151,32 +185,35 @@ class RepricerEngine:
             dict с полями: seller_price, spp, is_in_promo или None
         """
         try:
-            async with create_wb_client(account.wb_api_token) as client:
-                prices = await client.get_prices(nm_ids=[product.nm_id])
-                
-                if not prices:
-                    logger.warning(f"Товар nm_id={product.nm_id} не найден в WB API")
-                    return None
-                
-                price_data = prices[0]
-                
-                # Парсим текущую цену через catalog для получения СПП (с Redis-кешем)
-                catalog_product = await self._cached_parse_product(product.nm_id)
+            # Используем предзагруженные данные если есть (batch pre-fetch)
+            if product.nm_id in self._prefetched_prices:
+                price_data = self._prefetched_prices[product.nm_id]
+            else:
+                async with create_wb_client(account.wb_api_token) as client:
+                    prices = await client.get_prices(nm_ids=[product.nm_id])
+                    if not prices:
+                        logger.warning("Товар nm_id=%s не найден в WB API", product.nm_id)
+                        return None
+                    price_data = prices[0]
 
-                if not catalog_product:
-                    logger.warning(f"Не удалось спарсить nm_id={product.nm_id} из каталога")
-                    return None
-                
-                return {
-                    'seller_price': price_data.seller_price,
-                    'final_price': catalog_product.final_price,
-                    'spp': catalog_product.spp,
-                    'is_in_promo': catalog_product.is_in_promo,
-                    'total_quantity': catalog_product.total_quantity
-                }
-                
+            # Парсим текущую цену через catalog для получения СПП (с Redis-кешем)
+            catalog_product = await self._cached_parse_product(product.nm_id)
+
+            if not catalog_product:
+                logger.warning("Не удалось спарсить nm_id=%s из каталога", product.nm_id)
+                return None
+
+            return {
+                'seller_price': price_data.seller_price,
+                'final_price': catalog_product.final_price,
+                'spp': catalog_product.spp,
+                'is_in_promo': catalog_product.is_in_promo,
+                'total_quantity': catalog_product.total_quantity,
+                'name': getattr(catalog_product, "name", None),
+            }
+
         except Exception as e:
-            logger.error(f"Ошибка получения данных для nm_id={product.nm_id}: {e}")
+            logger.error("Ошибка получения данных для nm_id=%s: %s", product.nm_id, e)
             return None
     
     async def _strategy_rrp(
@@ -749,6 +786,10 @@ class RepricerEngine:
                     continue
 
                 self._save_price_snapshot(product, current_data)
+                # Обновляем название товара если оно ещё не подтянулось (fallback Товар {nm_id})
+                real_name = current_data.get('name', '')
+                if real_name and (not product.name or product.name.startswith('Товар ')):
+                    product.name = real_name
                 results['updated'] += 1
                 if results['updated'] % 50 == 0:
                     self.db.commit()
@@ -766,6 +807,149 @@ class RepricerEngine:
 
         logger.info(f"Снимки цен: получено={results['updated']}, ошибок={results['errors']}")
         return results
+
+    async def _decide_product(
+        self,
+        product,
+        run,
+        dry_run: bool = False,
+    ) -> dict:
+        """
+        Вычисляет решение по цене товара без обращения к WB API.
+        Возвращает dict с ключами:
+          product, needs_update, new_price, current_data,
+          limit_reason, reason_msg, skip_code (если нет обновления)
+        """
+        _t0 = time.monotonic()
+        config = product.config
+        if not config or not config.is_active:
+            return {"product": product, "needs_update": False, "skip_code": "SKIPPED_INACTIVE",
+                    "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": None, "_t0": _t0}
+
+        if config.min_price is None:
+            return {"product": product, "needs_update": False, "skip_code": "SKIPPED_INACTIVE",
+                    "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": None, "_t0": _t0}
+
+        account = product.account
+        if not account or not account.is_active:
+            return {"product": product, "needs_update": False, "skip_code": "SKIPPED_INACTIVE",
+                    "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": None, "_t0": _t0}
+
+        if dry_run:
+            current_data = {
+                "seller_price": (config.min_price or 1000) + 50,
+                "final_price": config.min_price or 1000,
+                "spp": 10,
+                "is_in_promo": False,
+                "total_quantity": 5,
+            }
+        else:
+            if is_token_expired(account.wb_api_token):
+                logger.error("Токен истек для аккаунта %s", account.name)
+                await telegram_notifier.notify_token_expired(account.name, account.id)
+                return {"product": product, "needs_update": False, "skip_code": "WB_API_ERROR",
+                        "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": None, "_t0": _t0}
+
+            current_data = await self._get_current_price_data(product, account)
+            if not current_data:
+                return {"product": product, "needs_update": False, "skip_code": "PARSE_ERROR",
+                        "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": None, "_t0": _t0}
+
+        wallet_pct = (self._user_settings or {}).get("wb_wallet_discount_pct", 0)
+        try:
+            wallet_pct = Decimal(str(wallet_pct))
+        except Exception:
+            wallet_pct = Decimal(0)
+
+        if config.strategy == "rrp":
+            new_price, reason_code, reason_msg = await self._strategy_rrp(product, config, current_data, wallet_pct)
+        elif config.strategy == "competitor":
+            new_price, reason_code, reason_msg = await self._strategy_competitor(product, config, current_data)
+        else:
+            return {"product": product, "needs_update": False, "skip_code": "PARSE_ERROR",
+                    "current_data": current_data, "new_price": None, "limit_reason": None,
+                    "reason_msg": "Неизвестная стратегия", "_t0": _t0}
+
+        if new_price is None:
+            return {"product": product, "needs_update": False, "skip_code": reason_code,
+                    "current_data": current_data, "new_price": None, "limit_reason": None,
+                    "reason_msg": reason_msg, "_t0": _t0}
+
+        final_new_price, limit_reason = self._apply_limits(new_price, config)
+
+        if final_new_price == current_data["seller_price"]:
+            return {"product": product, "needs_update": False, "skip_code": "NO_CHANGE",
+                    "current_data": current_data, "new_price": final_new_price,
+                    "limit_reason": limit_reason, "reason_msg": reason_msg, "_t0": _t0}
+
+        return {"product": product, "needs_update": True, "skip_code": None,
+                "current_data": current_data, "new_price": final_new_price,
+                "limit_reason": limit_reason, "reason_msg": reason_msg, "_t0": _t0}
+
+    def _finalize_decision(
+        self,
+        run,
+        dec: dict,
+        success: bool,
+        failed: bool,
+    ) -> str:
+        """
+        Сохраняет снимок и запись об изменении цены, возвращает reason_code.
+        """
+        product = dec["product"]
+        current_data = dec["current_data"]
+        new_price = dec["new_price"]
+        limit_reason = dec["limit_reason"]
+        reason_msg = dec["reason_msg"]
+        _t0 = dec.get("_t0", time.monotonic())
+
+        if not dec["needs_update"]:
+            reason_code = dec["skip_code"] or "SKIPPED_INACTIVE"
+            if current_data:
+                self._save_price_snapshot(product, current_data)
+                self._save_price_change(run, product, current_data, new_price, None, reason_code, reason_msg)
+            logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id,
+                "nm_id": product.nm_id, "sku": product.seller_sku, "reason": reason_code,
+                "duration_ms": int((time.monotonic() - _t0) * 1000)}))
+            return reason_code
+
+        if failed:
+            self._save_price_snapshot(product, current_data)
+            self._save_price_change(run, product, current_data, new_price, None,
+                                    "WB_API_ERROR", "Не удалось применить цену в WB API (batch)")
+            logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id,
+                "nm_id": product.nm_id, "sku": product.seller_sku, "reason": "WB_API_ERROR",
+                "duration_ms": int((time.monotonic() - _t0) * 1000)}))
+            return "WB_API_ERROR"
+
+        # success
+        spp = current_data.get("spp")
+        if spp is not None and 0 <= spp < 100:
+            new_final = new_price * (1 - spp / 100)
+        else:
+            new_final = None
+        updated_data = dict(current_data)
+        updated_data["seller_price"] = new_price
+        if new_final:
+            updated_data["final_price"] = new_final
+        self._save_price_snapshot(product, updated_data)
+        reason_code = limit_reason if limit_reason != "UPDATED" else "UPDATED"
+        self._save_price_change(run, product, current_data, new_price, new_final,
+                                reason_code, str(reason_msg) + ". Цена применена: " + str(new_price) + "₽")
+        try:
+            old_price = current_data.get("seller_price") if isinstance(current_data, dict) else getattr(current_data, "seller_price", None)
+            log_activity(
+                self.db, run.user_id, "price_changed",
+                product_id=product.id, account_id=product.account_id,
+                details={"nm_id": product.nm_id, "product_name": product.name,
+                         "old_price": old_price, "new_price": int(new_price), "run_id": run.id}
+            )
+        except Exception as _e:
+            logger.debug("log_activity price_changed failed: %s", _e)
+        logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id,
+            "nm_id": product.nm_id, "sku": product.seller_sku, "reason": reason_code,
+            "duration_ms": int((time.monotonic() - _t0) * 1000)}))
+        return reason_code
 
     async def run_repricer(
         self,
@@ -913,34 +1097,95 @@ class RepricerEngine:
                 )
                 chunk_products = self.db.execute(chunk_query).scalars().unique().all()
 
-                pending = 0
+                # === PRE-FETCH для текущего чанка ===
+                if not dry_run:
+                    # 1. Цены продавца: один GET /api/v2/list/goods/filter на аккаунт
+                    self._prefetched_prices.clear()
+                    await self._prefetch_own_prices(chunk_products)
+
+                    # 2. Прогрев каталога собственных товаров
+                    own_cold_ids = [
+                        p.nm_id for p in chunk_products
+                        if cache_get("wb_catalog:%d" % p.nm_id) is None
+                    ]
+                    if own_cold_ids:
+                        logger.info("Pre-fetch каталога: %d холодных товаров в чанке", len(own_cold_ids))
+                        own_batch = await catalog_parser.parse_batch_ids(own_cold_ids)
+                        for nm_id, data in own_batch.items():
+                            if data is not None:
+                                cache_set("wb_catalog:%d" % nm_id, data.to_dict(), ttl=180)
+
+                # === ФАЗА 1: вычисляем решения (без вызовов WB API в цикле) ===
+                decisions = []
+                pending_updates = {}  # token -> list of {nmID, price}
+
                 for product in chunk_products:
                     try:
-                        reason_code = await self.process_product(product, run, dry_run=dry_run)
+                        dec = await self._decide_product(product, run, dry_run=dry_run)
+                        decisions.append(dec)
+                        if dec["needs_update"] and not dry_run:
+                            token = product.account.wb_api_token
+                            if token not in pending_updates:
+                                pending_updates[token] = []
+                            pending_updates[token].append({"nmID": product.nm_id, "price": int(dec["new_price"])})
+                    except Exception as e:
+                        logger.error("Ошибка решения для %s: %s", product.seller_sku, e, exc_info=True)
+                        decisions.append({"product": product, "needs_update": False, "skip_code": "PARSE_ERROR", "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": str(e)})
+                        results["errors"] += 1
 
-                        if reason_code in ['UPDATED', 'CLAMPED_TO_MIN', 'CLAMPED_TO_MAX', 'CLAMPED_TO_MARGIN']:
-                            results['updated'] += 1
-                        elif reason_code in ['SKIPPED_PROMO', 'SKIPPED_INACTIVE', 'NO_CHANGE', 'COMPETITOR_OOS']:
-                            results['skipped'] += 1
+                # === ФАЗА 2: батч-обновление (один POST на аккаунт) ===
+                update_ok = set()
+                update_fail = set()
+
+                if not dry_run and pending_updates:
+                    for token, updates in pending_updates.items():
+                        try:
+                            async with create_wb_client(token) as client:
+                                await client.update_prices(updates)
+                            for u in updates:
+                                update_ok.add(u["nmID"])
+                            logger.info("Batch update: %d цен отправлено", len(updates))
+                        except Exception as e:
+                            logger.error("Ошибка batch update: %s", e)
+                            for u in updates:
+                                update_fail.add(u["nmID"])
+                elif dry_run:
+                    for d in decisions:
+                        if d["needs_update"]:
+                            update_ok.add(d["product"].nm_id)
+
+                # === ФАЗА 3: сохраняем результаты ===
+                pending = 0
+                for dec in decisions:
+                    if "skip_code" in dec and dec["current_data"] is None:
+                        continue  # уже посчитан как ошибка
+                    try:
+                        product = dec["product"]
+                        reason_code = self._finalize_decision(
+                            run, dec,
+                            product.nm_id in update_ok,
+                            product.nm_id in update_fail,
+                        )
+                        if reason_code in ["UPDATED", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX", "CLAMPED_TO_MARGIN"]:
+                            results["updated"] += 1
+                        elif reason_code in ["SKIPPED_PROMO", "SKIPPED_INACTIVE", "NO_CHANGE", "COMPETITOR_OOS"]:
+                            results["skipped"] += 1
                         else:
-                            results['errors'] += 1
-
+                            results["errors"] += 1
                         pending += 1
                         if pending >= COMMIT_EVERY:
                             self.db.commit()
                             pending = 0
-
                     except Exception as e:
-                        logger.error(f"Ошибка обработки товара {product.seller_sku}: {e}", exc_info=True)
-                        results['errors'] += 1
+                        logger.error("Ошибка сохранения для %s: %s", dec["product"].seller_sku, e, exc_info=True)
+                        results["errors"] += 1
                         self.db.rollback()
                         pending = 0
 
-                # Коммит остатка чанка
                 if pending:
                     self.db.commit()
 
-                # Сбрасываем кеш атрибутов ORM-объектов чанка — освобождаем RAM
+                self._prefetched_prices.clear()
                 self.db.expire_all()
 
                 logger.info(

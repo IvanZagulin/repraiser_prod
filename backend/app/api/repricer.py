@@ -14,6 +14,7 @@ from app.schemas.repricer import (
 )
 from app.api.auth import get_current_user
 from app.services.repricer_engine import RepricerEngine
+from app.services.activity_logger import log_activity
 from app.utils import get_user_id_key
 
 router = APIRouter()
@@ -91,6 +92,12 @@ async def manual_run(
     db.commit()
     db.refresh(run)
 
+    try:
+        log_activity(db, current_user.id, "repricer_run", details={"run_id": run.id, "run_type": "manual", "dry_run": body.dry_run})
+        db.commit()
+    except Exception:
+        pass
+
     from app.tasks.repricer_task import run_repricer_for_user
     run_repricer_for_user.delay(
         current_user.id,
@@ -123,6 +130,12 @@ async def manual_run_sync(
         run_type="manual",
         dry_run=body.dry_run,
     )
+
+    try:
+        log_activity(db, current_user.id, "repricer_run", details={"run_id": run.id, "run_type": "manual", "dry_run": body.dry_run, "status": run.status})
+        db.commit()
+    except Exception:
+        pass
 
     changes = db.query(PriceChange).filter(PriceChange.run_id == run.id).all()
     response = RepricerRunResponse.model_validate(run)

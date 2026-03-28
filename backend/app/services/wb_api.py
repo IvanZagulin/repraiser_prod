@@ -518,6 +518,14 @@ class WBAPIClient:
                     if response.status_code == 200:
                         page_data = response.json()
                         break
+                    elif response.status_code == 429:
+                        wait_time = retry_delays[min(attempt, len(retry_delays)-1)] * 4
+                        logger.warning(f"get_all_cards: Rate limit 429, wait {wait_time}s attempt {attempt+1}/{max_page_retries}")
+                        if attempt < max_page_retries - 1:
+                            await asyncio.sleep(wait_time)
+                            continue
+                        logger.error("get_all_cards: 429 after max retries, stopping")
+                        break
                     elif response.status_code in (500, 502, 503, 504):
                         logger.warning(
                             f"get_all_cards: Content API вернул {response.status_code} "

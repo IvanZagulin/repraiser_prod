@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
-  importStrategy, importProducts, importCosts,
+  importStrategy, importProducts, getTaskStatus, importCosts,
   exportHistory, exportProducts, downloadTemplate, downloadCostsTemplate
 } from '../api/client';
 
@@ -197,14 +197,48 @@ export default function ImportExport() {
     setImportResultProd(null);
     try {
       const res = await importProducts(file);
-      setImportResultProd(res.data);
-      toast.success(`Создано ${res.data.created} товаров`);
-      if (res.data.errors?.length) toast.error(`Ошибок: ${res.data.errors.length}`);
+      // Background task — poll for result
+      if (res.data?.task_id) {
+        const taskId = res.data.task_id;
+        toast.success('Импорт запущен, обрабатывается...');
+        setUploadingProducts(false);
+        e.target.value = '';
+        // Poll every 2s up to 60 attempts (2 min)
+        let attempts = 0;
+        const poll = setInterval(async () => {
+          attempts++;
+          try {
+            const statusRes = await getTaskStatus(taskId);
+            const { status, result, error } = statusRes.data;
+            if (status === 'done') {
+              clearInterval(poll);
+              setImportResultProd(result);
+              toast.success(`Импорт завершён: создано ${result.created} товаров`);
+              if (result.errors?.length) toast.error(`Ошибок: ${result.errors.length}`);
+            } else if (status === 'error') {
+              clearInterval(poll);
+              setImportResultProd({ errors: [error || 'Ошибка импорта'] });
+              toast.error('Ошибка импорта');
+            } else if (attempts >= 60) {
+              clearInterval(poll);
+              toast.error('Импорт занял слишком долго — проверьте товары вручную');
+            }
+          } catch {
+            if (attempts >= 60) clearInterval(poll);
+          }
+        }, 2000);
+      } else {
+        // Fallback: sync response
+        setImportResultProd(res.data);
+        toast.success(`Создано ${res.data.created} товаров`);
+        if (res.data.errors?.length) toast.error(`Ошибок: ${res.data.errors.length}`);
+        setUploadingProducts(false);
+        e.target.value = '';
+      }
     } catch (err) {
       const msg = parseImportError(err);
       toast.error(msg);
       setImportResultProd({ errors: [msg] });
-    } finally {
       setUploadingProducts(false);
       e.target.value = '';
     }

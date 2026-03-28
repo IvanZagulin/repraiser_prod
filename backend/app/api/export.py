@@ -434,29 +434,66 @@ async def import_strategy(
 
     for config_data in configs:
         # IDOR fix: ищем товар только среди товаров текущего пользователя
-        product = (
+        q = (
             db.query(Product)
             .join(Account, Product.account_id == Account.id)
             .filter(
                 Product.seller_sku == config_data['seller_sku'],
                 Account.user_id == current_user.id
             )
-            .first()
         )
+        # Если указан кабинет — фильтруем по нему
+        account_name = config_data.get('account_name')
+        if account_name:
+            q = q.filter(Account.name == account_name)
+        products_found = q.all()
 
-        if not product:
-            results['errors'].append(f"Товар {config_data['seller_sku']} не найден")
+        if not products_found:
+            # Try to auto-create from wb_catalog
+            from app.models.wb_catalog import WBCatalog
+            catalog_entry = (
+                db.query(WBCatalog)
+                .join(Account, WBCatalog.account_id == Account.id)
+                .filter(
+                    WBCatalog.vendor_code == config_data['seller_sku'],
+                    Account.user_id == current_user.id,
+                )
+            )
+            if account_name:
+                catalog_entry = catalog_entry.filter(Account.name == account_name)
+            catalog_entry = catalog_entry.first()
+            if catalog_entry:
+                new_product = Product(
+                    account_id=catalog_entry.account_id,
+                    nm_id=catalog_entry.nm_id,
+                    seller_sku=catalog_entry.vendor_code,
+                    name=catalog_entry.vendor_code,
+                    image_url=catalog_entry.image_url,
+                )
+                db.add(new_product)
+                db.flush()  # get id without commit
+                products_found = [new_product]
+            else:
+                results['errors'].append(f"Товар {config_data['seller_sku']} не найден (нет в каталоге WB)")
+                continue
+        if len(products_found) > 1 and not account_name:
+            acc_names = ', '.join(p.account.name for p in products_found)
+            results['errors'].append(
+                f"Артикул {config_data['seller_sku']} найден в нескольких кабинетах ({acc_names}). "
+                f"Укажите колонку 'Кабинет (название)' в файле."
+            )
             continue
+        product = products_found[0]
 
         if product.config:
             for key, value in config_data.items():
-                if key != 'seller_sku' and value is not None:
+                if key not in ('seller_sku', 'account_name') and value is not None:
                     setattr(product.config, key, value)
             results['updated'] += 1
         else:
             config = ProductConfig(
                 product_id=product.id,
-                **{k: v for k, v in config_data.items() if k != 'seller_sku'}
+                **{k: v for k, v in config_data.items() if k not in ('seller_sku', 'account_name')}
             )
             db.add(config)
             results['created'] += 1
@@ -485,130 +522,50 @@ async def import_products(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)]
 ):
-    """
-    Импорт товаров из Excel.
-    nmID и vendorCode берутся из локального каталога WB (wb_catalog),
-    который синхронизируется при добавлении аккаунта и раз в неделю.
-
-    Обязательные колонки: артикул продавца (B) или nmID (A), ID аккаунта (C).
-    """
-    from app.models.wb_catalog import WBCatalog
+    """Фоновый импорт товаров из Excel. Возвращает task_id немедленно."""
+    import base64
 
     if not file.filename.endswith(('.xlsx', '.xls')):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File must be Excel (.xlsx or .xls)"
-        )
+        raise HTTPException(status_code=400, detail="File must be Excel (.xlsx or .xls)")
 
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_SIZE:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                            detail="Файл слишком большой (максимум 10 МБ)")
+    content_bytes = await file.read()
+    if len(content_bytes) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail="Файл слишком большой (максимум 10 МБ)")
 
+    # Валидируем структуру файла синхронно (быстро)
     try:
-        products_data = await run_in_threadpool(excel_importer.import_products, content)
+        await run_in_threadpool(excel_importer.import_products, content_bytes)
     except ExcelImportError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=400, detail=str(e))
 
-    results = {'created': 0, 'skipped': 0, 'errors': []}
+    # Отправляем тяжёлую работу в Celery
+    try:
+        from app.tasks.products_sync import import_products_task
+        file_b64 = base64.b64encode(content_bytes).decode()
+        task = import_products_task.delay(file_b64, current_user.id)
+        return {"task_id": task.id, "status": "queued", "message": "Импорт запущен в фоне"}
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Celery недоступен: {e}")
+        raise HTTPException(status_code=503, detail="Сервис временно недоступен")
 
-    # Кэш аккаунтов (IDOR-защита)
-    account_cache: dict = {}
 
-    def _get_account(account_id: int):
-        if account_id not in account_cache:
-            account_cache[account_id] = (
-                db.query(Account)
-                .filter(Account.id == account_id, Account.user_id == current_user.id)
-                .first()
-            )
-        return account_cache[account_id]
+@router.get("/task/{task_id}")
+async def get_task_status(
+    task_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Статус фоновой задачи (импорт товаров и т.п.)"""
+    from celery.result import AsyncResult
+    from app.celery_app import celery_app
 
-    # Предзагружаем каталог для всех уникальных аккаунтов из файла
-    account_ids_in_file = {pd.get('account_id') for pd in products_data if pd.get('account_id')}
-    # catalog[account_id] = {vendor_code: nm_id, ...}  и  {nm_id: vendor_code, ...}
-    catalog_by_sku: dict = {}   # account_id → {vendor_code: nm_id}
-    catalog_by_nm:  dict = {}   # account_id → {nm_id: vendor_code}
-    catalog_image:  dict = {}   # account_id → {nm_id: image_url}
+    result = AsyncResult(task_id, app=celery_app)
+    state = result.state  # PENDING, STARTED, SUCCESS, FAILURE
 
-    for acc_id in account_ids_in_file:
-        if not _get_account(acc_id):
-            continue
-        rows = db.query(WBCatalog).filter(WBCatalog.account_id == acc_id).all()
-        catalog_by_sku[acc_id] = {r.vendor_code: r.nm_id  for r in rows}
-        catalog_by_nm[acc_id]  = {r.nm_id: r.vendor_code  for r in rows}
-        catalog_image[acc_id]  = {r.nm_id: r.image_url    for r in rows if r.image_url}
+    if state == "SUCCESS":
+        return {"status": "done", "result": result.result}
+    elif state == "FAILURE":
+        return {"status": "error", "error": str(result.result)}
+    else:
+        return {"status": "pending"}
 
-    # ── Создаём товары ─────────────────────────────────────────────────────────
-    for product_data in products_data:
-        nm_id      = product_data.get('nm_id')
-        seller_sku = product_data.get('seller_sku')
-        account_id = product_data.get('account_id')
-        name       = product_data.get('name') or ''
-
-        label = f"nmID={nm_id}" if nm_id else f"артикул={seller_sku!r}"
-
-        if not account_id:
-            results['errors'].append(f"{label}: не указан ID аккаунта")
-            continue
-
-        account = _get_account(account_id)
-        if not account:
-            results['errors'].append(
-                f"{label}: аккаунт {account_id} не найден или не принадлежит вам"
-            )
-            continue
-
-        # Случай 1: есть vendorCode, нет nmID → ищем в каталоге
-        if not nm_id and seller_sku:
-            nm_id = catalog_by_sku.get(account_id, {}).get(seller_sku)
-            if not nm_id:
-                results['errors'].append(
-                    f"артикул={seller_sku!r}: не найден в каталоге WB. "
-                    f"Каталог обновляется автоматически — повторите импорт через несколько минут."
-                )
-                continue
-
-        # Случай 2: есть nmID, нет vendorCode → ищем в каталоге
-        if nm_id and not seller_sku:
-            seller_sku = catalog_by_nm.get(account_id, {}).get(nm_id) or str(nm_id)
-
-        # Дубликат?
-        existing = db.query(Product).filter(
-            Product.nm_id == nm_id,
-            Product.account_id == account_id,
-        ).first()
-        if existing:
-            results['skipped'] += 1
-            continue
-
-        db.add(Product(
-            nm_id=nm_id,
-            account_id=account_id,
-            seller_sku=seller_sku or str(nm_id),
-            name=name or f"Товар {nm_id}",
-            image_url=catalog_image.get(account_id, {}).get(nm_id),  # фото из каталога
-        ))
-        results['created'] += 1
-
-    if results['created'] > 0:
-        try:
-            db.commit()
-        except Exception as e:
-            db.rollback()
-            raise HTTPException(status_code=500, detail="Ошибка сохранения данных")
-
-    return {
-        "success": True,
-        "total": len(products_data),
-        "created": results['created'],
-        "skipped": results['skipped'],
-        "errors": results['errors'],
-        "message": (
-            "Товары добавлены. Цены подтянутся автоматически в течение нескольких минут."
-            if results['created'] > 0 else None
-        ),
-    }

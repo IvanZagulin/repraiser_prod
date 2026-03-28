@@ -10,6 +10,7 @@ from app.schemas.account import (
     AccountCreate, AccountUpdate, AccountResponse, AccountListResponse
 )
 from app.api.auth import get_current_user
+from app.services.activity_logger import log_activity
 from app.utils import get_real_ip
 from app.utils.jwt import get_token_expiration, get_token_ttl_days
 
@@ -78,6 +79,12 @@ async def create_account(
     db.add(account)
     db.commit()
     db.refresh(account)
+
+    try:
+        log_activity(db, current_user.id, "account_created", account_id=account.id, details={"name": account.name})
+        db.commit()
+    except Exception:
+        pass
 
     # Фоновая синхронизация каталога WB (все карточки аккаунта)
     try:
@@ -159,6 +166,29 @@ async def sync_catalog(
         logging.getLogger(__name__).error(f"Celery недоступен при sync account_id={account_id}: {e}")
         raise HTTPException(status_code=503, detail="Сервис временно недоступен, попробуйте позже")
 
+
+
+@router.post("/{account_id}/sync-products", status_code=status.HTTP_202_ACCEPTED)
+async def sync_products(
+    account_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Создать товары из wb_catalog (без вызова WB API) для аккаунта"""
+    account = db.query(Account).filter(
+        Account.id == account_id, Account.user_id == current_user.id
+    ).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    try:
+        from app.tasks.products_sync import sync_products_from_catalog_task
+        sync_products_from_catalog_task.delay(account_id)
+        return {"status": "queued", "message": "Синхронизация товаров запущена"}
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Celery недоступен при sync-products account_id={account_id}: {e}")
+        raise HTTPException(status_code=503, detail="Сервис временно недоступен, попробуйте позже")
 
 @router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_account(

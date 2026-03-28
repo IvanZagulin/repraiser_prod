@@ -17,6 +17,7 @@ from app.schemas.product import (
     ProductConfigResponse
 )
 from app.api.auth import get_current_user
+from app.services.activity_logger import log_activity
 from app.api.settings import _get_setting
 from app.services.wb_api import create_wb_client, WBAPIError
 from app.utils import get_real_ip
@@ -119,6 +120,10 @@ async def list_products(
         )
         last_snapshots = {s.product_id: s for s in snap_rows}
 
+    # Batch-load account names
+    _acc_ids = {p.account_id for p in products}
+    _accounts_map = {a.id: a.name for a in db.query(Account).filter(Account.id.in_(_acc_ids)).all()} if _acc_ids else {}
+
     response_products = []
     for product in products:
         product_data = {
@@ -136,6 +141,7 @@ async def list_products(
             'last_updated': None,
             'cost_price': product.cost_price,
             'margin': None,
+            'account_name': _accounts_map.get(product.account_id, ""),
         }
 
         if product.config:
@@ -242,6 +248,14 @@ async def create_product(
         except Exception:
             pass
 
+    try:
+        log_activity(db, current_user.id, "product_created", product_id=product.id,
+                     account_id=product.account_id,
+                     details={"nm_id": product.nm_id, "name": product.name})
+        db.commit()
+    except Exception:
+        pass
+
     return ProductResponse.model_validate(product)
 
 
@@ -305,6 +319,49 @@ async def search_wb_product(
     }
 
 
+
+@router.get("/stats")
+async def get_products_stats(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Быстрая статистика по товарам пользователя (без пагинации)."""
+    from sqlalchemy import func
+    from app.models.product_config import ProductConfig
+
+    # Все товары пользователя
+    total = (
+        db.query(func.count(Product.id))
+        .join(Account, Product.account_id == Account.id)
+        .filter(Account.user_id == current_user.id)
+        .scalar()
+    )
+
+    # Активные (есть конфиг с is_active=True)
+    active = (
+        db.query(func.count(Product.id))
+        .join(Account, Product.account_id == Account.id)
+        .join(ProductConfig, ProductConfig.product_id == Product.id)
+        .filter(Account.user_id == current_user.id, ProductConfig.is_active == True)
+        .scalar()
+    )
+
+    # Неактивные (есть конфиг с is_active=False)
+    inactive = (
+        db.query(func.count(Product.id))
+        .join(Account, Product.account_id == Account.id)
+        .join(ProductConfig, ProductConfig.product_id == Product.id)
+        .filter(Account.user_id == current_user.id, ProductConfig.is_active == False)
+        .scalar()
+    )
+
+    return {
+        "total": total,
+        "active": active,
+        "inactive": inactive,
+        "no_config": total - active - inactive,
+    }
+
 @router.get("/{product_id}", response_model=ProductResponse)
 async def get_product(
     product_id: int,
@@ -322,8 +379,18 @@ async def delete_product(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     product = _user_product(db, product_id, current_user)
+    _nm_id = product.nm_id
+    _name = product.name
+    _account_id = product.account_id
     db.delete(product)
     db.commit()
+    try:
+        log_activity(db, current_user.id, "product_deleted", product_id=product_id,
+                     account_id=_account_id,
+                     details={"nm_id": _nm_id, "name": _name})
+        db.commit()
+    except Exception:
+        pass
     return None
 
 
@@ -387,6 +454,18 @@ async def update_product_config(
 
     db.commit()
     db.refresh(product.config)
+
+    # Log strategy activation/deactivation
+    if "is_active" in update_data:
+        try:
+            evt = "strategy_activated" if update_data["is_active"] else "strategy_deactivated"
+            log_activity(db, current_user.id, evt, product_id=product_id,
+                         account_id=product.account_id,
+                         details={"nm_id": product.nm_id, "name": product.name})
+            db.commit()
+        except Exception:
+            pass
+
     return ProductConfigResponse.model_validate(product.config)
 
 

@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Settings, Trash2, Play, Search, LayoutGrid, List, LineChart, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { getProducts, deleteProduct, runRepricer, getSettings, fetchPrices, bulkActivate, bulkDelete } from '../api/client';
+import { getProducts, deleteProduct, runRepricer, getSettings, fetchPrices, bulkActivate, bulkDelete, getAccounts } from '../api/client';
 import { useProductsStore } from '../store';
 import ProductModal from '../components/ProductModal';
 import ConfigModal from '../components/ConfigModal';
@@ -45,6 +45,8 @@ export default function Products() {
   const [filterBrand, setFilterBrand] = useState('');
   const [filterPriceMin, setFilterPriceMin] = useState('');
   const [filterPriceMax, setFilterPriceMax] = useState('');
+  const [filterAccount, setFilterAccount] = useState('');
+  const [accounts, setAccounts] = useState([]);
   const isMounted = useRef(true);
 
   // Debounce search input
@@ -56,12 +58,15 @@ export default function Products() {
   // Reload when debounced search or strategy changes
   useEffect(() => {
     loadProducts(1);
-  }, [debouncedSearch, filterStrategy, filterBrand, filterPriceMin, filterPriceMax]);
+  }, [debouncedSearch, filterStrategy, filterBrand, filterPriceMin, filterPriceMax, filterAccount]);
 
   useEffect(() => {
     isMounted.current = true;
     getSettings()
       .then((res) => { if (isMounted.current) setWalletPct(res.data.wb_wallet_discount_pct); })
+      .catch(() => {});
+    getAccounts()
+      .then((res) => { if (isMounted.current) setAccounts(res.data.accounts || []); })
       .catch(() => {});
     const interval = setInterval(() => refreshProductsSilent(), 30000);
     return () => {
@@ -79,6 +84,7 @@ export default function Products() {
       if (filterBrand) params.brand = filterBrand;
       if (filterPriceMin) params.price_min = filterPriceMin;
       if (filterPriceMax) params.price_max = filterPriceMax;
+      if (filterAccount) params.account_id = filterAccount;
       const response = await getProducts(params);
       setProducts(response.data.products);
       setTotalProducts(response.data.total);
@@ -282,6 +288,16 @@ export default function Products() {
             <option value="rrp">РРЦ</option>
             <option value="competitor">Конкурент</option>
           </select>
+          <select
+            value={filterAccount}
+            onChange={(e) => setFilterAccount(e.target.value)}
+            className="input w-40"
+          >
+            <option value="">Все кабинеты</option>
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
           <input
             type="text"
             placeholder="Бренд"
@@ -336,88 +352,146 @@ export default function Products() {
           </button>
         </div>
       ) : viewMode === 'grid' ? (
-        /* Card Grid — компактный вид */
-        <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-3">
-          {filteredProducts.map((product) => (
-            <div key={product.id} className="product-card cursor-pointer" onClick={() => navigate(`/products/${product.id}`)}>
-              {/* Image container */}
-              <div className="relative overflow-hidden bg-muted" style={{ paddingBottom: '120%' }}>
-                {(product.image_url || getWBImageUrl(product.nm_id)) && (
-                  <img
-                    src={product.image_url || getWBImageUrl(product.nm_id)}
-                    alt={product.name}
-                    className="absolute inset-0 w-full h-full object-cover"
-                    loading="lazy"
-                    onError={(e) => {
-                      e.target.style.display = 'none';
-                      const placeholder = e.target.parentElement?.querySelector('.img-placeholder');
-                      if (placeholder) placeholder.style.display = 'flex';
-                    }}
-                  />
-                )}
-                {/* Placeholder when image fails */}
-                <div
-                  className="img-placeholder absolute inset-0 flex-col items-center justify-center"
-                  style={{ display: (!product.image_url && !getWBImageUrl(product.nm_id)) ? 'flex' : 'none', background: '#f3f4f6' }}
-                >
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" style={{ color: '#d1d5db' }}>
-                    <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="1.5"/>
-                    <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/>
-                    <path d="M21 15l-5-5L5 21" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
-                </div>
-                {/* Hover overlay with actions */}
-                <div
-                  className="absolute inset-0 flex items-center justify-center gap-1 opacity-0 hover:opacity-100 pointer-events-none hover:pointer-events-auto transition-opacity"
-                  style={{ background: 'rgba(0,0,0,.65)' }}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <button onClick={() => handleRunRepricer(product.seller_sku)} className="btn btn-xs btn-primary p-1" title="Запустить">
-                    <Play className="w-3 h-3" />
-                  </button>
-                  <button onClick={() => handleHistoryClick(product)} className="btn btn-xs btn-secondary p-1" title="История цен">
-                    <LineChart className="w-3 h-3" />
-                  </button>
-                  <button onClick={() => handleConfigClick(product)} className="btn btn-xs btn-secondary p-1" title="Настроить">
-                    <Settings className="w-3 h-3" />
-                  </button>
-                  <button onClick={() => handleDelete(product.id, product.seller_sku)} className="btn btn-xs btn-danger p-1" title="Удалить">
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
+        /* Card Grid — компактный вид, сгруппированный по seller_sku */
+        (() => {
+          // Группируем по seller_sku только когда не выбран конкретный кабинет
+          const groups = [];
+          if (filterAccount) {
+            filteredProducts.forEach(p => groups.push([p.seller_sku || `nm_${p.nm_id}`, [p]]));
+          } else {
+            const map = new Map();
+            filteredProducts.forEach(p => {
+              const key = p.seller_sku || `nm_${p.nm_id}`;
+              if (!map.has(key)) map.set(key, []);
+              map.get(key).push(p);
+            });
+            map.forEach((prods, key) => groups.push([key, prods]));
+          }
 
-              {/* Info */}
-              <div className="p-2" style={{ background: 'var(--card)' }}>
-                {product.name && (
-                  <p className="truncate mb-0.5" style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text)' }}>
-                    {product.name}
-                  </p>
-                )}
-                <div className="flex items-center gap-1.5 mb-0.5">
-                  {getStatusBadge(product, true)}
-                  <p className="font-bold truncate" style={{ fontSize: '11px', color: 'var(--neon)' }}>
-                    {product.seller_sku || <span style={{ color: 'var(--text-3)' }}>#{product.nm_id}</span>}
-                  </p>
-                </div>
-                {product.current_seller_price ? (
-                  <div className="flex items-center justify-between mt-1">
-                    <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text)' }}>
-                      {Number(product.current_seller_price).toLocaleString('ru')}₽
-                    </span>
-                    {product.margin !== null && product.margin !== undefined && (
-                      <span style={{ fontSize: '10px', fontWeight: 700, color: getMarginColor(product.margin) }}>
-                        {product.margin}%
-                      </span>
-                    )}
+          return (
+            <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-3">
+              {groups.map(([groupKey, groupProds]) => {
+                const first = groupProds[0];
+                const isMulti = groupProds.length > 1;
+                const imgSrc = first.image_url || getWBImageUrl(first.nm_id);
+
+                return (
+                  <div
+                    key={groupKey}
+                    className="product-card"
+                    style={{ cursor: isMulti ? 'default' : 'pointer' }}
+                    onClick={isMulti ? undefined : () => navigate(`/products/${first.id}`)}
+                  >
+                    {/* Image */}
+                    <div className="relative overflow-hidden bg-muted" style={{ paddingBottom: '120%' }}>
+                      {imgSrc && (
+                        <img
+                          src={imgSrc}
+                          alt={first.name}
+                          className="absolute inset-0 w-full h-full object-cover"
+                          loading="lazy"
+                          onError={(e) => {
+                            e.target.style.display = 'none';
+                            const ph = e.target.parentElement?.querySelector('.img-placeholder');
+                            if (ph) ph.style.display = 'flex';
+                          }}
+                        />
+                      )}
+                      <div
+                        className="img-placeholder absolute inset-0 flex-col items-center justify-center"
+                        style={{ display: !imgSrc ? 'flex' : 'none', background: '#f3f4f6' }}
+                      >
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" style={{ color: '#d1d5db' }}>
+                          <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+                          <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/>
+                          <path d="M21 15l-5-5L5 21" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      </div>
+                      {/* Hover actions — only for single-account products */}
+                      {!isMulti && (
+                        <div
+                          className="absolute inset-0 flex items-center justify-center gap-1 opacity-0 hover:opacity-100 pointer-events-none hover:pointer-events-auto transition-opacity"
+                          style={{ background: 'rgba(0,0,0,.65)' }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button onClick={() => handleRunRepricer(first.seller_sku)} className="btn btn-xs btn-primary p-1" title="Запустить">
+                            <Play className="w-3 h-3" />
+                          </button>
+                          <button onClick={() => handleHistoryClick(first)} className="btn btn-xs btn-secondary p-1" title="История цен">
+                            <LineChart className="w-3 h-3" />
+                          </button>
+                          <button onClick={() => handleConfigClick(first)} className="btn btn-xs btn-secondary p-1" title="Настроить">
+                            <Settings className="w-3 h-3" />
+                          </button>
+                          <button onClick={() => handleDelete(first.id, first.seller_sku)} className="btn btn-xs btn-danger p-1" title="Удалить">
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Info */}
+                    <div className="p-2" style={{ background: 'var(--card)' }}>
+                      {first.name && (
+                        <p className="truncate mb-0.5" style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text)' }}>
+                          {first.name}
+                        </p>
+                      )}
+                      <p className="font-bold truncate mb-1" style={{ fontSize: '11px', color: 'var(--neon)' }}>
+                        {first.seller_sku || <span style={{ color: 'var(--text-3)' }}>#{first.nm_id}</span>}
+                      </p>
+
+                      {/* Per-account rows */}
+                      {groupProds.map(product => (
+                        <div
+                          key={product.id}
+                          className={isMulti ? 'cursor-pointer hover:bg-muted/40 rounded px-1 -mx-1' : ''}
+                          onClick={isMulti ? (e) => { e.stopPropagation(); navigate(`/products/${product.id}`); } : undefined}
+                        >
+                          {isMulti && (
+                            <p className="truncate" style={{ fontSize: '9px', color: 'var(--text-3)', marginBottom: '1px' }}>
+                              {product.account_name || '—'}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-1 mb-0.5">
+                            {getStatusBadge(product, true)}
+                            {product.current_seller_price ? (
+                              <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text)' }}>
+                                {Number(product.current_seller_price).toLocaleString('ru')}₽
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: '10px', color: 'var(--text-3)' }}>нет цены</span>
+                            )}
+                            {product.margin !== null && product.margin !== undefined && (
+                              <span style={{ fontSize: '9px', fontWeight: 700, color: getMarginColor(product.margin), marginLeft: 'auto' }}>
+                                {product.margin}%
+                              </span>
+                            )}
+                          </div>
+                          {isMulti && (
+                            <div className="flex gap-1 mb-1" onClick={(e) => e.stopPropagation()}>
+                              <button onClick={() => handleHistoryClick(product)} className="btn btn-xs btn-secondary p-0.5" title="История цен" style={{ width: '20px', height: '20px' }}>
+                                <LineChart className="w-2.5 h-2.5" />
+                              </button>
+                              <button onClick={() => handleConfigClick(product)} className="btn btn-xs btn-secondary p-0.5" title="Настроить" style={{ width: '20px', height: '20px' }}>
+                                <Settings className="w-2.5 h-2.5" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+
+                      {/* Single-account: show account name */}
+                      {!isMulti && first.account_name && (
+                        <p className="truncate" style={{ fontSize: '9px', color: 'var(--text-3)' }}>{first.account_name}</p>
+                      )}
+                    </div>
                   </div>
-                ) : (
-                  <span style={{ fontSize: '11px', color: 'var(--text-3)' }}>нет цены</span>
-                )}
-              </div>
+                );
+              })}
             </div>
-          ))}
-        </div>
+          );
+        })()
       ) : (
         /* Table View */
         <div className="card overflow-hidden p-0">
@@ -434,6 +508,7 @@ export default function Products() {
                     />
                   </th>
                   <th>Артикул</th>
+                  <th>Кабинет</th>
                   <th>Название</th>
                   <th>nmID</th>
                   <th>Стратегия</th>
@@ -459,6 +534,9 @@ export default function Products() {
                       <span className="font-medium text-foreground">
                         {product.seller_sku || <span className="text-muted-foreground">#{product.nm_id}</span>}
                       </span>
+                    </td>
+                    <td>
+                      <span style={{ fontSize: '12px', color: 'var(--text-3)' }}>{product.account_name || '—'}</span>
                     </td>
                     <td>
                       <span className="line-clamp-2">{product.name || '—'}</span>

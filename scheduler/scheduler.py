@@ -4,6 +4,7 @@ import sys
 from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 import os
@@ -367,6 +368,20 @@ async def competitor_monitor_job():
         logger.error(f"Ошибка при запуске competitor_monitor_job: {e}", exc_info=True)
 
 
+
+async def products_sync_job():
+    """Ежедневно в полночь: создаёт товары из wb_catalog для всех активных аккаунтов."""
+    logger.info("=" * 70)
+    logger.info("Планировщик: ежедневная синхронизация товаров из каталога")
+    try:
+        from app.tasks.products_sync import sync_all_products_task
+        sync_all_products_task.delay()
+        logger.info("Задача sync_all_products_task поставлена в очередь")
+    except Exception as e:
+        logger.error(f"Ошибка при запуске products_sync_job: {e}", exc_info=True)
+    logger.info("=" * 70)
+
+
 def setup_scheduler() -> AsyncIOScheduler:
     """Настройка и запуск планировщика"""
     scheduler = AsyncIOScheduler(timezone="UTC")
@@ -393,13 +408,13 @@ def setup_scheduler() -> AsyncIOScheduler:
 
     scheduler.add_job(
         catalog_sync_job,
-        trigger=IntervalTrigger(weeks=1),
+        trigger=CronTrigger(hour=2, minute=0),
         id="catalog_sync_job",
-        name="WB Catalog Sync (weekly)",
+        name="WB Catalog Sync (daily 02:00 UTC)",
         replace_existing=True,
         max_instances=1,
     )
-    logger.info("Задача 'catalog_sync_job' зарегистрирована (раз в неделю)")
+    logger.info("Задача 'catalog_sync_job' зарегистрирована (ежедневно в 02:00 UTC)")
 
     scheduler.add_job(
         competitor_monitor_job,

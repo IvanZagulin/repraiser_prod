@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Plus, Trash2, AlertCircle, X, KeyRound, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { getAccounts, createAccount, deleteAccount, syncAccountCatalog } from '../api/client';
+import { getAccounts, createAccount, deleteAccount, syncAccountCatalog, syncAccountProducts } from '../api/client';
 import { format } from 'date-fns';
 
 export default function Accounts() {
@@ -9,6 +9,7 @@ export default function Accounts() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [syncingId, setSyncingId] = useState(null);
+  const [syncingProductsId, setSyncingProductsId] = useState(null);
 
   useEffect(() => {
     loadAccounts();
@@ -35,6 +36,18 @@ export default function Accounts() {
       toast.error('Ошибка запуска синхронизации');
     } finally {
       setSyncingId(null);
+    }
+  };
+
+  const handleSyncProducts = async (id, name) => {
+    setSyncingProductsId(id);
+    try {
+      await syncAccountProducts(id);
+      toast.success(`Синхронизация товаров "${name}" запущена — новые товары появятся через 1–2 мин.`);
+    } catch {
+      toast.error('Ошибка запуска синхронизации товаров');
+    } finally {
+      setSyncingProductsId(null);
     }
   };
 
@@ -128,6 +141,15 @@ export default function Accounts() {
                 </div>
 
                 <div className="flex items-center gap-2 ml-4">
+                  <button
+                    onClick={() => handleSyncProducts(account.id, account.name)}
+                    disabled={syncingProductsId === account.id}
+                    className="btn btn-sm btn-secondary"
+                    title="Синхронизировать товары из каталога"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${syncingProductsId === account.id ? 'animate-spin' : ''}`} />
+                    <span className="hidden sm:inline text-xs">Товары</span>
+                  </button>
                   <button
                     onClick={() => handleSyncCatalog(account.id, account.name)}
                     disabled={syncingId === account.id}

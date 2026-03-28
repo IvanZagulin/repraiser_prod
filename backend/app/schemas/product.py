@@ -110,6 +110,7 @@ class ProductWithPriceResponse(ProductResponse):
     last_updated: Optional[datetime] = None
     cost_price: Optional[Decimal] = None
     margin: Optional[float] = None
+    account_name: Optional[str] = None
 
 
 class ProductListResponse(BaseModel):

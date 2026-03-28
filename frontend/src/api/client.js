@@ -74,8 +74,11 @@ export const deleteAccount = (id) =>
 
 export const syncAccountCatalog = (id) =>
   api.post(`/api/accounts/${id}/sync-catalog`);
+export const syncAccountProducts = (id) =>
+  api.post(`/api/accounts/${id}/sync-products`);
 
 // Products
+export const getProductStats = () => api.get('/api/products/stats');
 export const getProducts = (params) =>
   api.get('/api/products', { params });
 
@@ -212,6 +215,8 @@ export const importStrategy = (file) => {
     },
   });
 };
+
+export const getTaskStatus = (taskId) => api.get(`/api/export/task/${taskId}`);
 
 export const importProducts = (file) => {
   const formData = new FormData();

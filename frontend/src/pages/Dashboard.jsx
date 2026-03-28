@@ -5,7 +5,7 @@ import {
   X, ScrollText, Clock,
 } from 'lucide-react';
 import {
-  getProducts, getRepricerRuns, getAccounts, runRepricer,
+  getProducts, getProductStats, getRepricerRuns, getAccounts, runRepricer,
   getActivityLog,
 } from '../api/client';
 import { useNavigate } from 'react-router-dom';
@@ -231,11 +231,12 @@ export default function Dashboard() {
 
   const loadAll = async () => {
     try {
-      const [accountsRes, productsRes, runsRes, activityRes] = await Promise.all([
+      const [accountsRes, productsRes, runsRes, activityRes, statsRes] = await Promise.all([
         getAccounts().catch(() => ({ data: { accounts: [] } })),
         getProducts({ page: 1, page_size: 1000 }).catch(() => ({ data: { products: [] } })),
         getRepricerRuns({ limit: 10 }).catch(() => ({ data: { runs: [] } })),
         getActivityLog({ page: 1, page_size: 5 }).catch(() => ({ data: { items: [] } })),
+        getProductStats().catch(() => ({ data: { total: 0, active: 0, inactive: 0 } })),
       ]);
 
       const accounts = accountsRes.data.accounts || [];
@@ -252,11 +253,12 @@ export default function Dashboard() {
         total: r.total_products,
       })));
 
+      const s = statsRes.data;
       setStats({
         totalAccounts: accounts.length,
-        totalProducts: prods.length,
-        activeProducts: prods.filter((p) => p.config?.is_active).length,
-        inactiveProducts: prods.filter((p) => p.config && !p.config.is_active).length,
+        totalProducts: s.total || prods.length,
+        activeProducts: s.active ?? prods.filter((p) => p.config?.is_active).length,
+        inactiveProducts: s.inactive ?? prods.filter((p) => p.config && !p.config.is_active).length,
       });
     } catch {
       toast.error('Ошибка загрузки данных');
