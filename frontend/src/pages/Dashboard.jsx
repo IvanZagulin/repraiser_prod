@@ -2,11 +2,10 @@ import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import {
   TrendingUp, Package, PlayCircle, Users, Zap, ChevronRight, Activity,
   BarChart2, Loader2, DollarSign, Eye, EyeOff, GripVertical, Settings2,
-  X, ScrollText, Clock,
+  X, Clock,
 } from 'lucide-react';
 import {
   getProducts, getProductStats, getRepricerRuns, getAccounts, runRepricer,
-  getActivityLog,
 } from '../api/client';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -26,10 +25,9 @@ const WIDGET_DEFS = [
   { id: 'chart',       label: 'График запусков',     icon: Activity },
   { id: 'runs',        label: 'Последние запуски',   icon: PlayCircle },
   { id: 'strategies',  label: 'Стратегии товаров',   icon: Package },
-  { id: 'activity',    label: 'Последние действия',  icon: ScrollText },
 ];
 
-const DEFAULT_ORDER = ['stats', 'chart', 'runs', 'strategies', 'activity'];
+const DEFAULT_ORDER = ['stats', 'chart', 'runs', 'strategies'];
 const STORAGE_KEY = 'dashboard_widgets';
 const ORDER_KEY = 'dashboard_widget_order';
 
@@ -75,13 +73,6 @@ const StatusBadge = ({ status }) => {
 const PIE_COLORS = { rrp: '#00c8ff', competitor: '#0066ff', none: '#d1d5db' };
 const PIE_LABELS = { rrp: 'РРЦ', competitor: 'Конкурент', none: 'Без настройки' };
 
-const EVENT_ICONS = {
-  price_changed: { icon: DollarSign, color: '#22c55e' },
-  strategy_activated: { icon: Zap, color: '#00c8ff' },
-  account_created: { icon: Users, color: '#3b82f6' },
-  product_created: { icon: Package, color: '#3b82f6' },
-  repricer_run: { icon: PlayCircle, color: '#00c8ff' },
-};
 
 // ─── Widget Settings Modal with DnD ───────────────────────────────
 
@@ -225,17 +216,14 @@ export default function Dashboard() {
   const [recentRuns, setRecentRuns] = useState([]);
   const [runsChartData, setRunsChartData] = useState([]);
   const [products, setProducts] = useState([]);
-  const [activityItems, setActivityItems] = useState([]);
-
   useEffect(() => { loadAll(); }, []);
 
   const loadAll = async () => {
     try {
-      const [accountsRes, productsRes, runsRes, activityRes, statsRes] = await Promise.all([
+      const [accountsRes, productsRes, runsRes, statsRes] = await Promise.all([
         getAccounts().catch(() => ({ data: { accounts: [] } })),
         getProducts({ page: 1, page_size: 1000 }).catch(() => ({ data: { products: [] } })),
         getRepricerRuns({ limit: 10 }).catch(() => ({ data: { runs: [] } })),
-        getActivityLog({ page: 1, page_size: 5 }).catch(() => ({ data: { items: [] } })),
         getProductStats().catch(() => ({ data: { total: 0, active: 0, inactive: 0 } })),
       ]);
 
@@ -245,7 +233,6 @@ export default function Dashboard() {
 
       setProducts(prods);
       setRecentRuns(runs);
-      setActivityItems(activityRes.data?.items ?? []);
 
       setRunsChartData([...runs].reverse().map((r) => ({
         label: formatMsk(r.started_at, 'dd.MM HH:mm'),
@@ -551,103 +538,6 @@ export default function Dashboard() {
       </Card>
     ),
 
-    activity: () => (
-      <Card>
-        <CardHeader className="pb-2">
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2 text-sm font-semibold">
-              <ScrollText className="h-4 w-4 text-muted-foreground" />
-              Последние действия
-            </CardTitle>
-            <Button variant="ghost" size="xs" onClick={() => navigate('/activity')} className="gap-1">
-              Весь журнал <ChevronRight className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {activityItems.length === 0 ? (
-            <div className="py-10 text-center">
-              <ScrollText className="mx-auto mb-3 h-10 w-10 text-muted-foreground/20" />
-              <p className="text-sm text-muted-foreground">Нет записей</p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {activityItems.map((item, i) => {
-                const cfg = EVENT_ICONS[item.event_type] || { icon: Activity, color: '#9ca3af' };
-                const Icon = cfg.icon;
-                let details = null;
-                try {
-                  details = typeof item.details === 'string' ? JSON.parse(item.details) : item.details;
-                } catch {}
-
-                const getEventLabel = (type, d) => {
-                  if (!d) return type?.replace(/_/g, ' ');
-                  switch (type) {
-                    case 'price_changed':
-                      return d.product_name
-                        ? `Цена изменена: ${d.product_name}`
-                        : d.nm_id
-                        ? `Цена изменена: арт. ${d.nm_id}`
-                        : 'Цена изменена';
-                    case 'repricer_run':
-                      return `Запуск репрайсера${d.updated_count != null ? ` — обновлено ${d.updated_count}` : ''}`;
-                    case 'strategy_activated':
-                      return d.name ? `Стратегия включена: ${d.name}` : 'Стратегия включена';
-                    case 'strategy_deactivated':
-                      return d.name ? `Стратегия отключена: ${d.name}` : 'Стратегия отключена';
-                    case 'account_created':
-                      return d.name ? `Добавлен кабинет: ${d.name}` : 'Добавлен кабинет';
-                    case 'product_created':
-                      return d.name ? `Добавлен товар: ${d.name}` : 'Добавлен товар';
-                    case 'product_deleted':
-                      return d.name ? `Удалён товар: ${d.name}` : 'Удалён товар';
-                    default:
-                      return type?.replace(/_/g, ' ');
-                  }
-                };
-
-                const getEventSub = (type, d) => {
-                  if (!d) return null;
-                  if (type === 'price_changed' && d.old_price != null && d.new_price != null)
-                    return `${Math.round(d.old_price).toLocaleString('ru')}₽ → ${Math.round(d.new_price).toLocaleString('ru')}₽`;
-                  if (type === 'repricer_run' && d.run_type)
-                    return d.run_type === 'manual' ? 'Ручной запуск' : 'Автозапуск';
-                  return null;
-                };
-
-                return (
-                  <div
-                    key={item.id || i}
-                    className="flex items-center gap-3 py-2 px-2 rounded-lg transition-colors hover:bg-muted/50"
-                    style={{ animationDelay: `${i * 0.05}s` }}
-                  >
-                    <div
-                      className="flex items-center justify-center w-7 h-7 rounded-full shrink-0"
-                      style={{ background: cfg.color + '1a', color: cfg.color }}
-                    >
-                      <Icon className="w-3.5 h-3.5" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-foreground truncate">
-                        {getEventLabel(item.event_type, details)}
-                      </p>
-                      {getEventSub(item.event_type, details) && (
-                        <p className="text-[11px] text-muted-foreground truncate">
-                          {getEventSub(item.event_type, details)}
-                        </p>
-                      )}
-                    </div>
-                    <span className="text-[11px] text-muted-foreground whitespace-nowrap shrink-0">
-                      {formatMsk(item.created_at || item.timestamp, 'dd.MM HH:mm')}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    ),
   };
 
   // Widgets that span full width

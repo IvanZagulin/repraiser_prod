@@ -17,7 +17,6 @@ import ImportExport from './pages/ImportExport';
 import SettingsPage from './pages/SettingsPage';
 import Analytics from './pages/Analytics';
 import SchedulePage from './pages/SchedulePage';
-import ActivityLogPage from './pages/ActivityLogPage';
 import ReportsPage from './pages/ReportsPage';
 import ProductDetailPage from './pages/ProductDetailPage';
 
@@ -113,7 +112,6 @@ function App() {
           <Route path="runs" element={<Runs />} />
           <Route path="analytics" element={<Analytics />} />
           <Route path="schedule" element={<SchedulePage />} />
-          <Route path="activity" element={<ActivityLogPage />} />
           <Route path="reports" element={<ReportsPage />} />
           <Route path="import-export" element={<ImportExport />} />
           <Route path="settings" element={<SettingsPage />} />

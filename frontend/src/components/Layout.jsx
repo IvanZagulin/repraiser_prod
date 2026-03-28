@@ -20,7 +20,6 @@ const navItems = [
   { to: '/runs',          icon: PlayCircle,        label: 'Запуски' },
   { to: '/schedule',      icon: Clock,             label: 'Расписание' },
   { to: '/accounts',      icon: Users,             label: 'Аккаунты' },
-  { to: '/activity',      icon: ScrollText,        label: 'Журнал' },
   { to: '/reports',       icon: FileBarChart,      label: 'Отчёты' },
   { to: '/import-export', icon: FileText,          label: 'Импорт/Экспорт' },
   { to: '/settings',      icon: SlidersHorizontal, label: 'Настройки' },
