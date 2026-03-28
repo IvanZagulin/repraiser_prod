@@ -87,23 +87,24 @@ class RepricerEngine:
     def _calculate_seller_price_from_final(
         self,
         final_price: Decimal,
-        spp: Decimal
+        spp: Decimal,
+        seller_discount: Decimal = Decimal(0)
     ) -> Decimal:
         """
-        Обратный расчет цены продавца из финальной цены
-
-        final_price = seller_price * (1 - spp/100)
-        seller_price = final_price / (1 - spp/100)
+        Обратный расчет базовой цены продавца из финальной цены покупателя:
+        final_price = seller_price * (1 - seller_discount/100) * (1 - spp/100)
+        seller_price = final_price / (1 - seller_discount/100) / (1 - spp/100)
 
         Args:
             final_price: Желаемая финальная цена покупателя
-            spp: СПП в процентах (допустимый диапазон: -10% … 95%)
+            spp: Истинный СПП WB в процентах (допустимый диапазон: -10% … 95%)
+            seller_discount: Скидка продавца в процентах (0-99%)
 
         Returns:
-            Цена продавца (округленная вверх)
+            Базовая цена продавца (округленная вверх)
 
         Raises:
-            ValueError: если spp вне допустимого диапазона
+            ValueError: если spp или seller_discount вне допустимого диапазона
         """
         if spp < self._SPP_MIN or spp >= 100:
             raise ValueError(
@@ -116,7 +117,9 @@ class RepricerEngine:
                 f"расчёт продолжается, но проверьте данные"
             )
 
-        seller_price = final_price / (1 - spp / 100)
+        spp_factor = 1 - spp / 100
+        discount_factor = 1 - seller_discount / 100 if seller_discount > 0 else Decimal(1)
+        seller_price = final_price / (spp_factor * discount_factor)
         return Decimal(self._round_up(seller_price))
     
     async def _cached_parse_product(self, nm_id: int):
@@ -203,10 +206,20 @@ class RepricerEngine:
                 logger.warning("Не удалось спарсить nm_id=%s из каталога", product.nm_id)
                 return None
 
+            # Истинный СПП WB = скидка от цены после скидки продавца до финальной цены
+            discounted_price = price_data.discounted_price
+            if discounted_price > 0 and catalog_product.final_price > 0:
+                true_spp = round((1 - catalog_product.final_price / discounted_price) * 100)
+                true_spp = Decimal(str(max(0, true_spp)))
+            else:
+                true_spp = Decimal(0)
+
             return {
                 'seller_price': price_data.seller_price,
+                'discounted_price': discounted_price,
+                'discount': price_data.discount,
                 'final_price': catalog_product.final_price,
-                'spp': catalog_product.spp,
+                'spp': true_spp,
                 'is_in_promo': catalog_product.is_in_promo,
                 'total_quantity': catalog_product.total_quantity,
                 'name': getattr(catalog_product, "name", None),
@@ -241,12 +254,8 @@ class RepricerEngine:
         rrp = config.rrp_price
         tolerance = config.rrp_tolerance or Decimal(5)
         current_final = current_data['final_price']
-        spp = current_data['spp']
-
-        # spp=None означает, что WB не применяет скидку (СПП=0%) — это нормально,
-        # работаем как будто скидки нет (final_price == seller_price)
-        if spp is None:
-            spp = Decimal(0)
+        spp = current_data.get('spp') or Decimal(0)
+        seller_discount = current_data.get('discount') or Decimal(0)
 
         consider_wallet = bool(getattr(config, 'rrp_consider_wallet', False))
 
@@ -272,7 +281,7 @@ class RepricerEngine:
             target_final = rrp / wallet_factor
 
             try:
-                new_seller_price = self._calculate_seller_price_from_final(target_final, spp)
+                new_seller_price = self._calculate_seller_price_from_final(target_final, spp, seller_discount)
                 reason_msg = (
                     f"РРЦ+кошелёк стратегия: РРЦ {rrp}₽, кошелёк {wallet_pct}%, "
                     f"целевая до кошелька {target_final:.2f}₽, "
@@ -298,7 +307,7 @@ class RepricerEngine:
             target_final = rrp
 
             try:
-                new_seller_price = self._calculate_seller_price_from_final(target_final, spp)
+                new_seller_price = self._calculate_seller_price_from_final(target_final, spp, seller_discount)
                 reason_msg = (
                     f"РРЦ стратегия: целевая финальная {target_final}₽, "
                     f"новая цена продавца {new_seller_price}₽"
@@ -390,9 +399,8 @@ class RepricerEngine:
                     return None, "SKIPPED_INACTIVE", "Конкурент не настроен"
                 return None, "COMPETITOR_OOS", "Все конкуренты не в наличии"
 
-            spp = current_data['spp']
-            if spp is None:
-                return None, "PARSE_ERROR", "Не удалось определить СПП"
+            spp = current_data.get('spp') or Decimal(0)
+            seller_discount = current_data.get('discount') or Decimal(0)
 
             rule = config.competitor_select_rule or "min_price"
             logger.info(
@@ -418,7 +426,7 @@ class RepricerEngine:
 
             # Обратный расчет цены продавца
             try:
-                new_seller_price = self._calculate_seller_price_from_final(target_final, spp)
+                new_seller_price = self._calculate_seller_price_from_final(target_final, spp, seller_discount)
 
                 reason_msg = (
                     f"Competitor ({rule}): конкурент nm_id={winning_nm_id} цена={competitor_price}₽, "
@@ -568,6 +576,7 @@ class RepricerEngine:
             product_id=product.id,
             seller_price=current_data['seller_price'],
             final_price=current_data['final_price'],
+            discount=current_data.get('discount'),
             spp=current_data.get('spp'),
             competitor_nm_id=competitor_nm_id,
             competitor_price=competitor_price,

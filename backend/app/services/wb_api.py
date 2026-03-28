@@ -25,15 +25,18 @@ class PriceData:
         self.nm_id = raw_data.get('nmID')
         self.vendor_code = raw_data.get('vendorCode', '')
 
-        # discounts-prices-api возвращает цену в sizes[0], а не на верхнем уровне
+        # discounts-prices-api возвращает цены в sizes[0], discount — на верхнем уровне
         sizes = raw_data.get('sizes', [])
         if sizes:
             first_size = sizes[0]
             self.seller_price = Decimal(str(first_size.get('price', 0)))
-            self.discount = Decimal(str(first_size.get('discount', 0)))
+            self.discounted_price = Decimal(str(first_size.get('discountedPrice', 0)))
         else:
             self.seller_price = Decimal(str(raw_data.get('price', 0)))
-            self.discount = Decimal(str(raw_data.get('discount', 0)))
+            self.discounted_price = Decimal(0)
+
+        # discount всегда на верхнем уровне объекта товара (не внутри sizes)
+        self.discount = Decimal(str(raw_data.get('discount', 0)))
 
         self.sizes = sizes
         
@@ -41,6 +44,7 @@ class PriceData:
         return {
             'nm_id': self.nm_id,
             'seller_price': float(self.seller_price),
+            'discounted_price': float(self.discounted_price),
             'discount': float(self.discount),
             'sizes': self.sizes
         }

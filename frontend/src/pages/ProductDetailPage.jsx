@@ -150,7 +150,8 @@ export default function ProductDetailPage() {
     seller: Math.round(s.seller_price),
     final: Math.round(s.final_price),
     competitor: s.competitor_price ? Math.round(s.competitor_price) : null,
-    spp: s.spp ? Number(s.spp) : null,
+    spp: s.spp != null ? Math.round(Number(s.spp)) : null,
+    discount: s.discount != null ? Math.round(Number(s.discount)) : null,
     promo: s.is_in_promo,
     stock: s.in_stock,
   }));
@@ -266,9 +267,14 @@ export default function ProductDetailPage() {
             <p className="text-2xl font-bold" style={{ color: '#7c3aed' }}>
               {current_price ? `${fmt(current_price.final_price)}₽` : '—'}
             </p>
-            {current_price?.spp && (
+            {current_price?.discount > 0 && (
               <p className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
-                СПП: {current_price.spp}%
+                Скидка прод.: {Math.round(current_price.discount)}%
+              </p>
+            )}
+            {current_price?.spp > 0 && (
+              <p className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
+                СПП: {Math.round(current_price.spp)}%
               </p>
             )}
           </div>

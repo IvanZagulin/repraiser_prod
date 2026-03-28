@@ -41,7 +41,12 @@ const CustomTooltip = ({ active, payload, label }) => {
           <span>В акции</span>
         </div>
       )}
-      {d?.spp != null && (
+      {d?.discount != null && d.discount > 0 && (
+        <div className="mt-0.5" style={{ color: 'var(--text-3)' }}>
+          Скидка: {d.discount}%
+        </div>
+      )}
+      {d?.spp != null && d.spp > 0 && (
         <div className="mt-0.5" style={{ color: 'var(--text-3)' }}>
           СПП: {d.spp}%
         </div>
@@ -66,7 +71,8 @@ export default function PriceHistoryModal({ product, onClose }) {
           final: Math.round(Number(s.final_price)),
           competitor: s.competitor_price != null ? Math.round(Number(s.competitor_price)) : null,
           competitor_nm_id: s.competitor_nm_id,
-          spp: s.spp != null ? Number(s.spp).toFixed(1) : null,
+          spp: s.spp != null ? Math.round(Number(s.spp)) : null,
+          discount: s.discount != null ? Math.round(Number(s.discount)) : null,
           promo: s.is_in_promo,
           stock: s.in_stock,
         }));
