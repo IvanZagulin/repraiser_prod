@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { BarChart2, TrendingUp, CheckCircle2, XCircle, RefreshCw, Activity, DollarSign, Loader2 } from 'lucide-react';
-import { getRepricerRuns, getProducts, getPriceDynamics, getSavings, getCompetitorTrends, getAnalyticsSummary } from '../api/client';
+import { BarChart2, TrendingUp, CheckCircle2, RefreshCw, Activity, Loader2 } from 'lucide-react';
+import { getRepricerRuns, getProducts, getPriceDynamics, getCompetitorTrends } from '../api/client';
 import { formatMsk } from '../utils/date';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, LineChart, Line,
@@ -41,7 +41,6 @@ export default function Analytics() {
   const [loading, setLoading] = useState(true);
   const [runs, setRuns] = useState([]);
   const [products, setProducts] = useState([]);
-  const [savings, setSavings] = useState(null);
   const [competitorTrends, setCompetitorTrends] = useState([]);
 
   // Price dynamics state
@@ -55,13 +54,11 @@ export default function Analytics() {
     Promise.all([
       getRepricerRuns({ limit: 100 }).catch(() => ({ data: { runs: [] } })),
       getProducts({ page: 1, page_size: 1000 }).catch(() => ({ data: { products: [] } })),
-      getSavings().catch(() => ({ data: { total_savings_rub: 0 } })),
       getCompetitorTrends(30).catch(() => ({ data: { trends: [] } })),
     ])
-      .then(([runsRes, prodRes, savingsRes, trendsRes]) => {
+      .then(([runsRes, prodRes, trendsRes]) => {
         setRuns(runsRes.data.runs || []);
         setProducts(prodRes.data.products || []);
-        setSavings(savingsRes.data);
         setCompetitorTrends(trendsRes.data.trends || trendsRes.data || []);
       })
       .catch(() => toast.error('Ошибка загрузки аналитики'))
@@ -124,11 +121,8 @@ export default function Analytics() {
   // Summary stats
   const totalRuns = runs.length;
   const completedRuns = runs.filter((r) => r.status === 'completed').length;
-  const failedRuns = runs.filter((r) => r.status === 'failed').length;
   const totalUpdated = runs.reduce((a, r) => a + r.updated_count, 0);
-  const avgUpdated = totalRuns ? Math.round(totalUpdated / totalRuns) : 0;
   const successRate = totalRuns ? Math.round((completedRuns / totalRuns) * 100) : 0;
-  const totalSavings = savings?.total_savings_rub ?? savings?.total_savings ?? 0;
 
   // Price dynamics chart data
   const priceChartData = priceDynamics.map((p) => ({
@@ -162,7 +156,7 @@ export default function Analytics() {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
         {[
           {
             label: 'Всего запусков',
