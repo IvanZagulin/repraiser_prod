@@ -857,6 +857,12 @@ class RepricerEngine:
                 return {"product": product, "needs_update": False, "skip_code": "PARSE_ERROR",
                         "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": None, "_t0": _t0}
 
+            # Товар закончился на складе — WB не возвращает итоговую цену, пропускаем
+            if current_data.get("total_quantity", 1) == 0 and current_data.get("final_price", 1) == 0:
+                return {"product": product, "needs_update": False, "skip_code": "OUT_OF_STOCK",
+                        "current_data": current_data, "new_price": None, "limit_reason": None,
+                        "reason_msg": "Нет остатка", "_t0": _t0}
+
         wallet_pct = (self._user_settings or {}).get("wb_wallet_discount_pct", 0)
         try:
             wallet_pct = Decimal(str(wallet_pct))
@@ -1170,7 +1176,7 @@ class RepricerEngine:
                         )
                         if reason_code in ["UPDATED", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX", "CLAMPED_TO_MARGIN"]:
                             results["updated"] += 1
-                        elif reason_code in ["SKIPPED_PROMO", "SKIPPED_INACTIVE", "NO_CHANGE", "COMPETITOR_OOS"]:
+                        elif reason_code in ["SKIPPED_PROMO", "SKIPPED_INACTIVE", "NO_CHANGE", "COMPETITOR_OOS", "OUT_OF_STOCK"]:
                             results["skipped"] += 1
                         else:
                             results["errors"] += 1
