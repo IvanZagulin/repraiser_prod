@@ -362,6 +362,49 @@ async def get_products_stats(
         "no_config": total - active - inactive,
     }
 
+
+
+@router.get("/by-sku/{seller_sku}")
+async def get_products_by_sku(
+    seller_sku: str,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """All products with the same seller_sku for this user (different accounts/nm_ids)."""
+    products = (
+        db.query(Product)
+        .join(Account, Product.account_id == Account.id)
+        .filter(Account.user_id == current_user.id, Product.seller_sku == seller_sku)
+        .all()
+    )
+    result = []
+    for p in products:
+        account = db.query(Account).filter(Account.id == p.account_id).first()
+        config = p.config
+        latest_snap = (
+            db.query(PriceSnapshot)
+            .filter(PriceSnapshot.product_id == p.id)
+            .order_by(desc(PriceSnapshot.snapshot_at))
+            .first()
+        )
+        result.append({
+            "id": p.id,
+            "nm_id": p.nm_id,
+            "seller_sku": p.seller_sku,
+            "name": p.name,
+            "account_id": p.account_id,
+            "account_name": account.name if account else None,
+            "current_seller_price": float(latest_snap.seller_price) if latest_snap and latest_snap.seller_price else None,
+            "current_final_price": float(latest_snap.final_price) if latest_snap and latest_snap.final_price else None,
+            "strategy": config.strategy if config else None,
+            "is_active": config.is_active if config else None,
+            "min_price": float(config.min_price) if config and config.min_price else None,
+            "max_price": float(config.max_price) if config and config.max_price else None,
+            "rrp_price": float(config.rrp_price) if config and config.rrp_price else None,
+        })
+    return {"products": result, "total": len(result)}
+
+
 @router.get("/{product_id}", response_model=ProductResponse)
 async def get_product(
     product_id: int,

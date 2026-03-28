@@ -3,14 +3,14 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Play, Settings, ExternalLink, TrendingUp, TrendingDown,
   Minus, Package, Shield, Clock, BarChart3, Tag, AlertTriangle,
-  CheckCircle, XCircle, ArrowUpRight, ArrowDownRight, Copy, Edit3,
+  CheckCircle, XCircle, ArrowUpRight, ArrowDownRight, Copy, Edit3, Store,
 } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, ReferenceDot, AreaChart, Area,
 } from 'recharts';
 import toast from 'react-hot-toast';
-import { getProductDetail, runRepricer, updateProductConfig, createProductConfig, getSettings } from '../api/client';
+import { getProductDetail, getProductsBySku, runRepricer, updateProductConfig, createProductConfig, getSettings } from '../api/client';
 import { formatMsk } from '../utils/date';
 import ConfigModal from '../components/ConfigModal';
 
@@ -88,11 +88,19 @@ export default function ProductDetailPage() {
   const [showConfig, setShowConfig] = useState(false);
   const [running, setRunning] = useState(false);
   const [chartTab, setChartTab] = useState('price'); // price | spp
+  const [related, setRelated] = useState([]);
 
   const load = async () => {
     try {
       const res = await getProductDetail(productId);
       setData(res.data);
+      // Load related products (same SKU, other accounts)
+      if (res.data?.product?.seller_sku) {
+        try {
+          const relRes = await getProductsBySku(res.data.product.seller_sku);
+          setRelated(relRes.data?.products || []);
+        } catch {}
+      }
     } catch {
       toast.error('Ошибка загрузки товара');
       navigate('/products');
@@ -452,6 +460,74 @@ export default function ProductDetailPage() {
           </div>
         </div>
       </div>
+
+
+      {/* Related accounts block — same SKU across different accounts */}
+      {related.length > 1 && (
+        <div className="card mb-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Store className="w-4 h-4" style={{ color: 'var(--text-3)' }} />
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+              Магазины
+              <span className="font-normal ml-2 text-xs" style={{ color: 'var(--text-3)' }}>
+                {related.length} аккаунта с артикулом {product.seller_sku}
+              </span>
+            </h3>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            {related.map((r) => (
+              <div
+                key={r.id}
+                onClick={() => r.id !== product.id && navigate(`/products/${r.id}`)}
+                className="flex-1 min-w-48 rounded-xl border p-3 transition-all"
+                style={{
+                  borderColor: r.id === product.id ? 'var(--primary)' : 'var(--border)',
+                  background: r.id === product.id ? 'rgba(var(--primary-rgb),0.06)' : 'var(--muted)',
+                  cursor: r.id !== product.id ? 'pointer' : 'default',
+                  opacity: r.is_active === false ? 0.6 : 1,
+                }}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                    {r.account_name || 'Аккаунт'}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {r.is_active === true && (
+                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#16a34a', display: 'inline-block' }} />
+                    )}
+                    {r.is_active === false && (
+                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#9ca3af', display: 'inline-block' }} />
+                    )}
+                    {r.strategy && (
+                      <span className="badge badge-info" style={{ fontSize: 10, padding: '1px 6px' }}>
+                        {r.strategy === 'rrp' ? 'РРЦ' : 'Конкурент'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-baseline gap-1 mb-1">
+                  <span className="text-lg font-bold" style={{ color: 'var(--text)' }}>
+                    {r.current_seller_price ? `${Math.round(r.current_seller_price).toLocaleString('ru')}₽` : '—'}
+                  </span>
+                  {r.current_final_price && (
+                    <span className="text-xs" style={{ color: '#7c3aed' }}>
+                      / {Math.round(r.current_final_price).toLocaleString('ru')}₽ СПП
+                    </span>
+                  )}
+                </div>
+                <div className="flex gap-2 text-xs" style={{ color: 'var(--text-3)' }}>
+                  <span>Мин: {r.min_price ? `${Math.round(r.min_price).toLocaleString('ru')}₽` : '—'}</span>
+                  <span>·</span>
+                  <span>Макс: {r.max_price ? `${Math.round(r.max_price).toLocaleString('ru')}₽` : '∞'}</span>
+                </div>
+                <div className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
+                  nmID: {r.nm_id}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Status badges row */}
       {current_price && (

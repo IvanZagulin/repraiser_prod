@@ -100,6 +100,9 @@ export const updateProductConfig = (productId, data) =>
 export const getProductHistory = (productId, limit = 100) =>
   api.get(`/api/products/${productId}/history`, { params: { limit } });
 
+export const getProductsBySku = (sellerSku) =>
+  api.get(`/products/by-sku/${encodeURIComponent(sellerSku)}`);
+
 export const getProductDetail = (productId) =>
   api.get(`/api/products/${productId}/detail`);
 
