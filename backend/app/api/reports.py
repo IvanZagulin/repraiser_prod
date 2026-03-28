@@ -39,6 +39,7 @@ def generate_report(
     from fpdf import FPDF
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now_msk = now + timedelta(hours=3)  # UTC → МСК для отображения
     since = now - timedelta(days=days)
     # Считаем account_ids один раз и переиспользуем — не вызываем _user_account_ids дважды
     account_ids = _user_account_ids(db, current_user)
@@ -175,8 +176,8 @@ def generate_report(
     pdf.set_xy(10, 20)
     pdf.set_font(FONT, "", 10)
     pdf.set_text_color(*WHITE)
-    period_from = since.strftime("%d.%m.%Y")
-    period_to = now.strftime("%d.%m.%Y")
+    period_from = (since + timedelta(hours=3)).strftime("%d.%m.%Y")
+    period_to = now_msk.strftime("%d.%m.%Y")
     pdf.cell(0, 8, f"Отчёт за период: {period_from} — {period_to}", ln=True)
 
     pdf.set_xy(pdf.w - 80, 20)
@@ -358,7 +359,7 @@ def generate_report(
             bg = LIGHT_BG if idx % 2 == 0 else WHITE
             pdf.set_fill_color(*bg)
             pdf.cell(col_w3[0], 7, str(run.id), fill=True)
-            started = run.started_at.strftime("%d.%m %H:%M") if run.started_at else "—"
+            started = (run.started_at + timedelta(hours=3)).strftime("%d.%m %H:%M") if run.started_at else "—"
             pdf.cell(col_w3[1], 7, started, fill=True)
             status_map = {"completed": "Успех", "failed": "Ошибка", "running": "В процессе"}
             pdf.cell(col_w3[2], 7, status_map.get(run.status, run.status or "—"), fill=True)
@@ -368,13 +369,14 @@ def generate_report(
             pdf.cell(col_w3[5], 7, rtype, fill=True)
             pdf.ln()
 
-    # ── Footer ──
-    pdf.set_y(-25)
+    # ── Footer — отключаем auto page break чтобы не добавлялась пустая страница ──
+    pdf.set_auto_page_break(False)
+    pdf.set_y(-20)
     pdf.set_font(FONT, "", 8)
     pdf.set_text_color(*GRAY)
-    pdf.cell(0, 5, f"QUASAR-X Repricer — Автоматическое управление ценами на Wildberries", align="C", ln=True)
-    generated = now.strftime("%d.%m.%Y %H:%M")
-    pdf.cell(0, 5, f"Отчёт сгенерирован: {generated} UTC", align="C")
+    pdf.cell(0, 5, "QUASAR-X Repricer — Автоматическое управление ценами на Wildberries", align="C", ln=True)
+    generated = now_msk.strftime("%d.%m.%Y %H:%M")
+    pdf.cell(0, 5, f"Отчёт сгенерирован: {generated} МСК", align="C")
 
     # ── Output ──
     buf = io.BytesIO()

@@ -188,22 +188,6 @@ export default function Analytics() {
             bg: 'linear-gradient(135deg, rgba(0,102,255,.08), rgba(108,92,231,.06))',
             border: 'rgba(0,102,255,.2)',
           },
-          {
-            label: 'Ошибок / ср. обновлений',
-            value: `${failedRuns} / ${avgUpdated}`,
-            icon: XCircle,
-            color: failedRuns > 0 ? '#f59e0b' : '#9ca3bc',
-            bg: 'linear-gradient(135deg, rgba(245,158,11,.08), rgba(245,158,11,.04))',
-            border: 'rgba(245,158,11,.2)',
-          },
-          {
-            label: 'Экономия',
-            value: `${totalSavings.toLocaleString('ru')} \u20BD`,
-            icon: DollarSign,
-            color: '#16a34a',
-            bg: 'linear-gradient(135deg, rgba(22,163,74,.10), rgba(34,197,94,.06))',
-            border: 'rgba(22,163,74,.25)',
-          },
         ].map((s, i) => (
           <div
             key={i}
