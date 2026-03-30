@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Plus, Trash2, AlertCircle, X, KeyRound, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, AlertCircle, X, KeyRound, RefreshCw, Pencil } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { getAccounts, createAccount, deleteAccount, syncAccountCatalog, syncAccountProducts } from '../api/client';
+import { getAccounts, createAccount, updateAccount, deleteAccount, syncAccountCatalog, syncAccountProducts } from '../api/client';
 import { formatMsk } from '../utils/date';
 
 export default function Accounts() {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [editAccount, setEditAccount] = useState(null);
   const [syncingId, setSyncingId] = useState(null);
   const [syncingProductsId, setSyncingProductsId] = useState(null);
 
@@ -159,6 +160,13 @@ export default function Accounts() {
                     <RefreshCw className={`w-4 h-4 ${syncingId === account.id ? 'animate-spin' : ''}`} />
                   </button>
                   <button
+                    onClick={() => setEditAccount(account)}
+                    className="btn btn-sm btn-secondary"
+                    title="Редактировать аккаунт"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  <button
                     onClick={() => handleDelete(account.id, account.name)}
                     className="btn btn-sm btn-danger"
                     title="Удалить"
@@ -175,6 +183,107 @@ export default function Accounts() {
       {showModal && (
         <AccountModal onClose={() => { setShowModal(false); loadAccounts(); }} />
       )}
+      {editAccount && (
+        <EditAccountModal account={editAccount} onClose={() => { setEditAccount(null); loadAccounts(); }} />
+      )}
+    </div>
+  );
+}
+
+function EditAccountModal({ account, onClose }) {
+  const [formData, setFormData] = useState({
+    name: account.name,
+    wb_api_token: '',
+    is_active: account.is_active,
+  });
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const payload = { name: formData.name, is_active: formData.is_active };
+      if (formData.wb_api_token.trim()) {
+        payload.wb_api_token = formData.wb_api_token.trim();
+      }
+      await updateAccount(account.id, payload);
+      toast.success(
+        formData.wb_api_token.trim()
+          ? 'Аккаунт обновлён, каталог синхронизируется с новым токеном'
+          : 'Аккаунт обновлён'
+      );
+      onClose();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Ошибка обновления аккаунта');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay">
+      <div className="modal-box max-w-md">
+        <div className="modal-header">
+          <h2 className="text-base font-semibold text-foreground">Редактировать аккаунт</h2>
+          <button onClick={onClose} className="btn btn-ghost btn-sm p-1">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-1.5 text-muted-foreground">
+              Название аккаунта
+            </label>
+            <input
+              type="text"
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              className="input"
+              placeholder="Основной магазин"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1.5 text-muted-foreground">
+              Новый WB API Токен (JWT)
+            </label>
+            <textarea
+              value={formData.wb_api_token}
+              onChange={(e) => setFormData({ ...formData, wb_api_token: e.target.value })}
+              className="input font-mono text-xs"
+              rows="4"
+              placeholder="Оставьте пустым, чтобы не менять токен"
+            />
+            <p className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
+              Токен из личного кабинета WB → Настройки → Доступ к API. Если не заполнять — токен останется прежним.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              id="is_active"
+              checked={formData.is_active}
+              onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
+              className="w-4 h-4"
+            />
+            <label htmlFor="is_active" className="text-sm font-medium text-muted-foreground cursor-pointer">
+              Аккаунт активен
+            </label>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" onClick={onClose} className="btn btn-secondary">
+              Отмена
+            </button>
+            <button type="submit" disabled={loading} className="btn btn-primary">
+              {loading ? 'Сохранение...' : 'Сохранить'}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
