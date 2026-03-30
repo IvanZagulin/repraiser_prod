@@ -369,19 +369,6 @@ async def competitor_monitor_job():
 
 
 
-async def products_sync_job():
-    """Ежедневно в полночь: создаёт товары из wb_catalog для всех активных аккаунтов."""
-    logger.info("=" * 70)
-    logger.info("Планировщик: ежедневная синхронизация товаров из каталога")
-    try:
-        from app.tasks.products_sync import sync_all_products_task
-        sync_all_products_task.delay()
-        logger.info("Задача sync_all_products_task поставлена в очередь")
-    except Exception as e:
-        logger.error(f"Ошибка при запуске products_sync_job: {e}", exc_info=True)
-    logger.info("=" * 70)
-
-
 def setup_scheduler() -> AsyncIOScheduler:
     """Настройка и запуск планировщика"""
     scheduler = AsyncIOScheduler(timezone="UTC")
@@ -416,15 +403,6 @@ def setup_scheduler() -> AsyncIOScheduler:
     )
     logger.info("Задача 'catalog_sync_job' зарегистрирована (ежедневно в 02:00 UTC)")
 
-    scheduler.add_job(
-        products_sync_job,
-        trigger=CronTrigger(hour=3, minute=0),
-        id="products_sync_job",
-        name="Products Sync from Catalog (daily 03:00 UTC)",
-        replace_existing=True,
-        max_instances=1,
-    )
-    logger.info("Задача 'products_sync_job' зарегистрирована (ежедневно в 03:00 UTC = 06:00 МСК)")
 
     scheduler.add_job(
         competitor_monitor_job,

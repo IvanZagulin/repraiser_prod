@@ -21,7 +21,6 @@ def sync_products_from_catalog_task(self, account_id: int):
     """
     from app.models.account import Account
     from app.models.product import Product
-    from app.models.wb_catalog import WBCatalog
 
     db = SessionLocal()
     try:
@@ -36,45 +35,8 @@ def sync_products_from_catalog_task(self, account_id: int):
 
         logger.info(f"[products.sync] Начало для account_id={account_id} ({account.name})")
 
-        catalog_entries = db.query(WBCatalog).filter(
-            WBCatalog.account_id == account_id
-        ).all()
-
-        if not catalog_entries:
-            logger.warning(f"[products.sync] account_id={account_id}: каталог пуст, сначала запустите синхронизацию каталога")
-            return {"status": "ok", "created": 0, "reason": "catalog empty — run catalog sync first"}
-
-        # Получаем уже существующие nm_id для этого аккаунта
-        existing_nm_ids = {
-            r[0] for r in db.query(Product.nm_id).filter(
-                Product.account_id == account_id
-            ).all()
-        }
-
-        created = 0
-        BATCH = 500
-        for entry in catalog_entries:
-            if not entry.nm_id or entry.nm_id in existing_nm_ids:
-                continue
-
-            db.add(Product(
-                account_id=account_id,
-                nm_id=entry.nm_id,
-                seller_sku=entry.vendor_code,
-                name=entry.name or f"Товар {entry.nm_id}",
-                image_url=entry.image_url,
-            ))
-            existing_nm_ids.add(entry.nm_id)
-            created += 1
-
-            if created % BATCH == 0:
-                db.commit()
-                logger.info(f"[products.sync] account_id={account_id}: создано {created}...")
-
-        if created % BATCH != 0 or created == 0:
-            db.commit()
-
         # Backfill имён для уже существующих товаров с placeholder-именами
+        # (products_sync больше НЕ создаёт новые товары — только обновляет имена)
         try:
             from sqlalchemy import text as sa_text
             name_updated = db.execute(sa_text("""
@@ -93,11 +55,8 @@ def sync_products_from_catalog_task(self, account_id: int):
             logger.warning(f"[products.sync] backfill names failed: {e}")
             db.rollback()
 
-        logger.info(
-            f"[products.sync] account_id={account_id}: "
-            f"создано {created} новых товаров из {len(catalog_entries)} в каталоге"
-        )
-        return {"status": "ok", "created": created, "total_catalog": len(catalog_entries)}
+        logger.info(f"[products.sync] account_id={account_id}: синхронизация имён завершена")
+        return {"status": "ok"}
 
     except Exception as exc:
         db.rollback()
@@ -146,7 +105,6 @@ def import_products_task(self, file_bytes_b64: str, user_id: int):
     from app.database import SessionLocal
     from app.models.account import Account
     from app.models.product import Product
-    from app.models.wb_catalog import WBCatalog
     from app.utils.excel import ExcelImporter
     import logging
 

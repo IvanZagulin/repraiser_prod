@@ -166,3 +166,51 @@ def list_plans(
         )
         for p in plans
     ]
+
+@router.get("/stats")
+@limiter.limit("30/minute")
+def get_stats(
+    request: Request,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Aggregate stats for admin dashboard."""
+    from datetime import timedelta
+    from app.models.repricer_run import RepricerRun
+
+    total_users = db.query(func.count(User.id)).scalar()
+    active_users = db.query(func.count(User.id)).filter(User.is_active == True).scalar()
+    total_accounts = db.query(func.count(Account.id)).scalar()
+    total_products = db.query(func.count(Product.id)).scalar()
+
+    # Users by plan
+    plan_dist = (
+        db.query(Plan.name, func.count(User.id))
+        .outerjoin(User, User.plan_id == Plan.id)
+        .group_by(Plan.name)
+        .all()
+    )
+    no_plan = db.query(func.count(User.id)).filter(User.plan_id == None).scalar()
+
+    # Registrations last 30 days
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=30)
+    new_users_30d = db.query(func.count(User.id)).filter(User.created_at >= cutoff).scalar()
+
+    # Last repricer run
+    last_run = db.query(RepricerRun).order_by(RepricerRun.started_at.desc()).first()
+
+    return {
+        "total_users": total_users,
+        "active_users": active_users,
+        "total_accounts": total_accounts,
+        "total_products": total_products,
+        "new_users_30d": new_users_30d,
+        "plan_distribution": [{"plan": p or "Без тарифа", "count": c} for p, c in plan_dist]
+                            + ([{"plan": "Без тарифа", "count": no_plan}] if no_plan and not any(p is None for p,_ in plan_dist) else []),
+        "last_run": {
+            "id": last_run.id,
+            "started_at": last_run.started_at.isoformat() if last_run else None,
+            "status": last_run.status if last_run else None,
+            "updated": last_run.updated_count if last_run else 0,
+        } if last_run else None,
+    }
