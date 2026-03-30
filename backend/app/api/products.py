@@ -1,6 +1,6 @@
 from typing import Annotated, Optional
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_, cast, String, func, and_
 from slowapi import Limiter
@@ -181,16 +181,12 @@ async def update_product_cost(
     product_id: int,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
-    body: dict,
+    cost_price: float = Body(..., embed=True),
 ):
     """Обновить себестоимость товара"""
-    from pydantic import BaseModel
     product = _get_product_or_404(product_id, db, current_user)
-    raw = body.get("cost_price")
-    if raw is None:
-        raise HTTPException(status_code=400, detail="cost_price is required")
     from decimal import Decimal
-    product.cost_price = Decimal(str(raw)) if float(raw) > 0 else None
+    product.cost_price = Decimal(str(cost_price)) if cost_price > 0 else None
     db.commit()
     return {"id": product_id, "cost_price": float(product.cost_price) if product.cost_price else None}
 
