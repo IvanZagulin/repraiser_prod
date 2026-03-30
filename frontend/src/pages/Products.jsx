@@ -43,9 +43,6 @@ export default function Products() {
   const [fetchingPrices, setFetchingPrices] = useState(false);
   const [selected, setSelected] = useState(new Set());
   const [filterStatus, setFilterStatus] = useState('all');
-  const [filterBrand, setFilterBrand] = useState('');
-  const [filterPriceMin, setFilterPriceMin] = useState('');
-  const [filterPriceMax, setFilterPriceMax] = useState('');
   const [filterAccount, setFilterAccount] = useState('');
   const [accounts, setAccounts] = useState([]);
   const [showBulkStrategy, setShowBulkStrategy] = useState(false);
@@ -63,7 +60,7 @@ export default function Products() {
   // Reload when debounced search or strategy changes
   useEffect(() => {
     loadProducts(1);
-  }, [debouncedSearch, filterStrategy, filterStatus, filterBrand, filterPriceMin, filterPriceMax, filterAccount]);
+  }, [debouncedSearch, filterStrategy, filterStatus, filterAccount]);
 
   useEffect(() => {
     isMounted.current = true;
@@ -88,9 +85,6 @@ export default function Products() {
       if (filterStrategy !== 'all') params.strategy = filterStrategy;
       if (filterStatus === 'active') params.is_active = true;
       if (filterStatus === 'inactive') params.is_active = false;
-      if (filterBrand) params.brand = filterBrand;
-      if (filterPriceMin) params.price_min = filterPriceMin;
-      if (filterPriceMax) params.price_max = filterPriceMax;
       if (filterAccount) params.account_id = filterAccount;
       const response = await getProducts(params);
       setProducts(response.data.products);
@@ -314,29 +308,7 @@ export default function Products() {
               <option key={a.id} value={a.id}>{a.name}</option>
             ))}
           </select>
-          <input
-            type="text"
-            placeholder="Бренд"
-            value={filterBrand}
-            onChange={(e) => setFilterBrand(e.target.value)}
-            className="input w-36"
-          />
-          <input
-            type="number"
-            placeholder="Цена от"
-            value={filterPriceMin}
-            onChange={(e) => setFilterPriceMin(e.target.value)}
-            className="input w-28"
-            min="0"
-          />
-          <input
-            type="number"
-            placeholder="Цена до"
-            value={filterPriceMax}
-            onChange={(e) => setFilterPriceMax(e.target.value)}
-            className="input w-28"
-            min="0"
-          />
+
           <div className="flex rounded-lg overflow-hidden border border-border bg-muted/50">
             <button
               onClick={() => setViewMode('grid')}
