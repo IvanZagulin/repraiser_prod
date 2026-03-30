@@ -123,7 +123,7 @@ export default function AlertsBell() {
           style={{
             position: 'absolute',
             top: '100%',
-            right: 0,
+            left: 0,
             marginTop: 8,
             width: 360,
             maxHeight: 420,

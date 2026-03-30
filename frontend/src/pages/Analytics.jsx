@@ -45,24 +45,34 @@ export default function Analytics() {
 
   // Price dynamics state
   const [selectedProductId, setSelectedProductId] = useState('');
+  const [productSearch, setProductSearch] = useState('');
+  const [showProductDropdown, setShowProductDropdown] = useState(false);
   const [priceDays, setPriceDays] = useState(30);
   const [priceDynamics, setPriceDynamics] = useState([]);
   const [priceLoading, setPriceLoading] = useState(false);
+  const productSearchRef = useState(null);
 
-  // Load all data in parallel on mount
-  useEffect(() => {
+  const fetchMainData = () =>
     Promise.all([
       getRepricerRuns({ limit: 100 }).catch(() => ({ data: { runs: [] } })),
       getProducts({ page: 1, page_size: 1000 }).catch(() => ({ data: { products: [] } })),
       getCompetitorTrends(30).catch(() => ({ data: { trends: [] } })),
-    ])
-      .then(([runsRes, prodRes, trendsRes]) => {
-        setRuns(runsRes.data.runs || []);
-        setProducts(prodRes.data.products || []);
-        setCompetitorTrends(trendsRes.data.trends || trendsRes.data || []);
-      })
+    ]).then(([runsRes, prodRes, trendsRes]) => {
+      setRuns(runsRes.data.runs || []);
+      setProducts(prodRes.data.products || []);
+      setCompetitorTrends(trendsRes.data.trends || trendsRes.data || []);
+    });
+
+  // Load on mount + auto-refresh every 60s
+  useEffect(() => {
+    fetchMainData()
       .catch(() => toast.error('Ошибка загрузки аналитики'))
       .finally(() => setLoading(false));
+
+    const interval = setInterval(() => {
+      fetchMainData().catch(() => {});
+    }, 60000);
+    return () => clearInterval(interval);
   }, []);
 
   // Fetch price dynamics when product or days change
@@ -232,26 +242,78 @@ export default function Analytics() {
           </div>
         </CardHeader>
         <CardContent>
-          {/* Product selector */}
-          <div className="mb-4">
-            <select
-              className="w-full sm:w-80 px-3 py-2 rounded-lg text-sm border focus:outline-none focus:ring-2"
+          {/* Product selector with search */}
+          <div className="mb-4 relative" style={{ maxWidth: 400 }}>
+            <input
+              type="text"
+              placeholder="Поиск по артикулу или названию..."
+              value={productSearch}
+              onChange={(e) => { setProductSearch(e.target.value); setShowProductDropdown(true); }}
+              onFocus={() => setShowProductDropdown(true)}
+              className="w-full px-3 py-2 rounded-lg text-sm border focus:outline-none focus:ring-2"
               style={{
                 background: 'var(--bg-2, #f8f9fb)',
-                borderColor: 'var(--border, #e5e7eb)',
+                borderColor: selectedProductId ? '#00c8ff' : 'var(--border, #e5e7eb)',
                 color: 'var(--text, #1a1a2e)',
-                '--tw-ring-color': '#00c8ff',
               }}
-              value={selectedProductId}
-              onChange={(e) => setSelectedProductId(e.target.value)}
-            >
-              <option value="">Выберите товар...</option>
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name || p.seller_sku || `ID ${p.id}`}
-                </option>
-              ))}
-            </select>
+            />
+            {selectedProductId && (
+              <button
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-xs px-2 py-0.5 rounded"
+                style={{ background: 'rgba(0,200,255,0.1)', color: '#00c8ff' }}
+                onClick={() => { setSelectedProductId(''); setProductSearch(''); }}
+              >
+                ✕
+              </button>
+            )}
+            {showProductDropdown && productSearch && (
+              <div
+                className="absolute z-50 w-full mt-1 rounded-lg border overflow-y-auto"
+                style={{
+                  maxHeight: 240,
+                  background: 'var(--card, #fff)',
+                  borderColor: 'var(--border, #e5e7eb)',
+                  boxShadow: '0 4px 16px rgba(0,0,0,0.1)',
+                }}
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                {products
+                  .filter((p) => {
+                    const q = productSearch.toLowerCase();
+                    return (
+                      (p.seller_sku && p.seller_sku.toLowerCase().includes(q)) ||
+                      (p.name && p.name.toLowerCase().includes(q)) ||
+                      String(p.nm_id).includes(q)
+                    );
+                  })
+                  .slice(0, 50)
+                  .map((p) => (
+                    <div
+                      key={p.id}
+                      className="px-3 py-2 text-sm cursor-pointer hover:bg-primary/10"
+                      style={{ color: 'var(--text, #1a1a2e)' }}
+                      onClick={() => {
+                        setSelectedProductId(String(p.id));
+                        setProductSearch(p.name || p.seller_sku || `ID ${p.id}`);
+                        setShowProductDropdown(false);
+                      }}
+                    >
+                      <span className="font-medium" style={{ color: '#00c8ff' }}>{p.seller_sku}</span>
+                      {p.name && <span className="ml-2 text-xs" style={{ color: 'var(--text-3)' }}>{p.name}</span>}
+                    </div>
+                  ))}
+                {products.filter((p) => {
+                  const q = productSearch.toLowerCase();
+                  return (
+                    (p.seller_sku && p.seller_sku.toLowerCase().includes(q)) ||
+                    (p.name && p.name.toLowerCase().includes(q)) ||
+                    String(p.nm_id).includes(q)
+                  );
+                }).length === 0 && (
+                  <div className="px-3 py-2 text-sm" style={{ color: 'var(--text-3)' }}>Ничего не найдено</div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Chart */}

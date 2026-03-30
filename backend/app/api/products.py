@@ -176,6 +176,25 @@ async def list_products(
     )
 
 
+@router.patch("/{product_id}/cost")
+async def update_product_cost(
+    product_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    body: dict,
+):
+    """Обновить себестоимость товара"""
+    from pydantic import BaseModel
+    product = _get_product_or_404(product_id, db, current_user)
+    raw = body.get("cost_price")
+    if raw is None:
+        raise HTTPException(status_code=400, detail="cost_price is required")
+    from decimal import Decimal
+    product.cost_price = Decimal(str(raw)) if float(raw) > 0 else None
+    db.commit()
+    return {"id": product_id, "cost_price": float(product.cost_price) if product.cost_price else None}
+
+
 @router.post("", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
 async def create_product(
     product_data: ProductCreate,

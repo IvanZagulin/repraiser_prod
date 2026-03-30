@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Settings, Trash2, Play, Search, LayoutGrid, List, LineChart, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { getProducts, deleteProduct, runRepricer, getSettings, fetchPrices, bulkActivate, bulkDelete, getAccounts } from '../api/client';
+import { getProducts, deleteProduct, runRepricer, getSettings, fetchPrices, bulkActivate, bulkDelete, bulkStrategy, getAccounts } from '../api/client';
 import { useProductsStore } from '../store';
 import ProductModal from '../components/ProductModal';
 import ConfigModal from '../components/ConfigModal';
@@ -42,11 +42,16 @@ export default function Products() {
   const [totalProducts, setTotalProducts] = useState(0);
   const [fetchingPrices, setFetchingPrices] = useState(false);
   const [selected, setSelected] = useState(new Set());
+  const [filterStatus, setFilterStatus] = useState('all');
   const [filterBrand, setFilterBrand] = useState('');
   const [filterPriceMin, setFilterPriceMin] = useState('');
   const [filterPriceMax, setFilterPriceMax] = useState('');
   const [filterAccount, setFilterAccount] = useState('');
   const [accounts, setAccounts] = useState([]);
+  const [showBulkStrategy, setShowBulkStrategy] = useState(false);
+  const [bulkStrategyType, setBulkStrategyType] = useState('rrp');
+  const [bulkMinPrice, setBulkMinPrice] = useState('');
+  const [bulkRrpPrice, setBulkRrpPrice] = useState('');
   const isMounted = useRef(true);
 
   // Debounce search input
@@ -58,7 +63,7 @@ export default function Products() {
   // Reload when debounced search or strategy changes
   useEffect(() => {
     loadProducts(1);
-  }, [debouncedSearch, filterStrategy, filterBrand, filterPriceMin, filterPriceMax, filterAccount]);
+  }, [debouncedSearch, filterStrategy, filterStatus, filterBrand, filterPriceMin, filterPriceMax, filterAccount]);
 
   useEffect(() => {
     isMounted.current = true;
@@ -81,6 +86,8 @@ export default function Products() {
       const params = { page: p, page_size: PAGE_SIZE };
       if (debouncedSearch) params.search = debouncedSearch;
       if (filterStrategy !== 'all') params.strategy = filterStrategy;
+      if (filterStatus === 'active') params.is_active = true;
+      if (filterStatus === 'inactive') params.is_active = false;
       if (filterBrand) params.brand = filterBrand;
       if (filterPriceMin) params.price_min = filterPriceMin;
       if (filterPriceMax) params.price_max = filterPriceMax;
@@ -282,11 +289,20 @@ export default function Products() {
           <select
             value={filterStrategy}
             onChange={(e) => setFilterStrategy(e.target.value)}
-            className="input w-44"
+            className="input w-40"
           >
             <option value="all">Все стратегии</option>
             <option value="rrp">РРЦ</option>
             <option value="competitor">Конкурент</option>
+          </select>
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            className="input w-36"
+          >
+            <option value="all">Все статусы</option>
+            <option value="active">Активные</option>
+            <option value="inactive">Отключённые</option>
           </select>
           <select
             value={filterAccount}
@@ -633,12 +649,67 @@ export default function Products() {
           <button onClick={() => handleBulkActivate(false)} className="btn btn-sm btn-secondary">
             Деактивировать
           </button>
+          <button onClick={() => setShowBulkStrategy(true)} className="btn btn-sm btn-secondary">
+            Стратегия
+          </button>
           <button onClick={handleBulkDelete} className="btn btn-sm btn-danger">
             Удалить
           </button>
           <button onClick={() => setSelected(new Set())} className="btn btn-sm btn-secondary">
-            Снять выделение
+            ✕
           </button>
+        </div>
+      )}
+
+      {/* Bulk strategy modal */}
+      {showBulkStrategy && (
+        <div className="modal-overlay">
+          <div className="modal-box max-w-sm">
+            <div className="modal-header">
+              <h2 className="text-base font-semibold text-foreground">Массовая смена стратегии</h2>
+              <button onClick={() => setShowBulkStrategy(false)} className="btn btn-ghost btn-sm p-1">✕</button>
+            </div>
+            <div className="p-5 space-y-4">
+              <p className="text-sm text-muted-foreground">Применить к {selected.size} товарам</p>
+              <div>
+                <label className="block text-sm font-medium mb-1.5 text-muted-foreground">Стратегия</label>
+                <select value={bulkStrategyType} onChange={(e) => setBulkStrategyType(e.target.value)} className="input">
+                  <option value="rrp">РРЦ</option>
+                  <option value="competitor">Конкурент</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1.5 text-muted-foreground">Мин. цена (МРЦ), ₽</label>
+                <input type="number" value={bulkMinPrice} onChange={(e) => setBulkMinPrice(e.target.value)} className="input" placeholder="Обязательно" min="0" />
+              </div>
+              {bulkStrategyType === 'rrp' && (
+                <div>
+                  <label className="block text-sm font-medium mb-1.5 text-muted-foreground">РРЦ, ₽</label>
+                  <input type="number" value={bulkRrpPrice} onChange={(e) => setBulkRrpPrice(e.target.value)} className="input" placeholder="Рекомендованная цена" min="0" />
+                </div>
+              )}
+              <div className="flex justify-end gap-2 pt-2">
+                <button onClick={() => setShowBulkStrategy(false)} className="btn btn-secondary">Отмена</button>
+                <button
+                  className="btn btn-primary"
+                  onClick={async () => {
+                    if (!bulkMinPrice) { toast.error('Укажите мин. цену'); return; }
+                    try {
+                      const cfg = { min_price: Number(bulkMinPrice), is_active: true };
+                      if (bulkStrategyType === 'rrp' && bulkRrpPrice) cfg.rrp_price = Number(bulkRrpPrice);
+                      await bulkStrategy(Array.from(selected), bulkStrategyType, cfg);
+                      toast.success(`Стратегия применена к ${selected.size} товарам`);
+                      setShowBulkStrategy(false);
+                      setSelected(new Set());
+                      loadProducts();
+                    } catch { toast.error('Ошибка применения стратегии'); }
+                  }}
+                >
+                  Применить
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

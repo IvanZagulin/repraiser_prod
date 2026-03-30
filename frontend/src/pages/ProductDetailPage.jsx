@@ -10,7 +10,7 @@ import {
   ResponsiveContainer, AreaChart, Area,
 } from 'recharts';
 import toast from 'react-hot-toast';
-import { getProductDetail, getProductsBySku, runRepricer, updateProductConfig, createProductConfig, getSettings } from '../api/client';
+import { getProductDetail, getProductsBySku, runRepricer, updateProductConfig, createProductConfig, getSettings, getProductAuditLog, updateProductCost } from '../api/client';
 import { formatMsk } from '../utils/date';
 import ConfigModal from '../components/ConfigModal';
 
@@ -84,6 +84,10 @@ export default function ProductDetailPage() {
   const [running, setRunning] = useState(false);
   const [chartTab, setChartTab] = useState('price'); // price | spp
   const [related, setRelated] = useState([]);
+  const [auditLog, setAuditLog] = useState([]);
+  const [editingCost, setEditingCost] = useState(false);
+  const [costInput, setCostInput] = useState('');
+  const [savingCost, setSavingCost] = useState(false);
 
   const load = async () => {
     try {
@@ -96,6 +100,10 @@ export default function ProductDetailPage() {
           setRelated(relRes.data?.products || []);
         } catch {}
       }
+      try {
+        const auditRes = await getProductAuditLog(productId);
+        setAuditLog(auditRes.data?.logs || auditRes.data || []);
+      } catch {}
     } catch {
       toast.error('Ошибка загрузки товара');
       navigate('/products');
@@ -279,10 +287,45 @@ export default function ProductDetailPage() {
             <p className="text-2xl font-bold" style={{ color: getMarginColor(margin.value) }}>
               {margin.value !== null ? `${margin.value}%` : '—'}
             </p>
-            {margin.cost_price && (
-              <p className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
-                Себестоимость: {fmt(margin.cost_price)}₽
+            {editingCost ? (
+              <div className="flex items-center gap-1 mt-1">
+                <input
+                  type="number"
+                  value={costInput}
+                  onChange={(e) => setCostInput(e.target.value)}
+                  className="input text-xs px-1.5 py-0.5 w-24"
+                  placeholder="₽"
+                  min="0"
+                  autoFocus
+                />
+                <button
+                  className="btn btn-xs btn-primary"
+                  disabled={savingCost}
+                  onClick={async () => {
+                    setSavingCost(true);
+                    try {
+                      await updateProductCost(product.id, Number(costInput));
+                      toast.success('Себестоимость сохранена');
+                      setEditingCost(false);
+                      load();
+                    } catch { toast.error('Ошибка сохранения'); }
+                    finally { setSavingCost(false); }
+                  }}
+                >
+                  ОК
+                </button>
+                <button className="btn btn-xs btn-secondary" onClick={() => setEditingCost(false)}>✕</button>
+              </div>
+            ) : (
+              <p
+                className="text-xs mt-1 cursor-pointer hover:text-primary transition-colors"
+                style={{ color: 'var(--text-3)' }}
+                onClick={() => { setCostInput(margin.cost_price || ''); setEditingCost(true); }}
+                title="Нажмите для редактирования"
+              >
+                {margin.cost_price ? `Себестоимость: ${fmt(margin.cost_price)}₽` : '+ Добавить себестоимость'}
                 {margin.fees_total ? ` | Расходы: ${fmt(margin.fees_total)}₽` : ''}
+                <Edit3 className="inline w-3 h-3 ml-1 opacity-50" />
               </p>
             )}
           </div>
@@ -666,6 +709,48 @@ export default function ProductDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Audit log — история изменений конфигурации */}
+      {auditLog.length > 0 && (
+        <div className="card mt-4">
+          <h3 className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>
+            История изменений настроек
+            <span className="font-normal ml-2" style={{ color: 'var(--text-3)' }}>
+              (последние {auditLog.length})
+            </span>
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="dark-table">
+              <thead>
+                <tr>
+                  <th>Дата</th>
+                  <th>Поле</th>
+                  <th>Было</th>
+                  <th>Стало</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auditLog.map((entry, i) => (
+                  <tr key={i}>
+                    <td className="text-xs whitespace-nowrap">
+                      {formatMsk(entry.changed_at || entry.created_at, 'dd.MM.yyyy HH:mm')}
+                    </td>
+                    <td className="font-medium text-xs" style={{ color: '#7c3aed' }}>
+                      {entry.field_name || entry.event_type || '—'}
+                    </td>
+                    <td className="text-xs" style={{ color: 'var(--text-3)' }}>
+                      {entry.old_value != null ? String(entry.old_value) : '—'}
+                    </td>
+                    <td className="text-xs font-medium" style={{ color: 'var(--text)' }}>
+                      {entry.new_value != null ? String(entry.new_value) : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {showConfig && (
         <ConfigModal

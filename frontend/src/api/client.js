@@ -275,6 +275,10 @@ export const markAllAlertsRead = () => api.put('/api/alerts/read-all', {}, { ski
 export const getProductAuditLog = (productId) => api.get(`/api/audit/product/${productId}`);
 export const getRecentAuditLog = (limit = 50) => api.get('/api/audit/recent', { params: { limit } });
 
+// --- Product direct update ---
+export const updateProductCost = (productId, costPrice) =>
+  api.patch(`/api/products/${productId}/cost`, { cost_price: costPrice });
+
 // --- Pricing Rules (F9) ---
 export const getProductRules = (productId) => api.get(`/api/products/${productId}/rules`);
 export const createProductRule = (productId, data) => api.post(`/api/products/${productId}/rules`, data);
