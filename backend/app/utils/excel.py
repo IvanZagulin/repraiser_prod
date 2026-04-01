@@ -66,8 +66,8 @@ class ExcelExporter:
                     v = str(cell.value) if cell.value is not None else ""
                     if len(v) > max_length:
                         max_length = len(v)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Error processing cell in column {col_letter}: {e}")
             ws.column_dimensions[col_letter].width = max(min_width, min(max_length + 3, max_width))
 
     # ─────────────────── ШАБЛОНЫ ───────────────────

@@ -27,6 +27,8 @@ else:
         pool_recycle=1800,     # пересоздавать коннекты каждые 30 мин (защита от stale)
         # 30s timeout на SQL-запросы — защита от зависших/долгих запросов
         connect_args={"options": "-c statement_timeout=30000"},
+        # isolation_level="READ COMMITTED" — стандарт PostgreSQL, защита от dirty reads
+        isolation_level="READ COMMITTED",
     )
 
 # Session factory

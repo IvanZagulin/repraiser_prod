@@ -1,9 +1,10 @@
 from typing import Annotated, Optional
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query, Body
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import desc, or_, cast, String, func, and_
 from slowapi import Limiter
+import logging
 
 from app.database import get_db
 from app.models import Product, ProductConfig, PriceSnapshot, Account, ConfigChangeLog
@@ -22,6 +23,7 @@ from app.api.settings import _get_setting
 from app.services.wb_api import create_wb_client, WBAPIError
 from app.utils import get_real_ip
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 limiter = Limiter(key_func=get_real_ip)
 
@@ -233,8 +235,8 @@ async def create_product(
                 if not name:
                     name = card_info.get("name") or f"Товар {product_data.nm_id}"
                 image_url = card_info.get("image_url")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to get card info for nm_id {product_data.nm_id}: {e}")
 
     if not seller_sku:
         seller_sku = str(product_data.nm_id)
@@ -260,16 +262,16 @@ async def create_product(
                 product.image_url = fetched_url
                 db.commit()
                 db.refresh(product)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to get photo for nm_id {product_data.nm_id}: {e}")
 
     try:
         log_activity(db, current_user.id, "product_created", product_id=product.id,
                      account_id=product.account_id,
                      details={"nm_id": product.nm_id, "name": product.name})
         db.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to log activity 'product_created': {e}")
 
     return ProductResponse.model_validate(product)
 
@@ -386,22 +388,47 @@ async def get_products_by_sku(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """All products with the same seller_sku for this user (different accounts/nm_ids)."""
+    # Получаем все продукты с связанными аккаунтами
     products = (
         db.query(Product)
         .join(Account, Product.account_id == Account.id)
         .filter(Account.user_id == current_user.id, Product.seller_sku == seller_sku)
         .all()
     )
+
+    # Получаем все product_ids для batch-запросов
+    product_ids = [p.id for p in products]
+
+    # Batch-запрос для последних price snapshots
+    latest_snapshots = {}
+    if product_ids:
+        subquery = (
+            db.query(
+                PriceSnapshot.product_id,
+                func.max(PriceSnapshot.snapshot_at).label('max_at')
+            )
+            .filter(PriceSnapshot.product_id.in_(product_ids))
+            .group_by(PriceSnapshot.product_id)
+            .subquery()
+        )
+        snaps = (
+            db.query(PriceSnapshot)
+            .join(
+                subquery,
+                and_(
+                    PriceSnapshot.product_id == subquery.c.product_id,
+                    PriceSnapshot.snapshot_at == subquery.c.max_at
+                )
+            )
+            .all()
+        )
+        latest_snapshots = {s.product_id: s for s in snaps}
+
     result = []
     for p in products:
-        account = db.query(Account).filter(Account.id == p.account_id).first()
+        account = p.account  # Уже загружен через join
         config = p.config
-        latest_snap = (
-            db.query(PriceSnapshot)
-            .filter(PriceSnapshot.product_id == p.id)
-            .order_by(desc(PriceSnapshot.snapshot_at))
-            .first()
-        )
+        latest_snap = latest_snapshots.get(p.id)
         result.append({
             "id": p.id,
             "nm_id": p.nm_id,
@@ -447,8 +474,8 @@ async def delete_product(
                      account_id=_account_id,
                      details={"nm_id": _nm_id, "name": _name})
         db.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to log activity 'product_deleted': {e}")
     return None
 
 
@@ -521,8 +548,8 @@ async def update_product_config(
                          account_id=product.account_id,
                          details={"nm_id": product.nm_id, "name": product.name})
             db.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to log activity '{evt}': {e}")
 
     return ProductConfigResponse.model_validate(product.config)
 

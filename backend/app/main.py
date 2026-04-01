@@ -68,8 +68,8 @@ def _sentry_before_send(event: dict, hint: dict) -> dict:
             headers["Authorization"] = "[Filtered]"
         if "authorization" in headers:
             headers["authorization"] = "[Filtered]"
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to mask Authorization header: {e}")
 
     # Маскируем строки в extra/breadcrumbs
     _jwt_re = re.compile(r'eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+')
@@ -97,8 +97,8 @@ def _sentry_before_send(event: dict, hint: dict) -> dict:
                 for frame in exc.get("stacktrace", {}).get("frames", []):
                     if "vars" in frame:
                         frame["vars"] = _clean(frame["vars"])
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to clean Sentry event: {e}")
 
     return event
 

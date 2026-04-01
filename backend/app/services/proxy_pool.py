@@ -103,8 +103,8 @@ class ProxyPool:
             writer.close()
             try:
                 await writer.wait_closed()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Error closing connection for proxy {proxy}: {e}")
             logger.info(f"✓ Прокси {proxy} доступен")
             return True
         except Exception as e:

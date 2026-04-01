@@ -2,6 +2,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from slowapi import Limiter
+import logging
 
 from app.database import get_db
 from app.models import Account
@@ -14,6 +15,7 @@ from app.services.activity_logger import log_activity
 from app.utils import get_real_ip
 from app.utils.jwt import get_token_expiration, get_token_ttl_days
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 limiter = Limiter(key_func=get_real_ip)
 
@@ -83,15 +85,15 @@ async def create_account(
     try:
         log_activity(db, current_user.id, "account_created", account_id=account.id, details={"name": account.name})
         db.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to log activity 'account_created': {e}")
 
     # Фоновая синхронизация каталога WB (все карточки аккаунта)
     try:
         from app.tasks.catalog_sync import sync_wb_catalog_task
         sync_wb_catalog_task.delay(account.id)
-    except Exception:
-        pass  # не блокируем ответ если Celery недоступен
+    except Exception as e:
+        logger.warning(f"Failed to start catalog sync for account {account.id}: {e}")
 
     return _build_response(account)
 
@@ -138,8 +140,8 @@ async def update_account(
         try:
             from app.tasks.catalog_sync import sync_wb_catalog_task
             sync_wb_catalog_task.delay(account.id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to start catalog sync for account {account.id}: {e}")
 
     return _build_response(account)
 

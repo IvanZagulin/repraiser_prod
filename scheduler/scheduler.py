@@ -296,8 +296,8 @@ async def cleanup_stale_runs():
                 # Освобождаем Redis-лок если он ещё жив
                 try:
                     _get_redis().delete(f"repricer:run_lock:{user_id}")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Failed to delete Redis lock for user {user_id}: {e}")
             logger.info(f"Очищено зависших прогонов: {len(rows)}")
         else:
             logger.info("Зависших прогонов нет")
