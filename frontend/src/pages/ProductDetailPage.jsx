@@ -304,7 +304,15 @@ export default function ProductDetailPage() {
                   onClick={async () => {
                     setSavingCost(true);
                     try {
-                      await updateProductCost(product.id, Number(costInput));
+                      // Заменяем запятую на точку для дробных чисел
+                      const normalized = costInput.replace(',', '.');
+                      const cost = parseFloat(normalized);
+                      if (isNaN(cost) || cost <= 0) {
+                        toast.error('Введите корректное число > 0');
+                        setSavingCost(false);
+                        return;
+                      }
+                      await updateProductCost(product.id, cost);
                       toast.success('Себестоимость сохранена');
                       setEditingCost(false);
                       load();
