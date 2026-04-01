@@ -312,11 +312,17 @@ export default function ProductDetailPage() {
                         setSavingCost(false);
                         return;
                       }
-                      await updateProductCost(product.id, cost);
+                      console.log('Sending cost:', cost, 'for product:', product.id);
+                      const res = await updateProductCost(product.id, cost);
+                      console.log('Response:', res);
                       toast.success('Себестоимость сохранена');
                       setEditingCost(false);
                       load();
-                    } catch { toast.error('Ошибка сохранения'); }
+                    } catch (err) {
+                      console.error('Save cost error:', err);
+                      const msg = err.response?.data?.detail || err.message || 'Ошибка сохранения';
+                      toast.error(msg);
+                    }
                     finally { setSavingCost(false); }
                   }}
                 >

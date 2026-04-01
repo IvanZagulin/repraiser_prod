@@ -184,7 +184,7 @@ async def update_product_cost(
     cost_price: float = Body(..., embed=True),
 ):
     """Обновить себестоимость товара"""
-    product = _get_product_or_404(product_id, db, current_user)
+    product = _user_product(db, product_id, current_user)
     from decimal import Decimal
     product.cost_price = Decimal(str(cost_price)) if cost_price > 0 else None
     db.commit()
