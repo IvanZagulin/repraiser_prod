@@ -1,14 +1,17 @@
 from typing import Annotated, Optional
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from slowapi import Limiter
 
 from app.database import get_db
 from app.models.app_setting import AppSetting
 from app.models.user import User
 from app.api.auth import get_current_user
+from app.utils import get_real_ip
 
 router = APIRouter()
+limiter = Limiter(key_func=get_real_ip)
 
 VALID_INTERVALS = [1, 5, 10, 15, 20, 30, 60, 120, 180, 360, 720, 1440]
 
@@ -70,7 +73,9 @@ def _set_setting(db: Session, key: str, value: str, user_id: Optional[int] = Non
 # ─── endpoints ────────────────────────────────────────────────────────────────
 
 @router.get("", response_model=SettingsResponse)
+@limiter.limit("30/minute")
 async def get_settings(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ):
@@ -89,7 +94,9 @@ async def get_settings(
 
 
 @router.put("", response_model=SettingsResponse)
+@limiter.limit("20/minute")
 async def update_settings(
+    request: Request,
     data: SettingsUpdate,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],

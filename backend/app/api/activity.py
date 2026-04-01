@@ -1,24 +1,30 @@
 """Activity log router — paginated log and Excel export."""
 
 import io
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
+from slowapi import Limiter
 
 from app.database import get_db
 from app.models import User
 from app.models.activity_log import ActivityLog
 from app.api.auth import get_current_user
+from app.utils import get_real_ip
+from app.utils.excel import ExcelExporter
 
 router = APIRouter()
+limiter = Limiter(key_func=get_real_ip)
 
 
 @router.get("")
+@limiter.limit("60/minute")
 def list_activity(
+    request: Request,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     event_type: Optional[str] = Query(None),
@@ -68,7 +74,9 @@ def list_activity(
 
 
 @router.get("/export")
+@limiter.limit("20/minute")
 def export_activity(
+    request: Request,
     event_type: Optional[str] = Query(None),
     product_id: Optional[int] = Query(None),
     date_from: Optional[datetime] = Query(None),

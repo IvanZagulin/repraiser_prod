@@ -1,16 +1,19 @@
 from typing import Annotated, Optional, List
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from pydantic import BaseModel
 from datetime import datetime
+from slowapi import Limiter
 
 from app.database import get_db
 from app.models import Product, Account, ConfigChangeLog
 from app.models.user import User
 from app.api.auth import get_current_user
+from app.utils import get_real_ip
 
 router = APIRouter()
+limiter = Limiter(key_func=get_real_ip)
 
 
 class AuditLogEntry(BaseModel):
@@ -26,7 +29,9 @@ class AuditLogEntry(BaseModel):
 
 
 @router.get("/product/{product_id}", response_model=List[AuditLogEntry])
+@limiter.limit("60/minute")
 async def get_product_audit_log(
+    request: Request,
     product_id: int,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
@@ -54,7 +59,9 @@ async def get_product_audit_log(
 
 
 @router.get("/recent", response_model=List[AuditLogEntry])
+@limiter.limit("60/minute")
 async def get_recent_audit_log(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
     limit: int = Query(50, ge=1, le=200),

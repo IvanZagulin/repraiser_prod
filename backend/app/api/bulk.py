@@ -1,17 +1,20 @@
 """Bulk operations router — apply strategy, activate, delete in batch."""
 
 from typing import List, Optional
-
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from slowapi import Limiter
 
 from app.database import get_db
 from app.models import Account, Product, User
 from app.models.product_config import ProductConfig
 from app.api.auth import get_current_user
+from app.utils import get_real_ip
+from app.services.activity_logger import log_activity
 
 router = APIRouter()
+limiter = Limiter(key_func=get_real_ip)
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +63,9 @@ def _validate_ownership(db: Session, product_ids: list[int], user: User) -> list
 # ---------------------------------------------------------------------------
 
 @router.post("/strategy")
+@limiter.limit("10/minute")
 def bulk_strategy(
+    request: Request,
     body: BulkStrategyBody,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -100,7 +105,9 @@ def bulk_strategy(
 
 
 @router.post("/activate")
+@limiter.limit("20/minute")
 def bulk_activate(
+    request: Request,
     body: BulkActivateBody,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -119,7 +126,9 @@ def bulk_activate(
 
 
 @router.post("/delete")
+@limiter.limit("10/minute")
 def bulk_delete(
+    request: Request,
     body: BulkDeleteBody,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),

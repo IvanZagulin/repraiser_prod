@@ -1,17 +1,20 @@
 from typing import Annotated, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from pydantic import BaseModel, Field
 from datetime import datetime
+from slowapi import Limiter
 
 from app.database import get_db
 from app.models import Product, Account
 from app.models.product_group import ProductGroup, ProductGroupMembership
 from app.models.user import User
 from app.api.auth import get_current_user
+from app.utils import get_real_ip
 
 router = APIRouter()
+limiter = Limiter(key_func=get_real_ip)
 
 
 # --- Schemas ---
@@ -52,7 +55,9 @@ def _user_group(db: Session, group_id: int, user: User) -> ProductGroup:
 # --- Endpoints ---
 
 @router.get("", response_model=List[GroupResponse])
+@limiter.limit("60/minute")
 async def list_groups(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ):
@@ -76,7 +81,9 @@ async def list_groups(
 
 
 @router.post("", response_model=GroupResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("20/minute")
 async def create_group(
+    request: Request,
     data: GroupCreate,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
@@ -92,7 +99,9 @@ async def create_group(
 
 
 @router.put("/{group_id}", response_model=GroupResponse)
+@limiter.limit("20/minute")
 async def update_group(
+    request: Request,
     group_id: int,
     data: GroupUpdate,
     db: Annotated[Session, Depends(get_db)],
@@ -115,7 +124,9 @@ async def update_group(
 
 
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("20/minute")
 async def delete_group(
+    request: Request,
     group_id: int,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
@@ -127,7 +138,9 @@ async def delete_group(
 
 
 @router.post("/{group_id}/products", status_code=status.HTTP_200_OK)
+@limiter.limit("20/minute")
 async def add_products_to_group(
+    request: Request,
     group_id: int,
     data: ProductIdsRequest,
     db: Annotated[Session, Depends(get_db)],
@@ -164,7 +177,9 @@ async def add_products_to_group(
 
 
 @router.delete("/{group_id}/products", status_code=status.HTTP_200_OK)
+@limiter.limit("20/minute")
 async def remove_products_from_group(
+    request: Request,
     group_id: int,
     data: ProductIdsRequest,
     db: Annotated[Session, Depends(get_db)],

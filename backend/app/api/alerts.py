@@ -1,17 +1,20 @@
 from typing import Annotated, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from pydantic import BaseModel
 from datetime import datetime
 from decimal import Decimal
+from slowapi import Limiter
 
 from app.database import get_db
 from app.models.competitor_alert import CompetitorAlert
 from app.models.user import User
 from app.api.auth import get_current_user
+from app.utils import get_real_ip
 
 router = APIRouter()
+limiter = Limiter(key_func=get_real_ip)
 
 
 class AlertResponse(BaseModel):
@@ -33,7 +36,9 @@ class AlertCountResponse(BaseModel):
 
 
 @router.get("", response_model=List[AlertResponse])
+@limiter.limit("60/minute")
 async def list_alerts(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
     is_read: Optional[bool] = None,
@@ -49,7 +54,9 @@ async def list_alerts(
 
 
 @router.get("/count", response_model=AlertCountResponse)
+@limiter.limit("60/minute")
 async def alert_count(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ):
@@ -61,7 +68,9 @@ async def alert_count(
 
 
 @router.put("/{alert_id}/read")
+@limiter.limit("30/minute")
 async def mark_alert_read(
+    request: Request,
     alert_id: int,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
@@ -78,7 +87,9 @@ async def mark_alert_read(
 
 
 @router.put("/read-all")
+@limiter.limit("20/minute")
 async def mark_all_read(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ):

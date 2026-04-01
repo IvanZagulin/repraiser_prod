@@ -42,6 +42,7 @@ def _user_product(db: Session, product_id: int, user: User) -> Product:
 
 
 @router.get("", response_model=ProductListResponse)
+@limiter.limit("60/minute")
 async def list_products(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
@@ -179,6 +180,7 @@ async def list_products(
 
 
 @router.patch("/{product_id}/cost")
+@limiter.limit("30/minute")
 async def update_product_cost(
     product_id: int,
     db: Annotated[Session, Depends(get_db)],
@@ -194,6 +196,7 @@ async def update_product_cost(
 
 
 @router.post("", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("20/minute")
 async def create_product(
     product_data: ProductCreate,
     db: Annotated[Session, Depends(get_db)],
@@ -338,6 +341,7 @@ async def search_wb_product(
 
 
 @router.get("/stats")
+@limiter.limit("30/minute")
 async def get_products_stats(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
@@ -382,6 +386,7 @@ async def get_products_stats(
 
 
 @router.get("/by-sku/{seller_sku}")
+@limiter.limit("30/minute")
 async def get_products_by_sku(
     seller_sku: str,
     db: Annotated[Session, Depends(get_db)],
@@ -448,6 +453,7 @@ async def get_products_by_sku(
 
 
 @router.get("/{product_id}", response_model=ProductResponse)
+@limiter.limit("60/minute")
 async def get_product(
     product_id: int,
     db: Annotated[Session, Depends(get_db)],
@@ -458,6 +464,7 @@ async def get_product(
 
 
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("20/minute")
 async def delete_product(
     product_id: int,
     db: Annotated[Session, Depends(get_db)],
@@ -483,6 +490,7 @@ async def delete_product(
 
 @router.post("/{product_id}/config", response_model=ProductConfigResponse,
              status_code=status.HTTP_201_CREATED)
+@limiter.limit("30/minute")
 async def create_product_config(
     product_id: int,
     config_data: ProductConfigCreate,
@@ -502,6 +510,7 @@ async def create_product_config(
 
 
 @router.put("/{product_id}/config", response_model=ProductConfigResponse)
+@limiter.limit("30/minute")
 async def update_product_config(
     product_id: int,
     config_data: ProductConfigUpdate,
@@ -555,6 +564,7 @@ async def update_product_config(
 
 
 @router.get("/{product_id}/history")
+@limiter.limit("30/minute")
 async def get_product_history(
     product_id: int,
     db: Annotated[Session, Depends(get_db)],
@@ -592,6 +602,7 @@ async def get_product_history(
 
 
 @router.get("/{product_id}/detail")
+@limiter.limit("30/minute")
 async def get_product_detail(
     product_id: int,
     db: Annotated[Session, Depends(get_db)],
@@ -822,6 +833,7 @@ def _get_product_config_for_user(product_id: int, user: User, db: Session) -> Pr
 
 
 @router.get("/{product_id}/rules", response_model=list[RuleResponse])
+@limiter.limit("30/minute")
 async def get_product_rules(
     product_id: int,
     db: Annotated[Session, Depends(get_db)],
@@ -835,6 +847,7 @@ async def get_product_rules(
 
 
 @router.post("/{product_id}/rules", response_model=RuleResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("20/minute")
 async def create_product_rule(
     product_id: int,
     data: RuleCreate,
@@ -858,6 +871,7 @@ async def create_product_rule(
 
 
 @router.put("/{product_id}/rules/{rule_id}", response_model=RuleResponse)
+@limiter.limit("20/minute")
 async def update_product_rule(
     product_id: int,
     rule_id: int,
@@ -880,6 +894,7 @@ async def update_product_rule(
 
 
 @router.delete("/{product_id}/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("20/minute")
 async def delete_product_rule(
     product_id: int,
     rule_id: int,

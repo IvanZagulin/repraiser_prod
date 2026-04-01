@@ -3,10 +3,11 @@
 import io
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
+from slowapi import Limiter
 
 from app.database import get_db
 from app.models import Account, Product, User
@@ -14,8 +15,10 @@ from app.models.price_change import PriceChange
 from app.models.repricer_run import RepricerRun
 from app.models.product_config import ProductConfig
 from app.api.auth import get_current_user
+from app.utils import get_real_ip
 
 router = APIRouter()
+limiter = Limiter(key_func=get_real_ip)
 
 
 def _user_account_ids(db: Session, user: User) -> list:
@@ -30,7 +33,9 @@ def _user_product_ids(db: Session, user: User) -> list:
 
 
 @router.get("/generate")
+@limiter.limit("10/minute")
 def generate_report(
+    request: Request,
     days: int = Query(30, ge=1, le=365),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),

@@ -1,16 +1,19 @@
 """Schedule configuration router — manage repricer run schedule."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, validator
 from sqlalchemy.orm import Session
 from typing import Optional
+from slowapi import Limiter
 
 from app.database import get_db
 from app.models import User
 from app.models.repricer_schedule import RepricerSchedule
 from app.api.auth import get_current_user
+from app.utils import get_real_ip
 
 router = APIRouter()
+limiter = Limiter(key_func=get_real_ip)
 
 ALLOWED_INTERVALS = {15, 30, 60, 120}
 
@@ -74,7 +77,9 @@ class ScheduleUpdate(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.get("", response_model=ScheduleOut)
+@limiter.limit("30/minute")
 def get_schedule(
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -98,7 +103,9 @@ def get_schedule(
 
 
 @router.put("", response_model=ScheduleOut)
+@limiter.limit("20/minute")
 def update_schedule(
+    request: Request,
     body: ScheduleUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),

@@ -1,7 +1,11 @@
+import logging
+
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # SQLAlchemy engine — параметры пула зависят от диалекта
 _db_url = settings.DATABASE_URL
@@ -43,7 +47,8 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
-    except Exception:
+    except Exception as e:
+        logger.error(f"Database error: {e}", exc_info=True)
         db.rollback()
         raise
     finally:
