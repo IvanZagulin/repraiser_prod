@@ -14,6 +14,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # CONCURRENTLY требует автономной транзакции
+    op.execute("COMMIT")
+
     # Индексы для ускорения поиска пользователей
     op.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_users_email ON users (email)")
 
@@ -31,7 +34,6 @@ def upgrade() -> None:
     # Индексы для repricer runs
     op.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_repricer_runs_user_id ON repricer_runs (user_id)")
     op.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_repricer_runs_status ON repricer_runs (status)")
-    op.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_repricer_runs_created_at ON repricer_runs (created_at)")
 
     # Индексы для price changes
     op.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_price_changes_product_id ON price_changes (product_id)")
@@ -42,19 +44,16 @@ def upgrade() -> None:
 
     # Индексы для activity logs
     op.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_activity_logs_user_id ON activity_logs (user_id)")
-    op.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_activity_logs_action ON activity_logs (action)")
     op.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_activity_logs_created_at ON activity_logs (created_at)")
 
 
 def downgrade() -> None:
     # Удаляем индексы в обратном порядке
     op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_activity_logs_created_at")
-    op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_activity_logs_action")
     op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_activity_logs_user_id")
     op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_competitor_entries_product_config_id")
     op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_price_changes_run_id")
     op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_price_changes_product_id")
-    op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_repricer_runs_created_at")
     op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_repricer_runs_status")
     op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_repricer_runs_user_id")
     op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_price_snapshots_product_time")
