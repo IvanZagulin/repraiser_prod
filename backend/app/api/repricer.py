@@ -2,7 +2,7 @@ from typing import Annotated, List, Optional
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 from slowapi import Limiter
 import logging
 
@@ -166,20 +166,31 @@ async def list_runs(
     current_user: Annotated[User, Depends(get_current_user)],
     run_type: Optional[str] = Query(None, regex="^(scheduled|manual)$"),
     status: Optional[str] = Query(None, regex="^(running|completed|failed|queued)$"),
-    limit: int = Query(50, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=10000),
 ):
     # Фильтруем по user_id — каждый видит только свои прогоны
-    query = db.query(RepricerRun).filter(RepricerRun.user_id == current_user.id)
+    base_query = db.query(RepricerRun).filter(RepricerRun.user_id == current_user.id)
     if run_type:
-        query = query.filter(RepricerRun.run_type == run_type)
+        base_query = base_query.filter(RepricerRun.run_type == run_type)
     if status:
-        query = query.filter(RepricerRun.status == status)
-    query = query.order_by(desc(RepricerRun.started_at))
+        base_query = base_query.filter(RepricerRun.status == status)
+
+    # Агрегаты по всем запускам (до пагинации)
+    agg = db.query(
+        func.count(RepricerRun.id),
+        func.coalesce(func.sum(RepricerRun.updated_count), 0),
+        func.count(RepricerRun.id).filter(RepricerRun.status == 'completed'),
+    ).filter(RepricerRun.user_id == current_user.id).one()
+    total_all, total_updated, total_completed = agg
+
+    query = base_query.order_by(desc(RepricerRun.started_at))
     total = query.count()
     runs = query.limit(limit).all()
     return RepricerRunListResponse(
         runs=[RepricerRunResponse.model_validate(r) for r in runs],
         total=total,
+        total_updated=int(total_updated),
+        total_completed=int(total_completed),
     )
 
 

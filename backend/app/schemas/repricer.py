@@ -52,6 +52,8 @@ class RepricerRunListResponse(BaseModel):
     """Схема списка прогонов"""
     runs: List[RepricerRunResponse]
     total: int
+    total_updated: int = 0
+    total_completed: int = 0
 
 
 class PriceHistoryResponse(BaseModel):

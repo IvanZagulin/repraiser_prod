@@ -52,13 +52,20 @@ export default function Analytics() {
   const [priceLoading, setPriceLoading] = useState(false);
   const productSearchRef = useState(null);
 
+  const [runStats, setRunStats] = useState({ total: 0, total_updated: 0, total_completed: 0 });
+
   const fetchMainData = () =>
     Promise.all([
-      getRepricerRuns({ limit: 1000 }).catch(() => ({ data: { runs: [] } })),
+      getRepricerRuns({ limit: 1000 }).catch(() => ({ data: { runs: [], total: 0, total_updated: 0, total_completed: 0 } })),
       getProducts({ page: 1, page_size: 1000 }).catch(() => ({ data: { products: [] } })),
       getCompetitorTrends(30).catch(() => ({ data: { trends: [] } })),
     ]).then(([runsRes, prodRes, trendsRes]) => {
       setRuns(runsRes.data.runs || []);
+      setRunStats({
+        total: runsRes.data.total ?? 0,
+        total_updated: runsRes.data.total_updated ?? 0,
+        total_completed: runsRes.data.total_completed ?? 0,
+      });
       setProducts(prodRes.data.products || []);
       setCompetitorTrends(trendsRes.data.trends || trendsRes.data || []);
     });
@@ -128,10 +135,10 @@ export default function Analytics() {
     .filter(([, v]) => v > 0)
     .map(([key, value]) => ({ name: PIE_LABELS[key], value, key }));
 
-  // Summary stats
-  const totalRuns = runs.length;
-  const completedRuns = runs.filter((r) => r.status === 'completed').length;
-  const totalUpdated = runs.reduce((a, r) => a + r.updated_count, 0);
+  // Summary stats (server-side aggregates over all runs)
+  const totalRuns = runStats.total;
+  const completedRuns = runStats.total_completed;
+  const totalUpdated = runStats.total_updated;
   const successRate = totalRuns ? Math.round((completedRuns / totalRuns) * 100) : 0;
 
   // Price dynamics chart data
