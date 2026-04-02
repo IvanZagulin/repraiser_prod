@@ -201,7 +201,9 @@ services:
       - "127.0.0.1:5555:5555"
     depends_on:
       - redis
-    command: celery -A app.celery_app flower --port=5555 --basic_auth=${ADMIN_EMAIL}:${ADMIN_PASSWORD}
+    command: celery -A app.celery_app flower --port=5555 --basic_auth=${ADMIN_EMAIL}:${ADMIN_PASSWORD} --persistent=True --db=/data/flower.db --max_tasks=5000
+    volumes:
+      - flower_data:/data
     deploy:
       resources:
         limits:
@@ -365,6 +367,7 @@ volumes:
   loki_data:
   grafana_data:
   prometheus_data:
+  flower_data:
 
 networks:
   wb_network:
