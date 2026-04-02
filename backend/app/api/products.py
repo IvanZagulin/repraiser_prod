@@ -44,6 +44,7 @@ def _user_product(db: Session, product_id: int, user: User) -> Product:
 @router.get("", response_model=ProductListResponse)
 @limiter.limit("60/minute")
 async def list_products(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
     account_id: Optional[int] = None,
@@ -182,6 +183,7 @@ async def list_products(
 @router.patch("/{product_id}/cost")
 @limiter.limit("30/minute")
 async def update_product_cost(
+    request: Request,
     product_id: int,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
@@ -198,6 +200,7 @@ async def update_product_cost(
 @router.post("", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("20/minute")
 async def create_product(
+    request: Request,
     product_data: ProductCreate,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
