@@ -346,6 +346,7 @@ async def search_wb_product(
 @router.get("/stats")
 @limiter.limit("30/minute")
 async def get_products_stats(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ):
