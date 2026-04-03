@@ -648,12 +648,12 @@ async def get_product_detail(
         .all()
     )
 
-    # Price changes (last 50)
+    # Price changes (last 10)
     changes = (
         db.query(PriceChange)
         .filter(PriceChange.product_id == product_id)
         .order_by(desc(PriceChange.changed_at))
-        .limit(50)
+        .limit(10)
         .all()
     )
 

@@ -22,7 +22,7 @@ export default function ConfigModal({ product, onClose }) {
     min_price: product.config?.min_price || '',
     max_price: product.config?.max_price || '',
     rrp_price: product.config?.rrp_price || '',
-    rrp_tolerance: product.config?.rrp_tolerance || '5',
+    rrp_tolerance: product.config?.rrp_tolerance || '1',
     rrp_consider_wallet: product.config?.rrp_consider_wallet ?? false,
     competitor_offset_type: product.config?.competitor_offset_type || 'rub',
     competitor_offset_direction: product.config?.competitor_offset_direction || 'below',
@@ -243,7 +243,7 @@ export default function ConfigModal({ product, onClose }) {
                     value={formData.rrp_tolerance}
                     onChange={(e) => { setFormData({ ...formData, rrp_tolerance: e.target.value }); setErrors((p) => ({ ...p, rrp_tolerance: undefined })); }}
                     className="input"
-                    placeholder="5"
+                    placeholder="1"
                     style={errors.rrp_tolerance ? { borderColor: '#ef4444' } : {}}
                   />
                   {errors.rrp_tolerance && <p className="text-xs mt-1 text-red-500">{errors.rrp_tolerance}</p>}

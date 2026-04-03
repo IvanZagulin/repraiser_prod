@@ -665,7 +665,7 @@ export default function ProductDetailPage() {
         <h3 className="text-sm font-semibold mb-4" style={{ color: 'var(--text)' }}>
           История изменений цен
           <span className="font-normal ml-2" style={{ color: 'var(--text-3)' }}>
-            (последние 50)
+            (последние 10)
           </span>
         </h3>
 
