@@ -421,15 +421,25 @@ export default function Products() {
                     </div>
 
                     {/* Info — photo + code + name only */}
-                    <div className="p-2" style={{ background: 'var(--card)' }}>
-                      {first.name && (
-                        <p className="truncate mb-0.5" style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text)' }}>
-                          {first.name}
+                    <div className="p-2" style={{ background: 'var(--card)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+                      <div className="min-w-0 flex-1">
+                        {first.name && (
+                          <p className="truncate mb-0.5" style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text)' }}>
+                            {first.name}
+                          </p>
+                        )}
+                        <p className="font-bold truncate" style={{ fontSize: '11px', color: 'var(--neon)' }}>
+                          {first.seller_sku || <span style={{ color: 'var(--text-3)' }}>#{first.nm_id}</span>}
                         </p>
-                      )}
-                      <p className="font-bold truncate" style={{ fontSize: '11px', color: 'var(--neon)' }}>
-                        {first.seller_sku || <span style={{ color: 'var(--text-3)' }}>#{first.nm_id}</span>}
-                      </p>
+                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDelete(first.id, first.seller_sku); }}
+                        className="btn btn-xs btn-danger p-1 flex-shrink-0"
+                        title="Удалить товар"
+                        style={{ padding: '3px' }}
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
                     </div>
                   </div>
                 );
