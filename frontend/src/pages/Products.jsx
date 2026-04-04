@@ -10,6 +10,7 @@ import PriceHistoryModal from '../components/PriceHistoryModal';
 
 const PAGE_SIZE = 50;
 
+// Delete button is shown directly on card (no hover needed)
 const getWBImageUrl = (nmId) => {
   const nm = parseInt(nmId);
   if (!nm || isNaN(nm)) return null;
