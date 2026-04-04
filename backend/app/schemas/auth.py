@@ -8,33 +8,38 @@ COMMON_PASSWORDS = {
 }
 
 
-class PasswordMixin(BaseModel):
-    """Mixin с валидацией сложности пароля."""
-
-    @field_validator("password", "new_password")
-    @classmethod
-    def check_password_strength(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("Минимум 8 символов")
-        if not any(c.isupper() for c in v):
-            raise ValueError("Нужна хотя бы одна заглавная буква")
-        if not any(c.isdigit() for c in v):
-            raise ValueError("Нужна хотя бы одна цифра")
-        if v.lower() in COMMON_PASSWORDS:
-            raise ValueError("Этот пароль слишком распространён")
-        return v
+def validate_password(v: str) -> str:
+    """Validate password strength."""
+    if len(v) < 8:
+        raise ValueError("Минимум 8 символов")
+    if not any(c.isupper() for c in v):
+        raise ValueError("Нужна хотя бы одна заглавная буква")
+    if not any(c.isdigit() for c in v):
+        raise ValueError("Нужна хотя бы одна цифра")
+    if v.lower() in COMMON_PASSWORDS:
+        raise ValueError("Этот пароль слишком распространён")
+    return v
 
 
-class LoginRequest(PasswordMixin):
+
+class LoginRequest(BaseModel):
     """Схема запроса на логин"""
     email: EmailStr = Field(..., max_length=255)
     password: str = Field(..., min_length=8, max_length=128)
 
+    @field_validator("password")
+    @classmethod
+    def validate_pw(cls, v): return validate_password(v)
 
-class RegisterRequest(PasswordMixin):
+
+class RegisterRequest(BaseModel):
     """Схема запроса на регистрацию"""
     email: EmailStr = Field(..., max_length=255)
     password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def validate_pw(cls, v): return validate_password(v)
 
 
 class TokenResponse(BaseModel):
@@ -68,11 +73,15 @@ class ForgotPasswordRequest(BaseModel):
     email: EmailStr = Field(..., max_length=255)
 
 
-class ResetPasswordRequest(PasswordMixin):
+class ResetPasswordRequest(BaseModel):
     """Установка нового пароля по коду"""
     email: EmailStr = Field(..., max_length=255)
     code: str = Field(..., min_length=6, max_length=6)
     new_password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_pw(cls, v): return validate_password(v)
 
 
 class MessageResponse(BaseModel):
@@ -80,7 +89,11 @@ class MessageResponse(BaseModel):
     message: str
 
 
-class ChangePasswordConfirmRequest(PasswordMixin):
+class ChangePasswordConfirmRequest(BaseModel):
     """Подтверждение смены пароля по коду из email"""
     code: str = Field(..., min_length=6, max_length=6)
     new_password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_pw(cls, v): return validate_password(v)
