@@ -216,7 +216,7 @@ export default function Dashboard() {
     try {
       const [accountsRes, productsRes, runsRes, statsRes] = await Promise.all([
         getAccounts().catch(() => ({ data: { accounts: [] } })),
-        getProducts({ page: 1, page_size: 1000 }).catch(() => ({ data: { products: [] } })),
+        getProducts({ page: 1, page_size: 50 }).catch(() => ({ data: { products: [] } })),
         getRepricerRuns({ limit: 10 }).catch(() => ({ data: { runs: [] } })),
         getProductStats().catch(() => ({ data: { total: 0, active: 0, inactive: 0 } })),
       ]);
