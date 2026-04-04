@@ -15,24 +15,14 @@ from app.models.price_change import PriceChange
 from app.models.repricer_run import RepricerRun
 from app.models.product_config import ProductConfig
 from app.api.auth import get_current_user
+from app.api.utils import _user_account_ids, _user_product_ids
 from app.utils import get_real_ip
 
 router = APIRouter()
 limiter = Limiter(key_func=get_real_ip)
 
 
-def _user_account_ids(db: Session, user: User) -> list:
-    return [aid for (aid,) in db.query(Account.id).filter(Account.user_id == user.id).all()]
-
-
-def _user_product_ids(db: Session, user: User) -> list:
-    account_ids = _user_account_ids(db, user)
-    if not account_ids:
-        return []
-    return [pid for (pid,) in db.query(Product.id).filter(Product.account_id.in_(account_ids)).all()]
-
-
-@router.get("/generate")
+@router.post("/generate")
 @limiter.limit("10/minute")
 def generate_report(
     request: Request,
@@ -393,7 +383,7 @@ def generate_report(
         buf,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f"attachment; filename={filename}",
+            "Content-Disposition": f'attachment; filename="{filename}"',
             "Access-Control-Expose-Headers": "Content-Disposition",
         },
     )

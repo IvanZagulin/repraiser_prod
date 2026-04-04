@@ -1,13 +1,37 @@
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, field_validator
 
 
-class LoginRequest(BaseModel):
+COMMON_PASSWORDS = {
+    "password", "password1", "password123", "12345678", "123456789",
+    "qwerty", "qwerty123", "abc123", "letmein", "admin",
+    "welcome", "iloveyou", "11111111", "123123123", "12341234",
+}
+
+
+class PasswordMixin(BaseModel):
+    """Mixin с валидацией сложности пароля."""
+
+    @field_validator("password", "new_password")
+    @classmethod
+    def check_password_strength(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Минимум 8 символов")
+        if not any(c.isupper() for c in v):
+            raise ValueError("Нужна хотя бы одна заглавная буква")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Нужна хотя бы одна цифра")
+        if v.lower() in COMMON_PASSWORDS:
+            raise ValueError("Этот пароль слишком распространён")
+        return v
+
+
+class LoginRequest(PasswordMixin):
     """Схема запроса на логин"""
     email: EmailStr = Field(..., max_length=255)
     password: str = Field(..., min_length=8, max_length=128)
 
 
-class RegisterRequest(BaseModel):
+class RegisterRequest(PasswordMixin):
     """Схема запроса на регистрацию"""
     email: EmailStr = Field(..., max_length=255)
     password: str = Field(..., min_length=8, max_length=128)
@@ -44,7 +68,7 @@ class ForgotPasswordRequest(BaseModel):
     email: EmailStr = Field(..., max_length=255)
 
 
-class ResetPasswordRequest(BaseModel):
+class ResetPasswordRequest(PasswordMixin):
     """Установка нового пароля по коду"""
     email: EmailStr = Field(..., max_length=255)
     code: str = Field(..., min_length=6, max_length=6)
@@ -56,7 +80,7 @@ class MessageResponse(BaseModel):
     message: str
 
 
-class ChangePasswordConfirmRequest(BaseModel):
+class ChangePasswordConfirmRequest(PasswordMixin):
     """Подтверждение смены пароля по коду из email"""
     code: str = Field(..., min_length=6, max_length=6)
     new_password: str = Field(..., min_length=8, max_length=128)

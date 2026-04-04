@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { X, Plus, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createProductConfig, updateProductConfig, getSettings } from '../api/client';
@@ -33,6 +33,13 @@ export default function ConfigModal({ product, onClose }) {
   const [walletPct, setWalletPct] = useState(3.0);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
+
+  // Close on Escape
+  const handleEsc = useCallback((e) => { if (e.key === 'Escape') onClose(); }, [onClose]);
+  useEffect(() => {
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+  }, [handleEsc]);
 
   useEffect(() => {
     getSettings()

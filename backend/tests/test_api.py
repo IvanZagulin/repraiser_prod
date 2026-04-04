@@ -5,7 +5,7 @@ Uses the authenticated `client` fixture from conftest (overrides get_current_use
 Verifies basic CRUD patterns and response shapes without hitting external services.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -62,8 +62,8 @@ class TestAccountsList:
             name="Other Shop",
             wb_api_token="other-fake-token",
             is_active=True,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
         )
         db_session.add(other_account)
         db_session.commit()
@@ -169,8 +169,8 @@ class TestRepricerRuns:
             updated_count=3,
             skipped_count=1,
             error_count=1,
-            started_at=datetime.utcnow(),
-            completed_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            completed_at=datetime.now(timezone.utc).replace(tzinfo=None),
         )
         db_session.add(run)
         db_session.commit()
@@ -205,7 +205,7 @@ class TestRepricerRuns:
             updated_count=10,
             skipped_count=0,
             error_count=0,
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
         )
         db_session.add(other_run)
         db_session.commit()

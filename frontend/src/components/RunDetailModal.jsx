@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { X, TrendingUp, TrendingDown, Minus, Download } from 'lucide-react';
 import { getRepricerRun, exportRun } from '../api/client';
 import { formatMsk } from '../utils/date';
@@ -45,6 +45,13 @@ export default function RunDetailModal({ run, onClose }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
+
+  // Close on Escape
+  const handleEsc = useCallback((e) => { if (e.key === 'Escape') onClose(); }, [onClose]);
+  useEffect(() => {
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+  }, [handleEsc]);
 
   useEffect(() => {
     getRepricerRun(run.id, true)

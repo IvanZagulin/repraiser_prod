@@ -1,9 +1,9 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { useEffect, useState } from 'react';
 import { useAuthStore } from './store';
 import { verifyToken } from './api/client';
-import Login from './pages/Login';
+import Login from './pages/Login'
 import RegisterPage from './pages/RegisterPage';
 import VerifyEmailPage from './pages/VerifyEmailPage';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
@@ -19,6 +19,15 @@ import Analytics from './pages/Analytics';
 import SchedulePage from './pages/SchedulePage';
 import ReportsPage from './pages/ReportsPage';
 import ProductDetailPage from './pages/ProductDetailPage';
+import ActivityLogPage from './pages/ActivityLogPage';
+
+function ScrollToTop() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0 });
+  }, [pathname]);
+  return null;
+}
 
 function ProtectedRoute({ children }) {
   const user = useAuthStore((state) => state.user);
@@ -76,6 +85,7 @@ function ProtectedRoute({ children }) {
 function App() {
   return (
     <BrowserRouter>
+      <ScrollToTop />
       <Toaster
         position="top-right"
         toastOptions={{
@@ -115,6 +125,7 @@ function App() {
           <Route path="reports" element={<ReportsPage />} />
           <Route path="import-export" element={<ImportExport />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="activity" element={<ActivityLogPage />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />

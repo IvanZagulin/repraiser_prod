@@ -259,7 +259,7 @@ export default function Analytics() {
               onFocus={() => setShowProductDropdown(true)}
               className="w-full px-3 py-2 rounded-lg text-sm border focus:outline-none focus:ring-2"
               style={{
-                background: 'var(--bg-2, #f8f9fb)',
+                background: 'hsl(var(--muted))',
                 borderColor: selectedProductId ? '#00c8ff' : 'var(--border, #e5e7eb)',
                 color: 'var(--text, #1a1a2e)',
               }}
@@ -325,7 +325,7 @@ export default function Analytics() {
 
           {/* Chart */}
           {!selectedProductId ? (
-            <div className="flex items-center justify-center h-56 rounded-lg" style={{ background: 'var(--bg-2, #f8f9fb)' }}>
+            <div className="flex items-center justify-center h-56 rounded-lg" style={{ background: 'hsl(var(--muted))' }}>
               <p className="text-sm" style={{ color: 'var(--text-3)' }}>
                 Выберите товар для отображения динамики цен
               </p>
@@ -336,7 +336,7 @@ export default function Analytics() {
               <span className="text-sm" style={{ color: 'var(--text-3)' }}>Загрузка...</span>
             </div>
           ) : priceChartData.length === 0 ? (
-            <div className="flex items-center justify-center h-56 rounded-lg" style={{ background: 'var(--bg-2, #f8f9fb)' }}>
+            <div className="flex items-center justify-center h-56 rounded-lg" style={{ background: 'hsl(var(--muted))' }}>
               <p className="text-sm" style={{ color: 'var(--text-3)' }}>Нет данных за выбранный период</p>
             </div>
           ) : (
@@ -623,7 +623,7 @@ export default function Analytics() {
                       key={idx}
                       className="rounded-xl p-4 border"
                       style={{
-                        background: 'var(--bg-2, #f8f9fb)',
+                        background: 'hsl(var(--muted))',
                         borderColor: 'var(--border, #e5e7eb)',
                       }}
                     >
@@ -663,7 +663,7 @@ export default function Analytics() {
               )}
             </div>
           ) : (
-            <div className="flex items-center justify-center h-40 rounded-lg" style={{ background: 'var(--bg-2, #f8f9fb)' }}>
+            <div className="flex items-center justify-center h-40 rounded-lg" style={{ background: 'hsl(var(--muted))' }}>
               <p className="text-sm" style={{ color: 'var(--text-3)' }}>
                 Нет данных о трендах конкурентов
               </p>

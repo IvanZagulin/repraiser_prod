@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { getRepricerRuns, exportRun } from '../api/client';
 import { formatMsk } from '../utils/date';
 import RunDetailModal from '../components/RunDetailModal';
+import { StatusBadge } from '../components/StatusBadge';
 
 export default function Runs() {
   const [runs, setRuns] = useState([]);
@@ -40,13 +41,6 @@ export default function Runs() {
     } catch {
       toast.error('Ошибка экспорта');
     }
-  };
-
-  const getStatusBadge = (status) => {
-    if (status === 'completed') return <span className="badge badge-success">Завершен</span>;
-    if (status === 'running') return <span className="badge badge-info">Выполняется</span>;
-    if (status === 'failed') return <span className="badge badge-error">Ошибка</span>;
-    return <span className="badge">{status}</span>;
   };
 
   const getTypeLabel = (type) => {
@@ -106,7 +100,7 @@ export default function Runs() {
                       <span className="font-semibold text-foreground">#{run.id}</span>
                     </td>
                     <td>{getTypeLabel(run.run_type)}</td>
-                    <td>{getStatusBadge(run.status)}</td>
+                    <td><StatusBadge status={run.status} /></td>
                     <td className="font-medium text-foreground">{run.total_products}</td>
                     <td className="font-semibold text-green-600">{run.updated_count}</td>
                     <td className="text-muted-foreground">{run.skipped_count}</td>

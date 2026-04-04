@@ -192,7 +192,7 @@ function ChangePasswordBlock({ userEmail }) {
       {step === 'done' && (
         <div className="flex items-center gap-3">
           <div className="text-sm font-medium px-4 py-2 rounded-lg bg-green-50 text-green-700 border border-green-200 dark:bg-green-950/20 dark:text-green-400 dark:border-green-900">
-            ✅ Пароль успешно изменён
+            <CheckCircle className="w-4 h-4" /> Пароль успешно изменён
           </div>
           <button onClick={handleReset} className="text-sm text-muted-foreground hover:text-foreground underline">
             Сменить ещё раз

@@ -312,9 +312,9 @@ export default function ProductDetailPage() {
                         setSavingCost(false);
                         return;
                       }
-                      console.log('Sending cost:', cost, 'for product:', product.id);
+                      if (import.meta.env.DEV) console.log('Sending cost:', cost, 'for product:', product.id);
                       const res = await updateProductCost(product.id, cost);
-                      console.log('Response:', res);
+                      if (import.meta.env.DEV) console.log('Response:', res);
                       toast.success('Себестоимость сохранена');
                       setEditingCost(false);
                       load();
@@ -638,8 +638,8 @@ export default function ProductDetailPage() {
           <ResponsiveContainer width="100%" height={320}>
             <LineChart data={chartData} margin={{ top: 5, right: 16, left: 0, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.15)" />
-              <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-3)' }} tickLine={false} interval="preserveStartEnd" />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--text-3)' }} tickLine={false} axisLine={false} tickFormatter={(v) => `${v.toLocaleString('ru')}₽`} width={72} />
+              <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} tickLine={false} interval="preserveStartEnd" />
+              <YAxis tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} tickLine={false} axisLine={false} tickFormatter={(v) => `${v.toLocaleString('ru')}₽`} width={72} />
               <Tooltip content={<ChartTooltip />} />
               <Legend formatter={(v) => v === 'seller' ? 'Цена продавца' : v === 'final' ? 'Цена покупателя' : 'Конкурент'} wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
               <Line type="monotone" dataKey="seller" name="seller" stroke="#7c3aed" strokeWidth={2} dot={false} activeDot={{ r: 4, strokeWidth: 0 }} />
@@ -651,8 +651,8 @@ export default function ProductDetailPage() {
           <ResponsiveContainer width="100%" height={320}>
             <AreaChart data={chartData} margin={{ top: 5, right: 16, left: 0, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.15)" />
-              <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-3)' }} tickLine={false} interval="preserveStartEnd" />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--text-3)' }} tickLine={false} axisLine={false} tickFormatter={(v) => `${v}%`} width={48} />
+              <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} tickLine={false} interval="preserveStartEnd" />
+              <YAxis tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} tickLine={false} axisLine={false} tickFormatter={(v) => `${v}%`} width={48} />
               <Tooltip content={<ChartTooltip />} />
               <Area type="monotone" dataKey="spp" name="СПП" stroke="#7c3aed" fill="rgba(124,58,237,0.1)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
             </AreaChart>

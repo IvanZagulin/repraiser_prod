@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { X, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
@@ -55,6 +55,13 @@ const CustomTooltip = ({ active, payload, label }) => {
 export default function PriceHistoryModal({ product, onClose }) {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Close on Escape
+  const handleEsc = useCallback((e) => { if (e.key === 'Escape') onClose(); }, [onClose]);
+  useEffect(() => {
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+  }, [handleEsc]);
 
   useEffect(() => {
     getProductHistory(product.id, 200)
@@ -176,12 +183,12 @@ export default function PriceHistoryModal({ product, onClose }) {
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.15)" />
                 <XAxis
                   dataKey="date"
-                  tick={{ fontSize: 10, fill: 'var(--text-3)' }}
+                  tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
                   tickLine={false}
                   interval="preserveStartEnd"
                 />
                 <YAxis
-                  tick={{ fontSize: 10, fill: 'var(--text-3)' }}
+                  tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
                   tickLine={false}
                   axisLine={false}
                   tickFormatter={(v) => `${v.toLocaleString('ru')}₽`}

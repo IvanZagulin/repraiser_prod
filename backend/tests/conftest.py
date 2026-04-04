@@ -103,8 +103,8 @@ def test_user(db_session):
         is_verified=True,
         token_version=1,
         onboarding_completed=False,
-        trial_started_at=datetime.utcnow(),
-        trial_ends_at=datetime.utcnow() + timedelta(days=7),
+        trial_started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        trial_ends_at=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=7),
         verification_attempts=0,
         reset_attempts=0,
     )
@@ -181,8 +181,8 @@ def test_account(db_session, test_user):
         # Plain text token (no Fernet in test mode)
         wb_api_token="fake-wb-token-for-testing",
         is_active=True,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
     )
     db_session.add(account)
     db_session.commit()
@@ -199,8 +199,8 @@ def test_product(db_session, test_account):
         seller_sku="SKU-001",
         name="Test Product Widget",
         cost_price=Decimal("500.00"),
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
     )
     db_session.add(product)
     db_session.commit()
@@ -219,7 +219,7 @@ def test_product_config(db_session, test_product):
         max_price=Decimal("2000.00"),
         rrp_price=Decimal("1000.00"),
         rrp_tolerance=Decimal("10.00"),
-        updated_at=datetime.utcnow(),
+        updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
     )
     db_session.add(config)
     db_session.commit()

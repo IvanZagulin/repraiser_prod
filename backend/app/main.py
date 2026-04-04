@@ -59,6 +59,9 @@ for _logger_name in ("app", "uvicorn", "uvicorn.error", "uvicorn.access", "celer
 
 # ─── Sentry before_send — не отправляем чувствительные данные ─────────────────
 
+logger = logging.getLogger(__name__)
+
+
 def _sentry_before_send(event: dict, hint: dict) -> dict:
     """Удаляет Authorization-заголовки и токены из Sentry-событий перед отправкой."""
     # Очищаем заголовки запроса

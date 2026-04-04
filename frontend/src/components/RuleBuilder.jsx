@@ -133,7 +133,7 @@ export default function RuleBuilder({ productId }) {
             style={{
               color: "var(--text-2)",
               borderColor: "var(--border)",
-              background: "var(--bg-2, transparent)",
+              background: "hsl(var(--muted) / 0.3)",
             }}
             value={rule.condition_type}
             onChange={(e) => handleFieldChange(rule.id, "condition_type", e.target.value)}
@@ -153,7 +153,7 @@ export default function RuleBuilder({ productId }) {
               style={{
                 color: "var(--text-2)",
                 borderColor: "var(--border)",
-                background: "var(--bg-2, transparent)",
+                background: "hsl(var(--muted) / 0.3)",
               }}
               value={rule.condition_value}
               onChange={(e) =>
@@ -169,7 +169,7 @@ export default function RuleBuilder({ productId }) {
             style={{
               color: "var(--text-2)",
               borderColor: "var(--border)",
-              background: "var(--bg-2, transparent)",
+              background: "hsl(var(--muted) / 0.3)",
             }}
             value={rule.action_type}
             onChange={(e) => handleFieldChange(rule.id, "action_type", e.target.value)}
@@ -188,7 +188,7 @@ export default function RuleBuilder({ productId }) {
             style={{
               color: "var(--text-2)",
               borderColor: "var(--border)",
-              background: "var(--bg-2, transparent)",
+              background: "hsl(var(--muted) / 0.3)",
             }}
             value={rule.action_value}
             onChange={(e) =>

@@ -7,6 +7,7 @@ import {
 import {
   getProducts, getProductStats, getRepricerRuns, getAccounts, runRepricer,
 } from '../api/client';
+import { StatusBadge } from '../components/StatusBadge';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { formatMsk } from '../utils/date';
@@ -62,13 +63,6 @@ function saveWidgetOrder(order) {
 }
 
 // ─── Sub-components ────────────────────────────────────────────────
-
-const StatusBadge = ({ status }) => {
-  if (status === 'completed') return <Badge variant="success">Завершён</Badge>;
-  if (status === 'running')   return <Badge variant="info">Выполняется</Badge>;
-  if (status === 'failed')    return <Badge variant="destructive">Ошибка</Badge>;
-  return <Badge variant="secondary">{status}</Badge>;
-};
 
 const PIE_COLORS = { rrp: '#00c8ff', competitor: '#0066ff', none: '#d1d5db' };
 const PIE_LABELS = { rrp: 'РРЦ', competitor: 'Конкурент', none: 'Без настройки' };

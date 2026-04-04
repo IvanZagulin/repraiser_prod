@@ -7,6 +7,13 @@ export default function AuditLogModal({ productId, productName, onClose }) {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Close on Escape
+  const handleEsc = useCallback((e) => { if (e.key === 'Escape') onClose(); }, [onClose]);
+  useEffect(() => {
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+  }, [handleEsc]);
+
   useEffect(() => {
     getProductAuditLog(productId)
       .then((res) => setEntries(res.data))

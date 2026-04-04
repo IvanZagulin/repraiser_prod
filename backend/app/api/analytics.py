@@ -14,6 +14,7 @@ from app.models.price_snapshot import PriceSnapshot
 from app.models.price_change import PriceChange
 from app.models.repricer_run import RepricerRun
 from app.api.auth import get_current_user
+from app.api.utils import _user_account_ids, _user_product_ids
 from app.utils import get_real_ip
 
 router = APIRouter()
@@ -23,26 +24,6 @@ limiter = Limiter(key_func=get_real_ip)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _user_account_ids(db: Session, user: User) -> list[int]:
-    """Return list of account IDs belonging to the user."""
-    return [
-        aid for (aid,) in db.query(Account.id).filter(Account.user_id == user.id).all()
-    ]
-
-
-def _user_product_ids(db: Session, user: User) -> list[int]:
-    """Return list of product IDs belonging to the user."""
-    account_ids = _user_account_ids(db, user)
-    if not account_ids:
-        return []
-    return [
-        pid
-        for (pid,) in db.query(Product.id)
-        .filter(Product.account_id.in_(account_ids))
-        .all()
-    ]
-
 
 def _verify_product_ownership(db: Session, product_id: int, user: User) -> Product:
     """Return product if it belongs to the user, else raise 404."""

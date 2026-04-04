@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { X, Search, Loader2, CheckCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createProduct, getAccounts, searchWBProduct } from '../api/client';
@@ -10,6 +10,13 @@ export default function ProductModal({ onClose }) {
   const [searching, setSearching] = useState(false);
   const [found, setFound] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  // Close on Escape
+  const handleEsc = useCallback((e) => { if (e.key === 'Escape') onClose(); }, [onClose]);
+  useEffect(() => {
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+  }, [handleEsc]);
 
   useEffect(() => {
     loadAccounts();

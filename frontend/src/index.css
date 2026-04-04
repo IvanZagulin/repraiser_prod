@@ -48,6 +48,18 @@
     --text-2:   #5a6178;
     --text-3:   #9ca3bc;
     --surface-2: #eef0f6;
+    /* status colors */
+    --status-error-bg:      0 84.2% 96.6%;
+    --status-error-fg:      0 62.8% 30.6%;
+    --status-success-bg:    152 67.2% 96.1%;
+    --status-success-fg:    152 80% 25%;
+    --status-info-bg:       213 97% 94.5%;
+    --status-info-fg:       213 100% 40%;
+    --status-warning-bg:    54 100% 95.1%;
+    --status-warning-fg:    45 90% 32%;
+    --status-cyan-bg:       187 100% 95%;
+    --status-cyan-fg:       187 100% 30%;
+    --status-border-light:  0 0% 91%;
   }
 
   .dark {
@@ -90,6 +102,18 @@
     --text-2:   #8b92a8;
     --text-3:   #6b7290;
     --surface-2: hsl(228 25% 16%);
+    /* status colors */
+    --status-error-bg:      0 84.2% 96.3%;
+    --status-error-fg:      0 62.8% 30.6%;
+    --status-success-bg:    152 67.2% 92.5%;
+    --status-success-fg:    152 80% 20%;
+    --status-info-bg:       213 100% 94.7%;
+    --status-info-fg:       213 100% 36.5%;
+    --status-warning-bg:    54 96.2% 87.3%;
+    --status-warning-fg:    45 90% 32%;
+    --status-cyan-bg:       187 100% 89%;
+    --status-cyan-fg:       187 100% 30%;
+    --status-border-light:  0 0% 91%;
   }
 }
 
@@ -184,9 +208,7 @@
     @apply rounded-[14px] bg-card text-card-foreground p-6;
     border: 1px solid hsl(var(--border));
     box-shadow: 0 1px 4px rgba(0,0,0,.03);
-    transition: all .3s cubic-bezier(.22,1,.36,1);
-  }
-  .card:hover {
+transition: box-shadow .3s, transform .3s;
     box-shadow: 0 8px 32px rgba(0,200,255,.06);
   }
   .card-sm {
@@ -199,7 +221,7 @@
     @apply rounded-[14px] bg-card text-card-foreground p-5;
     border: 1px solid hsl(var(--border));
     animation: fade-in-up 0.3s ease backwards;
-    transition: all .3s cubic-bezier(.22,1,.36,1);
+    transition: box-shadow .3s, transform .3s;
   }
   .stat-card:hover {
     border-color: var(--neon-dim);

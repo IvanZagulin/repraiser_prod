@@ -1,7 +1,7 @@
 """Schedule configuration router — manage repricer run schedule."""
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 from typing import Optional
 from slowapi import Limiter
@@ -42,25 +42,29 @@ class ScheduleUpdate(BaseModel):
     paused_days: Optional[str] = None
     is_active: bool = True
 
-    @validator("interval_minutes")
+    @field_validator("interval_minutes")
+    @classmethod
     def validate_interval(cls, v):
         if v not in ALLOWED_INTERVALS:
             raise ValueError(f"interval_minutes must be one of {sorted(ALLOWED_INTERVALS)}")
         return v
 
-    @validator("work_start_hour")
+    @field_validator("work_start_hour")
+    @classmethod
     def validate_start(cls, v):
         if not (0 <= v <= 23):
             raise ValueError("work_start_hour must be 0-23")
         return v
 
-    @validator("work_end_hour")
+    @field_validator("work_end_hour")
+    @classmethod
     def validate_end(cls, v):
         if not (1 <= v <= 24):
             raise ValueError("work_end_hour must be 1-24")
         return v
 
-    @validator("paused_days")
+    @field_validator("paused_days")
+    @classmethod
     def validate_paused_days(cls, v):
         if v is None or v == "":
             return None

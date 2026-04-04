@@ -47,9 +47,9 @@ function ImportResult({ result }) {
     <div
       className="mt-3 p-3 rounded-xl text-xs border"
       style={{
-        background: hasErrors ? '#fef2f2' : '#f0fdf4',
-        borderColor: hasErrors ? '#fecaca' : '#bbf7d0',
-        color: hasErrors ? '#991b1b' : '#14532d',
+        background: hasErrors ? 'hsl(var(--status-error-bg))' : 'hsl(var(--status-success-bg))',
+        borderColor: hasErrors ? 'hsl(var(--status-error-bg) / 0.5)' : 'hsl(var(--status-success-bg) / 0.5)',
+        color: hasErrors ? 'hsl(var(--status-error-fg))' : 'hsl(var(--status-success-fg))',
       }}
     >
       <div className="flex items-center gap-1.5 font-semibold mb-1">
@@ -317,7 +317,7 @@ export default function ImportExport() {
             {/* Products template */}
             <div
               className="flex items-center justify-between gap-3 p-3.5 rounded-xl border"
-              style={{ borderColor: '#e8eaf0', background: '#f9fafc' }}
+              border-border bg-muted/30
             >
               <div className="flex items-center gap-2.5 min-w-0">
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-primary/10">
@@ -341,12 +341,12 @@ export default function ImportExport() {
             {/* Strategy template */}
             <div
               className="flex items-center justify-between gap-3 p-3.5 rounded-xl border"
-              style={{ borderColor: '#e8eaf0', background: '#f9fafc' }}
+              border-border bg-muted/30
             >
               <div className="flex items-center gap-2.5 min-w-0">
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
                      style={{ background: '#6366f115' }}>
-                  <Settings2 className="w-4 h-4" style={{ color: '#6366f1' }} />
+                  <Settings2 className="w-4 h-4 text-indigo-500" />
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-foreground">Шаблон стратегий</p>
@@ -366,12 +366,11 @@ export default function ImportExport() {
             {/* Costs template */}
             <div
               className="flex items-center justify-between gap-3 p-3.5 rounded-xl border"
-              style={{ borderColor: '#e8eaf0', background: '#f9fafc' }}
+              border-border bg-muted/30
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                     style={{ background: '#00b8c815' }}>
-                  <TrendingUp className="w-4 h-4" style={{ color: '#00b8c8' }} />
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-cyan-100 dark:bg-cyan-900/30">
+                  <TrendingUp className="w-4 h-4 text-cyan-500" />
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-foreground">Шаблон себестоимостей</p>
@@ -423,7 +422,7 @@ export default function ImportExport() {
         <div className="card">
           <SectionTitle
             icon={Upload}
-            color="#059669"
+            color="emerald-600"
             title="Импорт"
             subtitle="Загрузите заполненный Excel-файл"
           />
@@ -432,7 +431,7 @@ export default function ImportExport() {
             {/* Import products */}
             <div
               className="p-4 rounded-xl border-2 border-dashed"
-              style={{ borderColor: '#a7f3d0', background: '#f0fdf4' }}
+              className="p-4 rounded-xl border-2 border-dashed border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30"
             >
               <div className="flex items-center gap-2 mb-1">
                 <Package className="w-4 h-4 text-emerald-600" />
@@ -445,8 +444,7 @@ export default function ImportExport() {
               <input ref={fileInputProducts} type="file" accept=".xlsx,.xls"
                      onChange={handleProductsImport} disabled={uploadingProducts} className="hidden" />
               <button
-                className="btn btn-sm w-full gap-1.5"
-                style={{ background: uploadingProducts ? '#a7f3d0' : '#059669', color: '#fff', border: 'none' }}
+                className="btn btn-sm w-full gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white"
                 onClick={() => fileInputProducts.current?.click()}
                 disabled={uploadingProducts}
               >
@@ -481,13 +479,12 @@ export default function ImportExport() {
 
             {/* Import costs */}
             <div
-              className="p-4 rounded-xl border-2 border-dashed"
-              style={{ borderColor: '#67e8f9', background: '#ecfeff' }}
+              className="p-4 rounded-xl border-2 border-dashed border-cyan-200 bg-cyan-50 dark:border-cyan-800 dark:bg-cyan-950/30"
             >
               <div className="flex items-center gap-2 mb-1">
-                <TrendingUp className="w-4 h-4" style={{ color: '#0891b2' }} />
+                <TrendingUp className="w-4 h-4 text-cyan-600" />
                 <span className="text-sm font-medium text-foreground">Себестоимости</span>
-                {uploadingCosts && <Loader2 className="w-3.5 h-3.5 animate-spin ml-auto" style={{ color: '#0891b2' }} />}
+                {uploadingCosts && <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-600 ml-auto" />}
               </div>
               <p className="text-xs text-muted-foreground mb-3">
                 Загрузить закупочные цены для расчёта маржи по артикулу продавца
@@ -495,8 +492,7 @@ export default function ImportExport() {
               <input ref={fileInputCosts} type="file" accept=".xlsx,.xls"
                      onChange={handleCostsImport} disabled={uploadingCosts} className="hidden" />
               <button
-                className="btn btn-sm w-full gap-1.5"
-                style={{ background: uploadingCosts ? '#67e8f9' : '#0891b2', color: '#fff', border: 'none' }}
+                className="btn btn-sm w-full gap-1.5 bg-cyan-600 hover:bg-cyan-700 text-white"
                 onClick={() => fileInputCosts.current?.click()}
                 disabled={uploadingCosts}
               >
@@ -512,15 +508,14 @@ export default function ImportExport() {
         <div className="card">
           <SectionTitle
             icon={Download}
-            color="#2563eb"
+          color="blue-600"
             title="Экспорт"
             subtitle="Скачайте данные из системы"
           />
 
           {/* Products export with filters */}
           <div
-            className="p-4 rounded-xl border mb-3"
-            style={{ borderColor: '#bfdbfe', background: '#eff6ff' }}
+            className="p-4 rounded-xl border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30"
           >
             <div className="flex items-center gap-2 mb-2">
               <FileSpreadsheet className="w-4 h-4 text-blue-600" />
@@ -533,7 +528,7 @@ export default function ImportExport() {
             {/* Filters */}
             <div
               className="p-3 rounded-lg mb-3 space-y-2"
-              style={{ background: 'rgba(37,99,235,0.06)', border: '1px solid #bfdbfe' }}
+              className="p-3 rounded-lg mb-3 space-y-2 bg-blue-50/60 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-800"
             >
               <div className="flex items-center gap-1.5 mb-2">
                 <Filter className="w-3.5 h-3.5 text-blue-500" />
@@ -581,8 +576,7 @@ export default function ImportExport() {
 
           {/* History export */}
           <div
-            className="p-4 rounded-xl border"
-            style={{ borderColor: '#fde68a', background: '#fffbeb' }}
+            className="p-4 rounded-xl border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30"
           >
             <div className="flex items-center gap-2 mb-1">
               <FileText className="w-4 h-4 text-amber-600" />
@@ -593,7 +587,8 @@ export default function ImportExport() {
             </p>
             <button
               className="btn btn-sm w-full gap-1.5"
-              style={{ background: '#d97706', color: '#fff', border: 'none' }}
+              className="btn btn-sm w-full gap-1.5 bg-amber-600 hover:bg-amber-700 text-white"
+
               onClick={handleExportHistory}
               disabled={loadingExpHistory}
             >
@@ -603,17 +598,16 @@ export default function ImportExport() {
           </div>
 
           {/* Status legend */}
-          <div className="mt-4 pt-4 border-t border-gray-100">
+          <div className="mt-4 pt-4 border-t dark:border-gray-700">
             <p className="text-xs font-medium text-muted-foreground mb-2">Цвета строк в экспорте:</p>
             <div className="space-y-1.5">
               {[
-                { bg: '#dcfce7', border: '#bbf7d0', label: 'Активен' },
-                { bg: '#fff7ed', border: '#fed7aa', label: 'Отключен' },
-                { bg: '#f5f5f5', border: '#e5e7eb', label: 'Без стратегии' },
+                { bg: 'bg-green-100 dark:bg-green-900/30', border: 'border-green-200 dark:border-green-800', label: 'Активен' },
+                { bg: 'bg-orange-100 dark:bg-orange-900/30', border: 'border-orange-200 dark:border-orange-800', label: 'Отключен' },
+                { bg: 'bg-gray-100 dark:bg-gray-800/30', border: 'border-gray-200 dark:border-gray-700', label: 'Без стратегии' },
               ].map(({ bg, border, label }) => (
                 <div key={label} className="flex items-center gap-2">
-                  <div className="w-4 h-4 rounded border flex-shrink-0"
-                       style={{ background: bg, borderColor: border }} />
+                  <div className={`w-4 h-4 rounded border flex-shrink-0 ${bg} ${border}`} />
                   <span className="text-xs text-muted-foreground">{label}</span>
                 </div>
               ))}
