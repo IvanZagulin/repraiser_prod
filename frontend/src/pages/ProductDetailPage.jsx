@@ -4,13 +4,14 @@ import {
   ArrowLeft, Play, Settings, ExternalLink, TrendingUp, TrendingDown,
   Minus, Package, Shield, Clock, BarChart3, AlertTriangle,
   CheckCircle, XCircle, ArrowUpRight, ArrowDownRight, Copy, Edit3, Store,
+  Trash2,
 } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, AreaChart, Area,
 } from 'recharts';
 import toast from 'react-hot-toast';
-import { getProductDetail, getProductsBySku, runRepricer, updateProductConfig, createProductConfig, getSettings, getProductAuditLog, updateProductCost } from '../api/client';
+import { getProductDetail, getProductsBySku, runRepricer, updateProductConfig, createProductConfig, getSettings, getProductAuditLog, updateProductCost, deleteProduct } from '../api/client';
 import { formatMsk } from '../utils/date';
 import ConfigModal from '../components/ConfigModal';
 
@@ -134,6 +135,17 @@ export default function ProductDetailPage() {
     toast.success('nmID скопирован');
   };
 
+  const handleDelete = async () => {
+    if (!confirm(`Удалить товар ${product.seller_sku || product.nm_id}?`)) return;
+    try {
+      await deleteProduct(productId);
+      toast.success('Товар удален');
+      navigate('/products');
+    } catch {
+      toast.error('Ошибка удаления товара');
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -213,6 +225,14 @@ export default function ProductDetailPage() {
             </a>
           </div>
         </div>
+        <button
+          onClick={handleDelete}
+          className="btn btn-danger gap-2"
+          title="Удалить товар"
+        >
+          <Trash2 className="w-4 h-4" />
+          Удалить
+        </button>
         <button
           onClick={handleRun}
           disabled={running}
