@@ -9,7 +9,11 @@ echo "[deploy] Clearing Python bytecache..."
 find ./backend -name '*.pyc' -delete 2>/dev/null || true
 find ./backend -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
+echo "[deploy] Clearing frontend build cache..."
+rm -rf frontend/dist frontend/.vite 2>/dev/null || true
+
 echo "[deploy] Building images (without stopping running containers)..."
+docker-compose build --no-cache frontend
 docker-compose build
 
 echo "[deploy] Rolling restart: backend → celery → scheduler (frontend stays up)..."
