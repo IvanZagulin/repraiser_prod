@@ -9,17 +9,14 @@ echo "[deploy] Clearing Python bytecache..."
 find ./backend -name '*.pyc' -delete 2>/dev/null || true
 find ./backend -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
-echo "[deploy] Clearing frontend build cache..."
-rm -rf frontend/dist frontend/.vite 2>/dev/null || true
-
 echo "[deploy] Building images..."
-docker-compose build --no-cache
+docker-compose build
 
 echo "[deploy] Rolling restart..."
-# Frontend first (needs restart after rebuild!)
+# Restart all services that need it after rebuild
 docker-compose up -d --no-deps frontend
 echo "[deploy] Waiting for frontend..."
-sleep 5
+sleep 3
 
 # Backend — uses health check, old container serves until new is healthy
 docker-compose up -d --no-deps --remove-orphans backend
