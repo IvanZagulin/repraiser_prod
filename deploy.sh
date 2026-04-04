@@ -15,8 +15,13 @@ rm -rf frontend/dist frontend/.vite 2>/dev/null || true
 echo "[deploy] Building images..."
 docker-compose build --no-cache
 
-echo "[deploy] Rolling restart: backend → celery → scheduler (frontend stays up)..."
-# Backend first — uses health check, old container serves until new is healthy
+echo "[deploy] Rolling restart..."
+# Frontend first (needs restart after rebuild!)
+docker-compose up -d --no-deps frontend
+echo "[deploy] Waiting for frontend..."
+sleep 5
+
+# Backend — uses health check, old container serves until new is healthy
 docker-compose up -d --no-deps --remove-orphans backend
 echo "[deploy] Waiting for backend health check..."
 timeout 60 bash -c 'until docker inspect --format="{{.State.Health.Status}}" wb_repricer_backend_prod 2>/dev/null | grep -q healthy; do sleep 2; done' \
