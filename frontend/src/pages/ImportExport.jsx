@@ -315,10 +315,7 @@ export default function ImportExport() {
 
           <div className="space-y-3">
             {/* Products template */}
-            <div
-              className="flex items-center justify-between gap-3 p-3.5 rounded-xl border"
-              border-border bg-muted/30
-            >
+            <div className="flex items-center justify-between gap-3 p-3.5 rounded-xl border border-border bg-muted/30">
               <div className="flex items-center gap-2.5 min-w-0">
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-primary/10">
                   <Package className="w-4 h-4 text-primary" />
@@ -339,10 +336,7 @@ export default function ImportExport() {
             </div>
 
             {/* Strategy template */}
-            <div
-              className="flex items-center justify-between gap-3 p-3.5 rounded-xl border"
-              border-border bg-muted/30
-            >
+            <div className="flex items-center justify-between gap-3 p-3.5 rounded-xl border border-border bg-muted/30">
               <div className="flex items-center gap-2.5 min-w-0">
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
                      style={{ background: '#6366f115' }}>
@@ -364,10 +358,7 @@ export default function ImportExport() {
             </div>
 
             {/* Costs template */}
-            <div
-              className="flex items-center justify-between gap-3 p-3.5 rounded-xl border"
-              border-border bg-muted/30
-            >
+            <div className="flex items-center justify-between gap-3 p-3.5 rounded-xl border border-border bg-muted/30">
               <div className="flex items-center gap-2.5 min-w-0">
                 <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-cyan-100 dark:bg-cyan-900/30">
                   <TrendingUp className="w-4 h-4 text-cyan-500" />
