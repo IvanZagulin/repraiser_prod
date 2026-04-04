@@ -1,4 +1,4 @@
-import { Badge } from './Badge';
+import { Badge } from '@/components/ui/badge';
 
 export function StatusBadge({ status }) {
   if (status === 'completed') return <Badge variant="success">Завершён</Badge>;

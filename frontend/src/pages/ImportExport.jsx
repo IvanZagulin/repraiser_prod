@@ -577,9 +577,7 @@ export default function ImportExport() {
               Все снимки цен: цена продавца, финальная цена, СПП, дата
             </p>
             <button
-              className="btn btn-sm w-full gap-1.5"
               className="btn btn-sm w-full gap-1.5 bg-amber-600 hover:bg-amber-700 text-white"
-
               onClick={handleExportHistory}
               disabled={loadingExpHistory}
             >
