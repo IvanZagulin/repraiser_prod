@@ -14,6 +14,7 @@ from app.models.config_change_log import ConfigChangeLog
 from app.models.product_group import ProductGroup, ProductGroupMembership
 from app.models.competitor_alert import CompetitorAlert
 from app.models.pricing_rule import PricingRule
+from app.models.wb_catalog import WBCatalog
 
 __all__ = [
     "User",
@@ -33,4 +34,5 @@ __all__ = [
     "ProductGroupMembership",
     "CompetitorAlert",
     "PricingRule",
+    "WBCatalog",
 ]

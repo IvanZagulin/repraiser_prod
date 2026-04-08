@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from slowapi import Limiter
 
 from app.database import get_db
-from app.models import Product, ProductConfig, PriceSnapshot, RepricerRun, PriceChange, Account
+from app.models import Product, ProductConfig, PriceSnapshot, RepricerRun, PriceChange, Account, WBCatalog
 from app.models.user import User
 from app.api.auth import get_current_user
 from app.utils import get_user_id_key
@@ -450,7 +450,6 @@ async def import_strategy(
 
         if not products_found:
             # Try to auto-create from wb_catalog
-            from app.models.wb_catalog import WBCatalog
             catalog_entry = (
                 db.query(WBCatalog)
                 .join(Account, WBCatalog.account_id == Account.id)
