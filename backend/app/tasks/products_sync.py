@@ -168,37 +168,8 @@ def import_products_task(self, file_bytes_b64: str, user_id: int):
             if not nm_id and seller_sku:
                 nm_id = catalog_by_sku.get(account_id, {}).get(seller_sku)
                 if not nm_id:
-                    # Fallback: пробуем получить nm_id напрямую с WB API
-                    try:
-                        import asyncio
-                        from app.services.wb_api import create_wb_client
-                        wb = create_wb_client(account.wb_api_token)
-                        cards = asyncio.run(wb.get_cards_batch_by_skus([seller_sku]))
-                        info = cards.get(seller_sku, {})
-                        nm_id = info.get("nm_id")
-                        if nm_id:
-                            # Сохраняем в кэш каталога
-                            from app.models.wb_catalog import WBCatalog
-                            exists = db.query(WBCatalog).filter(
-                                WBCatalog.account_id == account_id,
-                                WBCatalog.vendor_code == seller_sku
-                            ).first()
-                            if not exists:
-                                db.add(WBCatalog(
-                                    account_id=account_id,
-                                    nm_id=nm_id,
-                                    vendor_code=seller_sku,
-                                    name=info.get("name") or None,
-                                    image_url=info.get("image_url") or None,
-                                ))
-                                db.commit()
-                            catalog_by_sku.setdefault(account_id, {})[seller_sku] = nm_id
-                            logger.info(f"[import] артикул={seller_sku!r}: nm_id={nm_id} получен напрямую с WB API")
-                    except Exception as wb_exc:
-                        logger.warning(f"[import] WB API fallback failed for {seller_sku!r}: {wb_exc}")
-                if not nm_id:
                     results["errors"].append(
-                        f"артикул={seller_sku!r}: не найден в каталоге WB и не удалось получить с WB API"
+                        f"артикул={seller_sku!r}: не найден в каталоге WB. Сначала выполните синхронизацию каталога в настройках аккаунта"
                     )
                     continue
 
