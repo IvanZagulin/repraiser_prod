@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from app.celery_app import celery_app
 from app.database import SessionLocal
+from app.models.wb_catalog import WBCatalog
 
 logger = logging.getLogger(__name__)
 
