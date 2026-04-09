@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 
 from app.celery_app import celery_app
 from app.database import SessionLocal
-from app.models.wb_catalog import WBCatalog
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +178,7 @@ def import_products_task(self, file_bytes_b64: str, user_id: int):
                         nm_id = info.get("nm_id")
                         if nm_id:
                             # Сохраняем в кэш каталога
+                            from app.models.wb_catalog import WBCatalog
                             exists = db.query(WBCatalog).filter(
                                 WBCatalog.account_id == account_id,
                                 WBCatalog.vendor_code == seller_sku

@@ -123,9 +123,9 @@ app = FastAPI(
     title="WB Repricer API",
     description="SaaS система автоматического управления ценами на Wildberries",
     version="2.0.0",
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
     redirect_slashes=False,
 )
 
@@ -172,7 +172,8 @@ async def root():
 
 
 @app.get("/api/health")
-async def health_check():
+@limiter.limit("10/minute")
+async def health_check(request: Request):
     """Health-check с реальной проверкой БД и Redis.
     Docker healthcheck полагается на этот endpoint —
     если зависимости недоступны, возвращаем 503 чтобы
