@@ -587,8 +587,7 @@ class WBAPIClient:
     ) -> Dict[str, dict]:
         """
         Batch-получение информации о карточках по списку артикулов продавца.
-        Загружает ВСЕ карточки аккаунта одним пагинированным запросом,
-        затем фильтрует нужные — без рейт-лимитов.
+        Ищет каждый SKU точечно через Content API search — без загрузки всего каталога.
 
         Returns:
             Словарь {seller_sku: {nm_id, seller_sku, name, image_url}}
@@ -596,10 +595,35 @@ class WBAPIClient:
         if not seller_skus:
             return {}
 
-        all_cards = await self.get_all_cards()
+        result = {}
+        sem = asyncio.Semaphore(concurrency)
 
-        skus_set = set(seller_skus)
-        result = {sku: info for sku, info in all_cards.items() if sku in skus_set}
+        async def _search_one(sku: str):
+            async with sem:
+                try:
+                    cards = await self.search_cards(text_search=sku, limit=100)
+                    for card in cards:
+                        vendor_code = card.get("vendorCode", "")
+                        if vendor_code == sku:
+                            nm_id = card.get("nmID")
+                            if nm_id:
+                                photos = card.get("photos", [])
+                                image_url = None
+                                if photos:
+                                    photo = photos[0]
+                                    image_url = photo.get("c246x328") or photo.get("big")
+                                result[sku] = {
+                                    "nm_id": nm_id,
+                                    "seller_sku": sku,
+                                    "name": card.get("title", ""),
+                                    "image_url": image_url,
+                                }
+                            break
+                except Exception as e:
+                    logger.warning(f"search_cards failed for sku={sku!r}: {e}")
+
+        tasks = [_search_one(sku) for sku in seller_skus]
+        await asyncio.gather(*tasks)
 
         logger.info(f"get_cards_batch_by_skus: запрошено {len(seller_skus)}, найдено {len(result)}")
         return result
