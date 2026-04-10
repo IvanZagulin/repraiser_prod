@@ -155,7 +155,7 @@ async def export_products(
             "seller_sku":           product.seller_sku,
             "name":                 product.name,
             "nm_id":                product.nm_id,
-            "account_name":         product.account.name if product.account else "",
+            "account_id":         product.account.name if product.account else "",
             "config":               cfg_dict,
             "current_seller_price": last_snapshot.seller_price if last_snapshot else None,
             "current_final_price":  last_snapshot.final_price  if last_snapshot else None,
@@ -443,9 +443,9 @@ async def import_strategy(
             )
         )
         # Если указан кабинет — фильтруем по нему
-        account_name = config_data.get('account_name')
-        if account_name:
-            q = q.filter(Account.name == account_name)
+        account_id = config_data.get('account_id')
+        if account_id:
+            q = q.filter(Account.id == account_id)
         products_found = q.all()
 
         if not products_found:
@@ -458,8 +458,8 @@ async def import_strategy(
                     Account.user_id == current_user.id,
                 )
             )
-            if account_name:
-                catalog_entry = catalog_entry.filter(Account.name == account_name)
+            if account_id:
+                catalog_entry = catalog_entry.filter(Account.id == account_id)
             catalog_entry = catalog_entry.first()
             if catalog_entry:
                 new_product = Product(
@@ -475,7 +475,7 @@ async def import_strategy(
             else:
                 results['errors'].append(f"Товар {config_data['seller_sku']} не найден (нет в каталоге WB)")
                 continue
-        if len(products_found) > 1 and not account_name:
+        if len(products_found) > 1 and not account_id:
             acc_names = ', '.join(p.account.name for p in products_found)
             results['errors'].append(
                 f"Артикул {config_data['seller_sku']} найден в нескольких кабинетах ({acc_names}). "
@@ -486,13 +486,13 @@ async def import_strategy(
 
         if product.config:
             for key, value in config_data.items():
-                if key not in ('seller_sku', 'account_name') and value is not None:
+                if key not in ('seller_sku', 'account_id') and value is not None:
                     setattr(product.config, key, value)
             results['updated'] += 1
         else:
             config = ProductConfig(
                 product_id=product.id,
-                **{k: v for k, v in config_data.items() if k not in ('seller_sku', 'account_name')}
+                **{k: v for k, v in config_data.items() if k not in ('seller_sku', 'account_id')}
             )
             db.add(config)
             results['created'] += 1

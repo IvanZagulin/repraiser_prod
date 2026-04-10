@@ -157,7 +157,7 @@ class ExcelExporter:
             "Тип смещения (rub/pct)",
             "Направление (above/below)",
             "Значение смещения",
-            "Кабинет (название)",
+            "ID кабинета",
         ]
 
         # ── Лист данных ──
@@ -190,7 +190,7 @@ class ExcelExporter:
         ExcelExporter._style_header(wi, row=7, color=COLOR_HEADER)
         notes = [
             ("Артикул продавца *",       "vendorCode — должен уже быть в системе. Обязательно."),
-            ("Кабинет (название)",           "Название кабинета WB. Обязательно если один артикул есть в нескольких кабинетах."),
+            ("ID кабинета",           "Числовой ID аккаунта из раздела Аккаунты. Обязательно если один артикул есть в нескольких кабинетах."),
             ("Стратегия *",              "rrp — удержание РРЦ; competitor — привязка к конкуренту"),
             ("Активен",                  "да / нет (по умолчанию: да)"),
             ("МРЦ — мин цена *",         "Нижняя граница цены. Репрайсер не опустит ниже. Обязательно."),
@@ -320,7 +320,7 @@ class ExcelExporter:
                 _safe_str(p.get("seller_sku", "")),
                 _safe_str(p.get("name", "")),
                 p.get("nm_id", ""),
-                _safe_str(p.get("account_name", "")),
+                _safe_str(p.get("account_id", "")),
                 status,
                 STRATEGY_LABELS.get(cfg.get("strategy", ""), ""),
                 float(cfg["min_price"])           if cfg.get("min_price")           else "",
@@ -476,7 +476,7 @@ class ExcelImporter:
         J  competitor_offset_type
         K  competitor_offset_direction
         L  competitor_offset_value
-        M  account_name            (необязательно, если артикул уникален)
+        M  account_id            (необязательно, если артикул уникален)
         """
         wb = openpyxl.load_workbook(BytesIO(file_content))
         # Читаем по имени листа данных; если не нашли — берём первый лист
@@ -516,7 +516,7 @@ class ExcelImporter:
                         "competitor_offset_type":        str(row[9]).strip().lower()  if row[9]  else None,
                         "competitor_offset_direction":   str(row[10]).strip().lower() if row[10] else None,
                         "competitor_offset_value":       Decimal(str(row[11])) if row[11] is not None and str(row[11]).strip() else None,
-                        "account_name":                  str(row[12]).strip() if len(row) > 12 and row[12] else None,
+                        "account_id":                  int(row[12]) if len(row) > 12 and row[12] is not None and str(row[12]).strip() else None,
                     }
                 else:
                     # Старый формат без колонки кошелька (11 колонок)
@@ -533,7 +533,7 @@ class ExcelImporter:
                         "competitor_offset_type":        str(row[8]).strip().lower()  if row[8]  else None,
                         "competitor_offset_direction":   str(row[9]).strip().lower()  if row[9]  else None,
                         "competitor_offset_value":       Decimal(str(row[10])) if row[10] is not None and str(row[10]).strip() else None,
-                        "account_name":                  str(row[11]).strip() if len(row) > 11 and row[11] else None,
+                        "account_id":                  int(row[11]) if len(row) > 11 and row[11] is not None and str(row[11]).strip() else None,
                     }
 
                 if not cfg["seller_sku"]:
