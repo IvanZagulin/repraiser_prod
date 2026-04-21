@@ -1102,7 +1102,7 @@ class RepricerEngine:
             # — коммитим каждые COMMIT_EVERY товаров вместо round-trip на каждый
             results = {'updated': 0, 'skipped': 0, 'errors': 0}
             CHUNK_SIZE  = 500   # товаров за один SELECT
-            COMMIT_EVERY = 50   # товаров между коммитами
+            COMMIT_EVERY = 200  # товаров между коммитами (меньше DB round-trips)
 
             total_chunks = (total_count + CHUNK_SIZE - 1) // CHUNK_SIZE
             for chunk_idx, chunk_start in enumerate(range(0, total_count, CHUNK_SIZE)):
@@ -1132,23 +1132,28 @@ class RepricerEngine:
                             if data is not None:
                                 cache_set("wb_catalog:%d" % nm_id, data.to_dict(), ttl=180)
 
-                # === ФАЗА 1: вычисляем решения (без вызовов WB API в цикле) ===
-                decisions = []
+                # === ФАЗА 1: вычисляем решения параллельно (50 товаров одновременно) ===
                 pending_updates = {}  # token -> list of {nmID, price}
+                _sem = asyncio.Semaphore(50)
 
-                for product in chunk_products:
-                    try:
-                        dec = await self._decide_product(product, run, dry_run=dry_run)
-                        decisions.append(dec)
-                        if dec["needs_update"] and not dry_run:
-                            token = product.account.wb_api_token
-                            if token not in pending_updates:
-                                pending_updates[token] = []
-                            pending_updates[token].append({"nmID": product.nm_id, "price": int(dec["new_price"])})
-                    except Exception as e:
-                        logger.error("Ошибка решения для %s: %s", product.seller_sku, e, exc_info=True)
-                        decisions.append({"product": product, "needs_update": False, "skip_code": "PARSE_ERROR", "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": str(e)})
-                        results["errors"] += 1
+                async def _decide_safe(product):
+                    async with _sem:
+                        try:
+                            return await self._decide_product(product, run, dry_run=dry_run)
+                        except Exception as e:
+                            logger.error("Ошибка решения для %s: %s", product.seller_sku, e, exc_info=True)
+                            results["errors"] += 1
+                            return {"product": product, "needs_update": False, "skip_code": "PARSE_ERROR",
+                                    "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": str(e)}
+
+                decisions = list(await asyncio.gather(*[_decide_safe(p) for p in chunk_products]))
+
+                for dec in decisions:
+                    if dec["needs_update"] and not dry_run:
+                        token = dec["product"].account.wb_api_token
+                        if token not in pending_updates:
+                            pending_updates[token] = []
+                        pending_updates[token].append({"nmID": dec["product"].nm_id, "price": int(dec["new_price"])})
 
                 # === ФАЗА 2: батч-обновление (один POST на аккаунт) ===
                 update_ok = set()

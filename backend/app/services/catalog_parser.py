@@ -214,58 +214,64 @@ class CatalogParser:
         self,
         nm_ids: list[int],
         chunk_size: int = 100,
-        delay_between_chunks: float = 0.5,
+        delay_between_chunks: float = 0.0,
+        concurrency: int = 30,
     ) -> Dict[int, Optional[ProductData]]:
         """
         Батчевый парсинг: объединяет nm_ids в чанки по chunk_size и делает
-        один HTTP-запрос на чанк вместо N отдельных. Резко снижает RPS на WB API.
+        один HTTP-запрос на чанк вместо N отдельных. Чанки выполняются параллельно
+        (до concurrency одновременных запросов).
         """
         if not nm_ids:
             return {}
 
-        logger.info(f"Батч-парсинг {len(nm_ids)} товаров (чанки по {chunk_size})")
-        result: Dict[int, Optional[ProductData]] = {}
-
+        logger.info(f"Батч-парсинг {len(nm_ids)} товаров (чанки по {chunk_size}, параллельно {concurrency})")
         chunks = [nm_ids[i:i + chunk_size] for i in range(0, len(nm_ids), chunk_size)]
-        for idx, chunk in enumerate(chunks):
-            if idx > 0:
-                await asyncio.sleep(delay_between_chunks)
+        semaphore = asyncio.Semaphore(concurrency)
 
-            url = self._build_batch_url(chunk)
-            data = None
+        async def fetch_chunk(idx: int, chunk: list[int]) -> Dict[int, Optional[ProductData]]:
+            async with semaphore:
+                url = self._build_batch_url(chunk)
+                data = None
 
-            proxies_available = proxy_pool._initialized and proxy_pool.get_stats()['alive'] > 0
-            if proxies_available:
-                for attempt in range(1, self.max_retries + 1):
-                    proxy = await proxy_pool.get_next_proxy()
-                    if not proxy:
-                        break
-                    data = await self._request_with_proxy(url, proxy)
-                    if data is not None:
-                        break
-                    await asyncio.sleep(0.5)
+                proxies_available = proxy_pool._initialized and proxy_pool.get_stats()['alive'] > 0
+                if proxies_available:
+                    for attempt in range(1, self.max_retries + 1):
+                        proxy = await proxy_pool.get_next_proxy()
+                        if not proxy:
+                            break
+                        data = await self._request_with_proxy(url, proxy)
+                        if data is not None:
+                            break
 
-            if data is None:
-                data = await self._request_direct(url)
+                if data is None:
+                    data = await self._request_direct(url)
 
-            if data is None:
-                logger.error(f"Батч чанк {idx + 1}/{len(chunks)}: не удалось получить данные")
+                chunk_result: Dict[int, Optional[ProductData]] = {}
+                if data is None:
+                    logger.error(f"Батч чанк {idx + 1}/{len(chunks)}: не удалось получить данные")
+                    for nm_id in chunk:
+                        chunk_result[nm_id] = None
+                    return chunk_result
+
+                products_raw = self._extract_products(data)
+                products_map = {p_raw.get('id'): p_raw for p_raw in products_raw}
                 for nm_id in chunk:
-                    result[nm_id] = None
-                continue
+                    raw = products_map.get(nm_id)
+                    if raw:
+                        try:
+                            chunk_result[nm_id] = ProductData(raw)
+                        except Exception as e:
+                            logger.error(f"Ошибка парсинга nm_id={nm_id} из батча: {e}")
+                            chunk_result[nm_id] = None
+                    else:
+                        chunk_result[nm_id] = None
+                return chunk_result
 
-            products_raw = self._extract_products(data)
-            products_map = {p_raw.get('id'): p_raw for p_raw in products_raw}
-            for nm_id in chunk:
-                raw = products_map.get(nm_id)
-                if raw:
-                    try:
-                        result[nm_id] = ProductData(raw)
-                    except Exception as e:
-                        logger.error(f"Ошибка парсинга nm_id={nm_id} из батча: {e}")
-                        result[nm_id] = None
-                else:
-                    result[nm_id] = None
+        chunk_results = await asyncio.gather(*[fetch_chunk(i, c) for i, c in enumerate(chunks)])
+        result: Dict[int, Optional[ProductData]] = {}
+        for cr in chunk_results:
+            result.update(cr)
 
         success = sum(1 for v in result.values() if v is not None)
         logger.info(f"Батч-парсинг завершён: {success}/{len(nm_ids)} успешно")

@@ -139,8 +139,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1536m
-          cpus: "2.0"
+          memory: 2g
+          cpus: "3.0"
     restart: unless-stopped
     logging:
       driver: json-file
@@ -244,8 +244,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512m
-          cpus: "0.5"
+          memory: 256m
+          cpus: "0.25"
     restart: unless-stopped
     networks:
       - wb_network
@@ -283,8 +283,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512m
-          cpus: "0.5"
+          memory: 256m
+          cpus: "0.25"
     restart: unless-stopped
     networks:
       - wb_network

@@ -19,7 +19,7 @@ _NETWORK_ERRORS = (ConnectionError, TimeoutError, OSError, redis_lib.ConnectionE
     name="repricer.run_for_user",
     max_retries=2,
     default_retry_delay=60,
-    time_limit=3900,   # 65 мин — жёсткий лимит (прерывает задачу)
+    time_limit=10800,  # 3 часа — для 30k+ товаров
 )
 def run_repricer_for_user(
     self,
