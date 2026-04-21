@@ -177,13 +177,14 @@ class RepricerEngine:
                 logger.warning("Ошибка pre-fetch цен для %s: %s", account.name, e)
 
     async def _prefetch_all_prices_once(self) -> None:
-        """Загружает цены ВСЕХ аккаунтов пользователя один раз до цикла чанков."""
+        """Загружает цены ВСЕХ аккаунтов параллельно (один раз до цикла чанков)."""
         accounts = self.db.execute(
             select(Account).filter(Account.user_id == self.user_id, Account.is_active == True)
         ).scalars().all()
-        for account in accounts:
+
+        async def _fetch_account(account):
             if is_token_expired(account.wb_api_token):
-                continue
+                return
             try:
                 fetched = 0
                 async with create_wb_client(account.wb_api_token) as client:
@@ -199,6 +200,8 @@ class RepricerEngine:
                 logger.info("Pre-fetch цен (global): %d товаров для аккаунта %s", fetched, account.name)
             except Exception as e:
                 logger.warning("Ошибка pre-fetch цен для %s: %s", account.name, e)
+
+        await asyncio.gather(*[_fetch_account(a) for a in accounts])
 
     async def _get_current_price_data(
         self,
