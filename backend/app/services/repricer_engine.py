@@ -799,7 +799,7 @@ class RepricerEngine:
                 self._save_price_snapshot(product, current_data)
                 # Обновляем название товара если оно ещё не подтянулось (fallback Товар {nm_id})
                 real_name = current_data.get('name', '')
-                if real_name and (not product.name or product.name.startswith('Товар ')):
+                if real_name and (not product.name or product.name.startswith('Товар ') or product.name == product.seller_sku):
                     product.name = real_name
                 results['updated'] += 1
                 if results['updated'] % 50 == 0:
