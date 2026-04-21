@@ -380,11 +380,30 @@ async def get_products_stats(
         .scalar()
     )
 
+    # Стратегии
+    rrp = (
+        db.query(func.count(Product.id))
+        .join(Account, Product.account_id == Account.id)
+        .join(ProductConfig, ProductConfig.product_id == Product.id)
+        .filter(Account.user_id == current_user.id, ProductConfig.strategy == "rrp")
+        .scalar()
+    )
+
+    competitor = (
+        db.query(func.count(Product.id))
+        .join(Account, Product.account_id == Account.id)
+        .join(ProductConfig, ProductConfig.product_id == Product.id)
+        .filter(Account.user_id == current_user.id, ProductConfig.strategy == "competitor")
+        .scalar()
+    )
+
     return {
         "total": total,
         "active": active,
         "inactive": inactive,
         "no_config": total - active - inactive,
+        "rrp": rrp,
+        "competitor": competitor,
     }
 
 

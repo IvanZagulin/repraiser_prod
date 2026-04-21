@@ -206,6 +206,7 @@ export default function Dashboard() {
   const [stats, setStats] = useState({
     totalAccounts: 0, totalProducts: 0,
     activeProducts: 0, inactiveProducts: 0,
+    rrp: null, competitor: null, noConfig: null,
   });
   const [recentRuns, setRecentRuns] = useState([]);
   const [runsChartData, setRunsChartData] = useState([]);
@@ -240,6 +241,9 @@ export default function Dashboard() {
         totalProducts: s.total || prods.length,
         activeProducts: s.active ?? prods.filter((p) => p.config?.is_active).length,
         inactiveProducts: s.inactive ?? prods.filter((p) => p.config && !p.config.is_active).length,
+        rrp: s.rrp ?? null,
+        competitor: s.competitor ?? null,
+        noConfig: s.no_config ?? null,
       });
     } catch {
       toast.error('Ошибка загрузки данных');
@@ -262,8 +266,12 @@ export default function Dashboard() {
     }
   };
 
-  // Derived data
+  // Derived data — берём из API (все товары), не из paginated списка
   const stratMap = useMemo(() => {
+    if (stats.rrp !== null) {
+      return { rrp: stats.rrp, competitor: stats.competitor, none: stats.noConfig ?? 0 };
+    }
+    // fallback: in-memory из загруженных товаров
     const m = { rrp: 0, competitor: 0, none: 0 };
     products.forEach((p) => {
       const s = p.config?.strategy;
@@ -272,7 +280,7 @@ export default function Dashboard() {
       else m.none++;
     });
     return m;
-  }, [products]);
+  }, [stats, products]);
 
   const pieData = Object.entries(stratMap)
     .filter(([, v]) => v > 0)
