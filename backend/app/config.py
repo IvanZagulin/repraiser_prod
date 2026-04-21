@@ -44,9 +44,6 @@ class Settings(BaseSettings):
     # Sentry (опционально — оставь пустым чтобы отключить)
     SENTRY_DSN: Optional[str] = None
 
-    # Регистрация (false = только через админку, new users cannot self-register)
-    REGISTRATION_ENABLED: bool = True
-
     # SMTP (для приветственных писем)
     SMTP_HOST: str = "smtp.yandex.ru"
     SMTP_PORT: int = 465

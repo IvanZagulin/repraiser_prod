@@ -155,12 +155,6 @@ async def register(
     db: Annotated[Session, Depends(get_db)],
 ):
     """Регистрация нового пользователя — отправляет код подтверждения на email."""
-    if not settings.REGISTRATION_ENABLED:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Регистрация временно закрыта. Обратитесь к администратору.",
-        )
-
     existing = db.query(User).filter(User.email == body.email.lower()).first()
     if existing:
         raise HTTPException(
