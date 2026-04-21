@@ -12,11 +12,14 @@ find ./backend -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 echo "[deploy] Building images (without stopping running containers)..."
 docker-compose build
 
-echo "[deploy] Restarting all services with new images..."
-docker-compose up -d --remove-orphans
+echo "[deploy] Stopping all containers..."
+docker-compose down --remove-orphans
+
+echo "[deploy] Starting all containers..."
+docker-compose up -d
 
 echo "[deploy] Waiting for backend health check..."
-timeout 60 bash -c 'until docker inspect --format="{{.State.Health.Status}}" wb_repricer_backend_prod 2>/dev/null | grep -q healthy; do sleep 2; done' \
+timeout 90 bash -c 'until docker inspect --format="{{.State.Health.Status}}" wb_repricer_backend_prod 2>/dev/null | grep -q healthy; do sleep 3; done' \
   && echo "[deploy] Backend healthy ✓" \
   || echo "[deploy] WARNING: Backend health check timed out"
 
