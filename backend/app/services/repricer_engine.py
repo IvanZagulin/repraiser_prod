@@ -176,6 +176,30 @@ class RepricerEngine:
             except Exception as e:
                 logger.warning("Ошибка pre-fetch цен для %s: %s", account.name, e)
 
+    async def _prefetch_all_prices_once(self) -> None:
+        """Загружает цены ВСЕХ аккаунтов пользователя один раз до цикла чанков."""
+        accounts = self.db.execute(
+            select(Account).filter(Account.user_id == self.user_id, Account.is_active == True)
+        ).scalars().all()
+        for account in accounts:
+            if is_token_expired(account.wb_api_token):
+                continue
+            try:
+                fetched = 0
+                async with create_wb_client(account.wb_api_token) as client:
+                    offset = 0
+                    while True:
+                        prices = await client.get_prices(nm_ids=None, limit=1000, offset=offset)
+                        for p in prices:
+                            self._prefetched_prices[p.nm_id] = p
+                            fetched += 1
+                        if len(prices) < 1000:
+                            break
+                        offset += 1000
+                logger.info("Pre-fetch цен (global): %d товаров для аккаунта %s", fetched, account.name)
+            except Exception as e:
+                logger.warning("Ошибка pre-fetch цен для %s: %s", account.name, e)
+
     async def _get_current_price_data(
         self,
         product: Product,
@@ -1104,6 +1128,10 @@ class RepricerEngine:
             CHUNK_SIZE  = 500   # товаров за один SELECT
             COMMIT_EVERY = 200  # товаров между коммитами (меньше DB round-trips)
 
+            # Загружаем цены ВСЕХ аккаунтов один раз до цикла (не повторять per-chunk)
+            if not dry_run:
+                await self._prefetch_all_prices_once()
+
             total_chunks = (total_count + CHUNK_SIZE - 1) // CHUNK_SIZE
             for chunk_idx, chunk_start in enumerate(range(0, total_count, CHUNK_SIZE)):
                 chunk_ids = all_product_ids[chunk_start:chunk_start + CHUNK_SIZE]
@@ -1116,11 +1144,7 @@ class RepricerEngine:
 
                 # === PRE-FETCH для текущего чанка ===
                 if not dry_run:
-                    # 1. Цены продавца: один GET /api/v2/list/goods/filter на аккаунт
-                    self._prefetched_prices.clear()
-                    await self._prefetch_own_prices(chunk_products)
-
-                    # 2. Прогрев каталога собственных товаров
+                    # Прогрев каталога собственных товаров (цены уже загружены глобально)
                     own_cold_ids = [
                         p.nm_id for p in chunk_products
                         if cache_get("wb_catalog:%d" % p.nm_id) is None
@@ -1207,7 +1231,6 @@ class RepricerEngine:
                 if pending:
                     self.db.commit()
 
-                self._prefetched_prices.clear()
                 self.db.expire_all()
 
                 logger.info(
