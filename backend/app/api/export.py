@@ -359,21 +359,22 @@ async def import_costs(
     results = {'updated': 0, 'errors': []}
 
     for item in costs_data:
-        # IDOR fix: ищем товар только среди товаров текущего пользователя
-        product = (
+        # Обновляем все товары с этим артикулом у пользователя (по всем кабинетам)
+        matched = (
             db.query(Product)
             .join(Account, Product.account_id == Account.id)
             .filter(
                 Product.seller_sku == item['seller_sku'],
                 Account.user_id == current_user.id
             )
-            .first()
+            .all()
         )
-        if not product:
+        if not matched:
             results['errors'].append(f"Товар {item['seller_sku']!r} не найден в системе")
             continue
-        product.cost_price = item['cost_price']
-        results['updated'] += 1
+        for product in matched:
+            product.cost_price = item['cost_price']
+        results['updated'] += len(matched)
 
     # Один коммит в конце (fix: commit в цикле)
     try:
