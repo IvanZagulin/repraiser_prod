@@ -766,8 +766,17 @@ async def get_product_detail(
             "final_price": float(latest_snap.final_price) if latest_snap else None,
             "spp": float(latest_snap.spp) if latest_snap and latest_snap.spp else None,
             "discount": float(latest_snap.discount) if latest_snap and latest_snap.discount else None,
-            "competitor_price": float(latest_snap.competitor_price) if latest_snap and latest_snap.competitor_price else None,
-            "competitor_nm_id": latest_snap.competitor_nm_id if latest_snap else None,
+            # Only expose competitor data when the product actually uses competitor strategy
+            "competitor_price": (
+                float(latest_snap.competitor_price)
+                if latest_snap and latest_snap.competitor_price and product.config and product.config.strategy == "competitor"
+                else None
+            ),
+            "competitor_nm_id": (
+                latest_snap.competitor_nm_id
+                if latest_snap and product.config and product.config.strategy == "competitor"
+                else None
+            ),
             "in_stock": latest_snap.total_quantity > 0 if latest_snap and latest_snap.total_quantity else False,
             "is_in_promo": latest_snap.is_in_promo if latest_snap else False,
             "snapshot_at": latest_snap.snapshot_at.isoformat() if latest_snap else None,
