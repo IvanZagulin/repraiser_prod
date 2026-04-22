@@ -51,6 +51,8 @@ async def list_products(
     strategy: Optional[str] = Query(None, regex="^(rrp|competitor)$"),
     is_active: Optional[bool] = None,
     search: Optional[str] = Query(None, min_length=1, max_length=200),
+    margin_min: Optional[float] = Query(None),
+    margin_max: Optional[float] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=1000),
 ):
@@ -60,7 +62,7 @@ async def list_products(
         .join(Account, Product.account_id == Account.id)
         .filter(Account.user_id == current_user.id)
         .join(ProductConfig, Product.id == ProductConfig.product_id, isouter=True)
-        .options(_jl(Product.config))  # fix N+1: загружаем config в одном запросе
+        .options(_jl(Product.config))
     )
 
     if account_id:
@@ -77,8 +79,17 @@ async def list_products(
             cast(Product.nm_id, String).ilike(term),
         ))
 
+    # Margin filter: compute in Python, requires fetching all matching products first
+    margin_filter = margin_min is not None or margin_max is not None
+    if margin_filter:
+        query = query.filter(Product.cost_price.isnot(None))
+
     total = query.count()
-    products = query.offset((page - 1) * page_size).limit(page_size).all()
+    if margin_filter:
+        # Fetch all (no pagination) so we can filter by computed margin, then slice
+        products = query.all()
+    else:
+        products = query.offset((page - 1) * page_size).limit(page_size).all()
 
     # Настройки для расчёта маржи — батчевая загрузка (1 запрос вместо 6-12)
     uid = current_user.id
@@ -171,6 +182,17 @@ async def list_products(
                 product_data['margin'] = round((sp - cost_price - fees) / cost_price * 100, 1)
 
         response_products.append(ProductWithPriceResponse(**product_data))
+
+    # Apply margin filter after margin is computed, then re-paginate
+    if margin_filter:
+        filtered = [p for p in response_products
+                    if p.margin is not None
+                    and (margin_min is None or p.margin >= margin_min)
+                    and (margin_max is None or p.margin <= margin_max)]
+        total_filtered = len(filtered)
+        # Re-paginate on the filtered set (we fetched all above without offset/limit)
+        response_products = filtered[(page - 1) * page_size: page * page_size]
+        total = total_filtered
 
     return ProductListResponse(
         products=response_products,

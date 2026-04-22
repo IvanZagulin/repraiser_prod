@@ -45,6 +45,8 @@ export default function Products() {
   const [selected, setSelected] = useState(new Set());
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterAccount, setFilterAccount] = useState('');
+  const [marginOp, setMarginOp] = useState('gt');
+  const [marginVal, setMarginVal] = useState('');
   const [accounts, setAccounts] = useState([]);
   const [showBulkStrategy, setShowBulkStrategy] = useState(false);
   const [bulkStrategyType, setBulkStrategyType] = useState('rrp');
@@ -61,7 +63,7 @@ export default function Products() {
   // Reload when debounced search or strategy changes
   useEffect(() => {
     loadProducts(1);
-  }, [debouncedSearch, filterStrategy, filterStatus, filterAccount]);
+  }, [debouncedSearch, filterStrategy, filterStatus, filterAccount, marginVal, marginOp]);
 
   useEffect(() => {
     isMounted.current = true;
@@ -87,6 +89,10 @@ export default function Products() {
       if (filterStatus === 'active') params.is_active = true;
       if (filterStatus === 'inactive') params.is_active = false;
       if (filterAccount) params.account_id = filterAccount;
+      if (marginVal !== '' && !isNaN(Number(marginVal))) {
+        if (marginOp === 'gt') params.margin_min = Number(marginVal);
+        else params.margin_max = Number(marginVal);
+      }
       const response = await getProducts(params);
       setProducts(response.data.products);
       setTotalProducts(response.data.total);
@@ -309,6 +315,36 @@ export default function Products() {
               <option key={a.id} value={a.id}>{a.name}</option>
             ))}
           </select>
+
+          {/* Margin filter */}
+          <div className="flex items-center gap-1">
+            <span className="text-xs whitespace-nowrap" style={{ color: 'var(--text-3)' }}>Маржа</span>
+            <select
+              value={marginOp}
+              onChange={(e) => setMarginOp(e.target.value)}
+              className="input w-16 text-xs px-1"
+            >
+              <option value="gt">&gt;</option>
+              <option value="lt">&lt;</option>
+            </select>
+            <input
+              type="number"
+              placeholder="%"
+              value={marginVal}
+              onChange={(e) => setMarginVal(e.target.value)}
+              className="input w-20 text-xs"
+              min="-999"
+              max="9999"
+            />
+            {marginVal !== '' && (
+              <button
+                onClick={() => setMarginVal('')}
+                className="text-xs px-1.5 py-0.5 rounded"
+                style={{ color: 'var(--text-3)' }}
+                title="Сбросить"
+              >✕</button>
+            )}
+          </div>
 
           <div className="flex rounded-lg overflow-hidden border border-border bg-muted/50">
             <button
