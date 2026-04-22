@@ -72,14 +72,14 @@ def sync_wb_catalog_task(self, account_id: int):
                 UPDATE products p
                 SET image_url = COALESCE(p.image_url, c.image_url),
                     name = CASE
-                        WHEN (p.name IS NULL OR p.name LIKE 'Товар %') AND c.name IS NOT NULL AND c.name != ''
+                        WHEN (p.name IS NULL OR p.name LIKE 'Товар %' OR p.name = p.seller_sku) AND c.name IS NOT NULL AND c.name != ''
                         THEN c.name
                         ELSE p.name
                     END
                 FROM wb_catalog c
                 WHERE p.account_id = c.account_id
                   AND p.nm_id = c.nm_id
-                  AND (p.image_url IS NULL OR p.name IS NULL OR p.name LIKE 'Товар %')
+                  AND (p.image_url IS NULL OR p.name IS NULL OR p.name LIKE 'Товар %' OR p.name = p.seller_sku)
             """)).rowcount
             db.commit()
             if updated:

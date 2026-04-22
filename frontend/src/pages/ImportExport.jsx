@@ -399,11 +399,11 @@ export default function ImportExport() {
               </summary>
               <div className="mt-2 p-3 rounded-lg bg-muted/50 border border-border text-xs text-muted-foreground space-y-1">
                 <div><b>A</b> — Артикул продавца *</div>
-                <div><b>B</b> — Стратегия: <code>rrp</code> / <code>competitor</code> *</div>
+                <div><b>B</b> — Стратегия: <code>rrp</code> (РРЦ) / <code>competitor</code> (Конкурент) *</div>
                 <div><b>C</b> — Активен: <code>да</code> / <code>нет</code></div>
                 <div><b>D</b> — МРЦ — мин. цена *</div>
                 <div><b>E–H</b> — Макс. цена, РРЦ, допуск, кошелёк</div>
-                <div><b>I–L</b> — nmID конкурента, смещение</div>
+                <div><b>I</b> — nmID конкурента, <b>J</b> — тип смещения (rub/pct), <b>K</b> — направление (above/below), <b>L</b> — смещение</div>
               </div>
             </details>
           </div>

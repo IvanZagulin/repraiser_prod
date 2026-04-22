@@ -240,7 +240,7 @@ export default function Dashboard() {
         totalAccounts: accounts.length,
         totalProducts: s.total || prods.length,
         activeProducts: s.active ?? prods.filter((p) => p.config?.is_active).length,
-        inactiveProducts: s.inactive ?? prods.filter((p) => p.config && !p.config.is_active).length,
+        inactiveProducts: (s.total ?? prods.length) - (s.active ?? prods.filter((p) => p.config?.is_active).length),
         rrp: s.rrp ?? null,
         competitor: s.competitor ?? null,
         noConfig: s.no_config ?? null,
@@ -530,7 +530,7 @@ export default function Dashboard() {
                 <div className="pt-1 mt-1 border-t border-border">
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-muted-foreground">Всего</span>
-                    <span className="text-sm font-bold text-foreground">{products.length}</span>
+                    <span className="text-sm font-bold text-foreground">{stats.totalProducts}</span>
                   </div>
                 </div>
               </div>

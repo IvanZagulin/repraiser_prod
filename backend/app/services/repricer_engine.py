@@ -37,6 +37,8 @@ class RepricerEngine:
         self.user_id = user_id  # None → глобальные/дефолтные настройки
         self._user_settings: Optional[Dict] = None  # loaded once per run
         self._prefetched_prices: Dict[int, object] = {}  # nm_id -> PriceData, cleared per chunk
+        self._current_competitor_price: Optional[Decimal] = None  # set during competitor strategy
+        self._current_competitor_nm_id: Optional[int] = None  # set during competitor strategy
 
     def _load_user_settings(self) -> Dict:
         """Load all repricer settings in 2 queries to avoid N+1 per product."""
@@ -413,6 +415,8 @@ class RepricerEngine:
         Returns:
             Tuple (новая_цена_продавца, reason_code, reason_message)
         """
+        self._current_competitor_price = None
+        self._current_competitor_nm_id = None
         try:
             competitor_price, winning_nm_id = await self._get_competitor_price(config)
 
@@ -425,6 +429,9 @@ class RepricerEngine:
                 if not entries and not config.competitor_nm_id:
                     return None, "SKIPPED_INACTIVE", "Конкурент не настроен"
                 return None, "COMPETITOR_OOS", "Все конкуренты не в наличии"
+
+            self._current_competitor_price = competitor_price
+            self._current_competitor_nm_id = winning_nm_id
 
             spp = current_data.get('spp') or Decimal(0)
             seller_discount = current_data.get('discount') or Decimal(0)
@@ -717,10 +724,15 @@ class RepricerEngine:
             logger.error(f"Неизвестная стратегия: {config.strategy}")
             logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": "PARSE_ERROR", "duration_ms": int((time.monotonic() - _t0) * 1000)}))
             return "PARSE_ERROR"
+
+        # Capture competitor data set by _strategy_competitor (None for other strategies)
+        _snap_comp_price = self._current_competitor_price
+        _snap_comp_nm_id = self._current_competitor_nm_id
         
         # Если цена не изменилась
         if new_price is None:
-            self._save_price_snapshot(product, current_data)
+            self._save_price_snapshot(product, current_data,
+                competitor_nm_id=_snap_comp_nm_id, competitor_price=_snap_comp_price)
             self._save_price_change(
                 run, product, current_data, None, None,
                 reason_code, reason_msg
@@ -733,7 +745,8 @@ class RepricerEngine:
         
         # Если после лимитов цена не изменилась
         if final_new_price == current_data['seller_price']:
-            self._save_price_snapshot(product, current_data)
+            self._save_price_snapshot(product, current_data,
+                competitor_nm_id=_snap_comp_nm_id, competitor_price=_snap_comp_price)
             self._save_price_change(
                 run, product, current_data, final_new_price, None,
                 "NO_CHANGE", f"После применения лимитов цена осталась прежней ({final_new_price}₽)"
@@ -762,7 +775,8 @@ class RepricerEngine:
             updated_data['seller_price'] = final_new_price
             if new_final:
                 updated_data['final_price'] = new_final
-            self._save_price_snapshot(product, updated_data)
+            self._save_price_snapshot(product, updated_data,
+                competitor_nm_id=_snap_comp_nm_id, competitor_price=_snap_comp_price)
 
             self._save_price_change(
                 run, product, current_data, final_new_price, new_final,
@@ -773,7 +787,8 @@ class RepricerEngine:
             logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": _reason, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
             return _reason
         else:
-            self._save_price_snapshot(product, current_data)
+            self._save_price_snapshot(product, current_data,
+                competitor_nm_id=_snap_comp_nm_id, competitor_price=_snap_comp_price)
             self._save_price_change(
                 run, product, current_data, final_new_price, None,
                 "WB_API_ERROR", "Не удалось применить цену в WB API"
@@ -912,23 +927,31 @@ class RepricerEngine:
         else:
             return {"product": product, "needs_update": False, "skip_code": "PARSE_ERROR",
                     "current_data": current_data, "new_price": None, "limit_reason": None,
-                    "reason_msg": "Неизвестная стратегия", "_t0": _t0}
+                    "reason_msg": "Неизвестная стратегия", "_t0": _t0,
+                    "competitor_price": None, "competitor_nm_id": None}
+
+        # Capture competitor data set by _strategy_competitor (None for other strategies)
+        _snap_comp_price = self._current_competitor_price
+        _snap_comp_nm_id = self._current_competitor_nm_id
 
         if new_price is None:
             return {"product": product, "needs_update": False, "skip_code": reason_code,
                     "current_data": current_data, "new_price": None, "limit_reason": None,
-                    "reason_msg": reason_msg, "_t0": _t0}
+                    "reason_msg": reason_msg, "_t0": _t0,
+                    "competitor_price": _snap_comp_price, "competitor_nm_id": _snap_comp_nm_id}
 
         final_new_price, limit_reason = self._apply_limits(new_price, config)
 
         if final_new_price == current_data["seller_price"]:
             return {"product": product, "needs_update": False, "skip_code": "NO_CHANGE",
                     "current_data": current_data, "new_price": final_new_price,
-                    "limit_reason": limit_reason, "reason_msg": reason_msg, "_t0": _t0}
+                    "limit_reason": limit_reason, "reason_msg": reason_msg, "_t0": _t0,
+                    "competitor_price": _snap_comp_price, "competitor_nm_id": _snap_comp_nm_id}
 
         return {"product": product, "needs_update": True, "skip_code": None,
                 "current_data": current_data, "new_price": final_new_price,
-                "limit_reason": limit_reason, "reason_msg": reason_msg, "_t0": _t0}
+                "limit_reason": limit_reason, "reason_msg": reason_msg, "_t0": _t0,
+                "competitor_price": _snap_comp_price, "competitor_nm_id": _snap_comp_nm_id}
 
     def _finalize_decision(
         self,
@@ -946,11 +969,14 @@ class RepricerEngine:
         limit_reason = dec["limit_reason"]
         reason_msg = dec["reason_msg"]
         _t0 = dec.get("_t0", time.monotonic())
+        _comp_price = dec.get("competitor_price")
+        _comp_nm_id = dec.get("competitor_nm_id")
 
         if not dec["needs_update"]:
             reason_code = dec["skip_code"] or "SKIPPED_INACTIVE"
             if current_data:
-                self._save_price_snapshot(product, current_data)
+                self._save_price_snapshot(product, current_data,
+                    competitor_nm_id=_comp_nm_id, competitor_price=_comp_price)
                 self._save_price_change(run, product, current_data, new_price, None, reason_code, reason_msg)
             logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id,
                 "nm_id": product.nm_id, "sku": product.seller_sku, "reason": reason_code,
@@ -958,7 +984,8 @@ class RepricerEngine:
             return reason_code
 
         if failed:
-            self._save_price_snapshot(product, current_data)
+            self._save_price_snapshot(product, current_data,
+                competitor_nm_id=_comp_nm_id, competitor_price=_comp_price)
             self._save_price_change(run, product, current_data, new_price, None,
                                     "WB_API_ERROR", "Не удалось применить цену в WB API (batch)")
             logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id,
@@ -976,7 +1003,8 @@ class RepricerEngine:
         updated_data["seller_price"] = new_price
         if new_final:
             updated_data["final_price"] = new_final
-        self._save_price_snapshot(product, updated_data)
+        self._save_price_snapshot(product, updated_data,
+            competitor_nm_id=_comp_nm_id, competitor_price=_comp_price)
         reason_code = limit_reason if limit_reason != "UPDATED" else "UPDATED"
         self._save_price_change(run, product, current_data, new_price, new_final,
                                 reason_code, str(reason_msg) + ". Цена применена: " + str(new_price) + "₽")

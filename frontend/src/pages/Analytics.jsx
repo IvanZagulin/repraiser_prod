@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { BarChart2, TrendingUp, CheckCircle2, RefreshCw, Activity, Loader2 } from 'lucide-react';
-import { getRepricerRuns, getProducts, getPriceDynamics, getCompetitorTrends } from '../api/client';
+import { getRepricerRuns, getProducts, getPriceDynamics, getCompetitorTrends, getProductStats } from '../api/client';
 import { formatMsk } from '../utils/date';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, LineChart, Line,
@@ -50,16 +50,20 @@ export default function Analytics() {
   const [priceDays, setPriceDays] = useState(30);
   const [priceDynamics, setPriceDynamics] = useState([]);
   const [priceLoading, setPriceLoading] = useState(false);
-  const productSearchRef = useState(null);
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchTimerRef = useState(null);
 
   const [runStats, setRunStats] = useState({ total: 0, total_updated: 0, total_completed: 0 });
+  const [productStats, setProductStats] = useState(null);
 
   const fetchMainData = () =>
     Promise.all([
       getRepricerRuns({ limit: 1000 }).catch(() => ({ data: { runs: [], total: 0, total_updated: 0, total_completed: 0 } })),
       getProducts({ page: 1, page_size: 1000 }).catch(() => ({ data: { products: [] } })),
       getCompetitorTrends(30).catch(() => ({ data: { trends: [] } })),
-    ]).then(([runsRes, prodRes, trendsRes]) => {
+      getProductStats().catch(() => ({ data: null })),
+    ]).then(([runsRes, prodRes, trendsRes, statsRes]) => {
       setRuns(runsRes.data.runs || []);
       setRunStats({
         total: runsRes.data.total ?? 0,
@@ -68,6 +72,7 @@ export default function Analytics() {
       });
       setProducts(prodRes.data.products || []);
       setCompetitorTrends(trendsRes.data.trends || trendsRes.data || []);
+      setProductStats(statsRes.data);
     });
 
   // Load on mount + auto-refresh every 60s
@@ -100,6 +105,20 @@ export default function Analytics() {
       .finally(() => setPriceLoading(false));
   }, [selectedProductId, priceDays]);
 
+  const handleProductSearchChange = (val) => {
+    setProductSearch(val);
+    setShowProductDropdown(true);
+    if (searchTimerRef[0]) clearTimeout(searchTimerRef[0]);
+    if (!val.trim()) { setSearchResults([]); return; }
+    searchTimerRef[0] = setTimeout(() => {
+      setSearchLoading(true);
+      getProducts({ search: val.trim(), page: 1, page_size: 50 })
+        .then((res) => setSearchResults(res.data.products || []))
+        .catch(() => setSearchResults([]))
+        .finally(() => setSearchLoading(false));
+    }, 300);
+  };
+
   /* ── Derived data ── */
 
   // Runs activity chart (last 30, chronological)
@@ -120,17 +139,14 @@ export default function Analytics() {
     byDay[day] = (byDay[day] || 0) + r.updated_count;
   });
   const byDayChart = Object.entries(byDay)
-    .slice(-14)
+    .slice(0, 14)
+    .reverse()
     .map(([day, count]) => ({ day, count }));
 
-  // Strategy distribution (pie)
-  const stratMap = { rrp: 0, competitor: 0, none: 0 };
-  products.forEach((p) => {
-    const s = p.config?.strategy;
-    if (s === 'rrp') stratMap.rrp++;
-    else if (s === 'competitor') stratMap.competitor++;
-    else stratMap.none++;
-  });
+  // Strategy distribution (pie) — use server-side stats for accuracy with large catalogs
+  const stratMap = productStats
+    ? { rrp: productStats.rrp ?? 0, competitor: productStats.competitor ?? 0, none: productStats.no_config ?? 0 }
+    : { rrp: 0, competitor: 0, none: 0 };
   const pieData = Object.entries(stratMap)
     .filter(([, v]) => v > 0)
     .map(([key, value]) => ({ name: PIE_LABELS[key], value, key }));
@@ -143,7 +159,7 @@ export default function Analytics() {
 
   // Price dynamics chart data
   const priceChartData = priceDynamics.map((p) => ({
-    date: p.date ? formatMsk(p.date, 'dd.MM') : p.label || '',
+    date: p.snapshot_at ? formatMsk(p.snapshot_at, 'dd.MM') : p.label || '',
     seller_price: p.seller_price,
     final_price: p.final_price,
     competitor_price: p.competitor_price,
@@ -255,7 +271,7 @@ export default function Analytics() {
               type="text"
               placeholder="Поиск по артикулу или названию..."
               value={productSearch}
-              onChange={(e) => { setProductSearch(e.target.value); setShowProductDropdown(true); }}
+              onChange={(e) => handleProductSearchChange(e.target.value)}
               onFocus={() => setShowProductDropdown(true)}
               className="w-full px-3 py-2 rounded-lg text-sm border focus:outline-none focus:ring-2"
               style={{
@@ -284,16 +300,10 @@ export default function Analytics() {
                 }}
                 onMouseDown={(e) => e.preventDefault()}
               >
-                {products
-                  .filter((p) => {
-                    const q = productSearch.toLowerCase();
-                    return (
-                      (p.seller_sku && p.seller_sku.toLowerCase().includes(q)) ||
-                      (p.name && p.name.toLowerCase().includes(q)) ||
-                      String(p.nm_id).includes(q)
-                    );
-                  })
-                  .slice(0, 50)
+                {searchLoading ? (
+                  <div className="px-3 py-2 text-sm" style={{ color: 'var(--text-3)' }}>Поиск...</div>
+                ) : null}
+                {searchResults
                   .map((p) => (
                     <div
                       key={p.id}
@@ -309,14 +319,7 @@ export default function Analytics() {
                       {p.name && <span className="ml-2 text-xs" style={{ color: 'var(--text-3)' }}>{p.name}</span>}
                     </div>
                   ))}
-                {products.filter((p) => {
-                  const q = productSearch.toLowerCase();
-                  return (
-                    (p.seller_sku && p.seller_sku.toLowerCase().includes(q)) ||
-                    (p.name && p.name.toLowerCase().includes(q)) ||
-                    String(p.nm_id).includes(q)
-                  );
-                }).length === 0 && (
+                {!searchLoading && searchResults.length === 0 && productSearch.trim() && (
                   <div className="px-3 py-2 text-sm" style={{ color: 'var(--text-3)' }}>Ничего не найдено</div>
                 )}
               </div>
@@ -545,7 +548,7 @@ export default function Analytics() {
                   <div className="flex items-center justify-between">
                     <span className="text-xs" style={{ color: 'var(--text-3)' }}>Всего</span>
                     <span className="text-sm font-bold" style={{ color: 'var(--text)' }}>
-                      {products.length}
+                      {productStats?.total ?? products.length}
                     </span>
                   </div>
                 </div>
@@ -574,7 +577,7 @@ export default function Analytics() {
           {Array.isArray(competitorTrends) && competitorTrends.length > 0 ? (
             <div className="space-y-5">
               {/* If trends have chart-ready data, render a multi-line chart */}
-              {competitorTrends[0]?.points ? (
+              {competitorTrends[0]?.data ? (
                 <ResponsiveContainer width="100%" height={260}>
                   <LineChart margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f4" />
@@ -599,9 +602,9 @@ export default function Analytics() {
                       return (
                         <Line
                           key={ct.product_name || idx}
-                          data={ct.points.map((p) => ({
-                            date: p.date ? formatMsk(p.date, 'dd.MM') : p.label || '',
-                            [ct.product_name || `competitor_${idx}`]: p.price,
+                          data={ct.data.map((p) => ({
+                            date: p.snapshot_at ? formatMsk(p.snapshot_at, 'dd.MM') : p.label || '',
+                            [ct.product_name || `competitor_${idx}`]: p.competitor_price,
                           }))}
                           type="monotone"
                           dataKey={ct.product_name || `competitor_${idx}`}
