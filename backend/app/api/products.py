@@ -57,6 +57,33 @@ async def list_products(
     page_size: int = Query(50, ge=1, le=1000),
 ):
     from sqlalchemy.orm import joinedload as _jl
+    from sqlalchemy import func as sa_func, literal
+
+    # Load fee settings first — needed for margin SQL expression
+    uid = current_user.id
+    from app.models.app_setting import AppSetting as _AS
+    _fee_keys = ["commission_type", "commission_value", "logistics_type",
+                 "logistics_value", "acquiring_type", "acquiring_value"]
+    _fee_defaults = {"commission_type": "pct", "commission_value": "0.0",
+                     "logistics_type": "rub", "logistics_value": "0.0",
+                     "acquiring_type": "pct", "acquiring_value": "0.0"}
+    _fee_rows = db.query(_AS).filter(_AS.key.in_(_fee_keys), _AS.user_id.in_([uid, None])).all()
+    _fee_map = dict(_fee_defaults)
+    for row in _fee_rows:
+        if row.user_id is None and row.key not in {r.key for r in _fee_rows if r.user_id == uid}:
+            _fee_map[row.key] = row.value
+        elif row.user_id == uid:
+            _fee_map[row.key] = row.value
+    commission_type  = _fee_map["commission_type"]
+    commission_value = float(_fee_map["commission_value"])
+    logistics_type   = _fee_map["logistics_type"]
+    logistics_value  = float(_fee_map["logistics_value"])
+    acquiring_type   = _fee_map["acquiring_type"]
+    acquiring_value  = float(_fee_map["acquiring_value"])
+
+    margin_filter = margin_min is not None or margin_max is not None
+
+    # Base query
     query = (
         db.query(Product)
         .join(Account, Product.account_id == Account.id)
@@ -79,42 +106,45 @@ async def list_products(
             cast(Product.nm_id, String).ilike(term),
         ))
 
-    # Margin filter: compute in Python, requires fetching all matching products first
-    margin_filter = margin_min is not None or margin_max is not None
     if margin_filter:
-        query = query.filter(Product.cost_price.isnot(None))
+        # Build SQL margin expression and filter in the DB — avoids loading all products in Python
+        latest_snap_subq = (
+            db.query(
+                PriceSnapshot.product_id,
+                sa_func.max(PriceSnapshot.snapshot_at).label("max_at"),
+            )
+            .group_by(PriceSnapshot.product_id)
+            .subquery()
+        )
+
+        sp = PriceSnapshot.seller_price
+        cp = Product.cost_price
+
+        def _fee(ftype, fval):
+            return sp * literal(fval / 100) if ftype == "pct" else literal(fval)
+
+        fees_expr = _fee(commission_type, commission_value) + \
+                    _fee(logistics_type,  logistics_value)  + \
+                    _fee(acquiring_type,  acquiring_value)
+        margin_expr = (sp - cp - fees_expr) / cp * 100
+
+        query = (
+            query
+            .join(latest_snap_subq, Product.id == latest_snap_subq.c.product_id)
+            .join(PriceSnapshot,
+                  (PriceSnapshot.product_id == latest_snap_subq.c.product_id) &
+                  (PriceSnapshot.snapshot_at == latest_snap_subq.c.max_at))
+            .filter(Product.cost_price.isnot(None), Product.cost_price > 0)
+        )
+        if margin_min is not None:
+            query = query.filter(margin_expr >= margin_min)
+        if margin_max is not None:
+            query = query.filter(margin_expr <= margin_max)
 
     total = query.count()
-    if margin_filter:
-        # Fetch all (no pagination) so we can filter by computed margin, then slice
-        products = query.all()
-    else:
-        products = query.offset((page - 1) * page_size).limit(page_size).all()
-
-    # Настройки для расчёта маржи — батчевая загрузка (1 запрос вместо 6-12)
-    uid = current_user.id
-    from app.models.app_setting import AppSetting as _AS
-    _fee_keys = ["commission_type", "commission_value", "logistics_type",
-                 "logistics_value", "acquiring_type", "acquiring_value"]
-    _fee_defaults = {"commission_type": "pct", "commission_value": "0.0",
-                     "logistics_type": "rub", "logistics_value": "0.0",
-                     "acquiring_type": "pct", "acquiring_value": "0.0"}
-    _fee_rows = db.query(_AS).filter(_AS.key.in_(_fee_keys), _AS.user_id.in_([uid, None])).all()
-    _fee_map = dict(_fee_defaults)  # start with defaults
-    for row in _fee_rows:
-        if row.user_id is None and row.key not in {r.key for r in _fee_rows if r.user_id == uid}:
-            _fee_map[row.key] = row.value
-        elif row.user_id == uid:
-            _fee_map[row.key] = row.value
-    commission_type  = _fee_map["commission_type"]
-    commission_value = float(_fee_map["commission_value"])
-    logistics_type   = _fee_map["logistics_type"]
-    logistics_value  = float(_fee_map["logistics_value"])
-    acquiring_type   = _fee_map["acquiring_type"]
-    acquiring_value  = float(_fee_map["acquiring_value"])
+    products = query.offset((page - 1) * page_size).limit(page_size).all()
 
     # Batch-загрузка последних снимков цен (fix N+1: 1 запрос вместо N)
-    from sqlalchemy import func as sa_func
     product_ids_page = [p.id for p in products]
     last_snapshots: dict = {}
     if product_ids_page:
@@ -182,17 +212,6 @@ async def list_products(
                 product_data['margin'] = round((sp - cost_price - fees) / cost_price * 100, 1)
 
         response_products.append(ProductWithPriceResponse(**product_data))
-
-    # Apply margin filter after margin is computed, then re-paginate
-    if margin_filter:
-        filtered = [p for p in response_products
-                    if p.margin is not None
-                    and (margin_min is None or p.margin >= margin_min)
-                    and (margin_max is None or p.margin <= margin_max)]
-        total_filtered = len(filtered)
-        # Re-paginate on the filtered set (we fetched all above without offset/limit)
-        response_products = filtered[(page - 1) * page_size: page * page_size]
-        total = total_filtered
 
     return ProductListResponse(
         products=response_products,
