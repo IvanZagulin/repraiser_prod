@@ -53,6 +53,7 @@ async def list_products(
     search: Optional[str] = Query(None, min_length=1, max_length=200),
     margin_min: Optional[float] = Query(None),
     margin_max: Optional[float] = Query(None),
+    margin_sort: Optional[str] = Query(None, regex="^(asc|desc)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=1000),
 ):
@@ -140,6 +141,10 @@ async def list_products(
             query = query.filter(margin_expr >= margin_min)
         if margin_max is not None:
             query = query.filter(margin_expr <= margin_max)
+        if margin_sort == "asc":
+            query = query.order_by(margin_expr.asc())
+        elif margin_sort == "desc":
+            query = query.order_by(margin_expr.desc())
 
     total = query.count()
     products = query.offset((page - 1) * page_size).limit(page_size).all()

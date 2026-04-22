@@ -112,16 +112,17 @@ export default function Analytics() {
   /* ── Margin analysis state ── */
   const [marginOp, setMarginOp] = useState('lt');
   const [marginVal, setMarginVal] = useState('');
+  const [marginSort, setMarginSort] = useState('asc');
   const [marginProducts, setMarginProducts] = useState([]);
   const [marginTotal, setMarginTotal] = useState(0);
   const [marginLoading, setMarginLoading] = useState(false);
   const [marginPage, setMarginPage] = useState(1);
   const navigate = useNavigate();
 
-  const loadMarginProducts = useCallback((op, val, p = 1) => {
+  const loadMarginProducts = useCallback((op, val, sort, p = 1) => {
     if (val === '' || isNaN(Number(val))) return;
     setMarginLoading(true);
-    const params = { page: p, page_size: 50 };
+    const params = { page: p, page_size: 50, margin_sort: sort };
     if (op === 'gt') params.margin_min = Number(val);
     else params.margin_max = Number(val);
     getProducts(params)
@@ -134,7 +135,7 @@ export default function Analytics() {
       .finally(() => setMarginLoading(false));
   }, []);
 
-  const applyMarginFilter = () => loadMarginProducts(marginOp, marginVal, 1);
+  const applyMarginFilter = () => loadMarginProducts(marginOp, marginVal, marginSort, 1);
 
   const getMarginColor = (m) => {
     if (m == null) return '#9ca3af';
@@ -574,6 +575,24 @@ export default function Analytics() {
               />
               <span className="text-sm font-semibold" style={{ color: 'var(--text-2)' }}>%</span>
             </div>
+            <div className="flex items-center gap-1 rounded-lg border overflow-hidden" style={{ borderColor: 'var(--border)' }}>
+              <button
+                onClick={() => { setMarginSort('asc'); if (marginProducts.length) loadMarginProducts(marginOp, marginVal, 'asc', 1); }}
+                className="px-3 py-2 text-xs font-semibold transition-colors"
+                style={{
+                  background: marginSort === 'asc' ? 'rgba(245,158,11,.15)' : 'transparent',
+                  color: marginSort === 'asc' ? '#f59e0b' : 'var(--text-3)',
+                }}
+              >↑ По возр.</button>
+              <button
+                onClick={() => { setMarginSort('desc'); if (marginProducts.length) loadMarginProducts(marginOp, marginVal, 'desc', 1); }}
+                className="px-3 py-2 text-xs font-semibold transition-colors"
+                style={{
+                  background: marginSort === 'desc' ? 'rgba(245,158,11,.15)' : 'transparent',
+                  color: marginSort === 'desc' ? '#f59e0b' : 'var(--text-3)',
+                }}
+              >↓ По убыв.</button>
+            </div>
             <button
               onClick={applyMarginFilter}
               disabled={marginVal === '' || marginLoading}
@@ -604,10 +623,21 @@ export default function Analytics() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr style={{ background: 'hsl(var(--muted))' }}>
-                      {['Артикул', 'Название', 'Стратегия', 'Цена продавца', 'Маржа', ''].map((h) => (
-                        <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider"
+                      {['Артикул', 'Название', 'Стратегия', 'Цена продавца', '', ''].map((h, i) => (
+                        <th key={i} className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider"
                           style={{ color: '#9ca3af' }}>
-                          {h}
+                          {i === 4 ? (
+                            <button
+                              className="flex items-center gap-1 hover:text-yellow-500 transition-colors"
+                              onClick={() => {
+                                const next = marginSort === 'asc' ? 'desc' : 'asc';
+                                setMarginSort(next);
+                                loadMarginProducts(marginOp, marginVal, next, 1);
+                              }}
+                            >
+                              Маржа {marginSort === 'asc' ? '↑' : '↓'}
+                            </button>
+                          ) : h}
                         </th>
                       ))}
                     </tr>
@@ -665,7 +695,7 @@ export default function Analytics() {
                 <div className="flex items-center justify-center gap-2 mt-4">
                   <button
                     disabled={marginPage === 1}
-                    onClick={() => loadMarginProducts(marginOp, marginVal, marginPage - 1)}
+                    onClick={() => loadMarginProducts(marginOp, marginVal, marginSort, marginPage - 1)}
                     className="px-3 py-1.5 rounded-lg text-xs border disabled:opacity-40"
                     style={{ borderColor: 'var(--border)' }}
                   >← Назад</button>
@@ -674,7 +704,7 @@ export default function Analytics() {
                   </span>
                   <button
                     disabled={marginPage >= Math.ceil(marginTotal / 50)}
-                    onClick={() => loadMarginProducts(marginOp, marginVal, marginPage + 1)}
+                    onClick={() => loadMarginProducts(marginOp, marginVal, marginSort, marginPage + 1)}
                     className="px-3 py-1.5 rounded-lg text-xs border disabled:opacity-40"
                     style={{ borderColor: 'var(--border)' }}
                   >Вперёд →</button>
