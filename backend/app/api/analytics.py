@@ -71,6 +71,8 @@ def price_dynamics(
             "seller_price": float(s.seller_price) if s.seller_price else None,
             "final_price": float(s.final_price) if s.final_price else None,
             "competitor_price": float(s.competitor_price) if s.competitor_price else None,
+            "spp": float(s.spp) if s.spp else None,
+            "discount": float(s.discount) if s.discount else None,
         }
         for s in snapshots
     ]
