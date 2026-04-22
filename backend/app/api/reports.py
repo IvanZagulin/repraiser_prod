@@ -22,7 +22,7 @@ router = APIRouter()
 limiter = Limiter(key_func=get_real_ip)
 
 
-@router.post("/generate")
+@router.get("/generate")
 @limiter.limit("10/minute")
 def generate_report(
     request: Request,
