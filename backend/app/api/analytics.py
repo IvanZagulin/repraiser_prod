@@ -9,7 +9,7 @@ from sqlalchemy import func, and_, desc
 from slowapi import Limiter
 
 from app.database import get_db
-from app.models import Account, Product, User
+from app.models import Account, Product, User, ProductConfig
 from app.models.price_snapshot import PriceSnapshot
 from app.models.price_change import PriceChange
 from app.models.repricer_run import RepricerRun
@@ -123,13 +123,24 @@ def competitor_trends(
     current_user: User = Depends(get_current_user),
 ):
     """Competitor price trends for products with competitor strategy."""
-    product_ids = _user_product_ids(db, current_user)
-    if not product_ids:
+    # Only query products with competitor strategy — avoids scanning snapshots for all 30k products
+    competitor_product_ids = (
+        db.query(Product.id)
+        .join(Account, Product.account_id == Account.id)
+        .join(ProductConfig, ProductConfig.product_id == Product.id)
+        .filter(
+            Account.user_id == current_user.id,
+            ProductConfig.strategy == "competitor",
+        )
+        .all()
+    )
+    competitor_product_ids = [r[0] for r in competitor_product_ids]
+    if not competitor_product_ids:
         return []
 
     since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
 
-    # Get products that have at least one competitor snapshot
+    # Limit to top-50 products by snapshot count to avoid huge response
     rows = (
         db.query(
             PriceSnapshot.product_id,
@@ -137,11 +148,12 @@ def competitor_trends(
             PriceSnapshot.competitor_price,
         )
         .filter(
-            PriceSnapshot.product_id.in_(product_ids),
+            PriceSnapshot.product_id.in_(competitor_product_ids),
             PriceSnapshot.snapshot_at >= since,
             PriceSnapshot.competitor_price.isnot(None),
         )
         .order_by(PriceSnapshot.product_id, PriceSnapshot.snapshot_at.asc())
+        .limit(10000)
         .all()
     )
 

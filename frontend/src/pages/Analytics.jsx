@@ -58,7 +58,7 @@ export default function Analytics() {
 
   const fetchMainData = () =>
     Promise.all([
-      getRepricerRuns({ limit: 1000 }).catch(() => ({ data: { runs: [], total: 0, total_updated: 0, total_completed: 0 } })),
+      getRepricerRuns({ limit: 100 }).catch(() => ({ data: { runs: [], total: 0, total_updated: 0, total_completed: 0 } })),
       getCompetitorTrends(30).catch(() => ({ data: { trends: [] } })),
       getProductStats().catch(() => ({ data: null })),
     ]).then(([runsRes, trendsRes, statsRes]) => {
