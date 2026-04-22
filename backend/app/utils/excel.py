@@ -339,19 +339,28 @@ class ExcelExporter:
             ws.append(row)
 
         # Раскраска строк по статусу
-        status_fill = {
-            "Активен":      PatternFill(start_color=COLOR_GREEN,  end_color=COLOR_GREEN,  fill_type="solid"),
-            "Отключен":     PatternFill(start_color=COLOR_ORANGE, end_color=COLOR_ORANGE, fill_type="solid"),
-            "Не настроен":  PatternFill(start_color=COLOR_GRAY,   end_color=COLOR_GRAY,   fill_type="solid"),
-        }
-        for row_idx in range(2, ws.max_row + 1):
-            status_val = ws.cell(row=row_idx, column=5).value
+        fill_active      = PatternFill(start_color=COLOR_GREEN,  end_color=COLOR_GREEN,  fill_type="solid")
+        fill_inactive    = PatternFill(start_color=COLOR_ORANGE, end_color=COLOR_ORANGE, fill_type="solid")
+        fill_unconfigured = PatternFill(start_color=COLOR_GRAY,  end_color=COLOR_GRAY,   fill_type="solid")
+        status_fill = {"Активен": fill_active, "Отключен": fill_inactive, "Не настроен": fill_unconfigured}
+        num_cols = len(headers)
+        for row_idx, p in enumerate(products_data, start=2):
+            cfg = p.get("config") or {}
+            if not cfg:
+                status_val = "Не настроен"
+            elif cfg.get("is_active"):
+                status_val = "Активен"
+            else:
+                status_val = "Отключен"
             fill = status_fill.get(status_val)
             if fill:
-                for cell in ws[row_idx]:
-                    cell.fill = fill
+                for col_idx in range(1, num_cols + 1):
+                    ws.cell(row=row_idx, column=col_idx).fill = fill
 
-        ExcelExporter.auto_size_columns(ws)
+        # Фиксированные ширины — быстрее auto_size для тысяч строк
+        col_widths = [20, 30, 12, 18, 12, 14, 10, 12, 10, 12, 14, 16, 14, 14, 12, 18, 16, 18]
+        for i, width in enumerate(col_widths, start=1):
+            ws.column_dimensions[get_column_letter(i)].width = width
         ws.freeze_panes = "A2"
 
         output = BytesIO()
