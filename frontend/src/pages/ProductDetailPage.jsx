@@ -364,23 +364,25 @@ export default function ProductDetailPage() {
             )}
           </div>
 
-          {/* Competitor price */}
-          <div className="card">
-            <p className="text-xs mb-1" style={{ color: 'var(--text-3)' }}>Конкурент</p>
-            <p className="text-xl font-bold" style={{ color: '#f97316' }}>
-              {current_price?.competitor_price ? `${fmt(current_price.competitor_price)}₽` : '—'}
-            </p>
-            {current_price?.competitor_nm_id && (
-              <a
-                href={`https://www.wildberries.ru/catalog/${current_price.competitor_nm_id}/detail.aspx`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-primary hover:underline mt-1 inline-flex items-center gap-1"
-              >
-                #{current_price.competitor_nm_id} <ExternalLink className="w-3 h-3" />
-              </a>
-            )}
-          </div>
+          {/* Competitor price — only for competitor strategy */}
+          {config?.strategy === 'competitor' && (
+            <div className="card">
+              <p className="text-xs mb-1" style={{ color: 'var(--text-3)' }}>Конкурент</p>
+              <p className="text-xl font-bold" style={{ color: '#f97316' }}>
+                {current_price?.competitor_price ? `${fmt(current_price.competitor_price)}₽` : '—'}
+              </p>
+              {current_price?.competitor_nm_id && (
+                <a
+                  href={`https://www.wildberries.ru/catalog/${current_price.competitor_nm_id}/detail.aspx`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-primary hover:underline mt-1 inline-flex items-center gap-1"
+                >
+                  #{current_price.competitor_nm_id} <ExternalLink className="w-3 h-3" />
+                </a>
+              )}
+            </div>
+          )}
 
           {/* Price range 30d */}
           <div className="card">
