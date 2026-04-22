@@ -246,6 +246,11 @@ export default function Analytics() {
               </CardTitle>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
+              {!selectedProductId && (
+                <span className="text-[10px]" style={{ color: 'var(--text-3)' }}>
+                  Выберите товар↓
+                </span>
+              )}
               {DAYS_OPTIONS.map((d) => (
                 <Button
                   key={d}
@@ -253,7 +258,10 @@ export default function Analytics() {
                   variant={priceDays === d ? 'default' : 'outline'}
                   className="text-xs h-7 px-3"
                   style={priceDays === d ? { background: '#00c8ff', color: '#fff', borderColor: '#00c8ff' } : {}}
-                  onClick={() => setPriceDays(d)}
+                  onClick={() => {
+                    setPriceDays(d);
+                    if (!selectedProductId) toast('Сначала выберите товар', { icon: '👆' });
+                  }}
                 >
                   {d} дн.
                 </Button>
@@ -568,100 +576,62 @@ export default function Analytics() {
             <Badge variant="outline" className="ml-2 text-[10px]" style={{ borderColor: 'rgba(245,158,11,.3)', color: '#f59e0b' }}>
               30 дней
             </Badge>
+            {Array.isArray(competitorTrends) && competitorTrends.length > 5 && (
+              <span className="text-[10px] ml-auto" style={{ color: 'var(--text-3)' }}>
+                Топ-5 из {competitorTrends.length}
+              </span>
+            )}
           </div>
         </CardHeader>
         <CardContent>
-          {Array.isArray(competitorTrends) && competitorTrends.length > 0 ? (
-            <div className="space-y-5">
-              {/* If trends have chart-ready data, render a multi-line chart */}
-              {competitorTrends[0]?.data ? (
-                <ResponsiveContainer width="100%" height={260}>
-                  <LineChart margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f4" />
-                    <XAxis
-                      dataKey="date"
-                      tick={{ fontSize: 10, fill: '#9ca3af' }}
-                      tickLine={false}
-                      interval="preserveStartEnd"
-                      allowDuplicatedCategory={false}
+          {Array.isArray(competitorTrends) && competitorTrends.length > 0 && competitorTrends[0]?.data ? (
+            <ResponsiveContainer width="100%" height={260}>
+              <LineChart margin={{ top: 8, right: 16, left: 0, bottom: 40 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f4" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10, fill: '#9ca3af' }}
+                  tickLine={false}
+                  interval="preserveStartEnd"
+                  allowDuplicatedCategory={false}
+                />
+                <YAxis
+                  tick={{ fontSize: 10, fill: '#9ca3af' }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={52}
+                  tickFormatter={(v) => v.toLocaleString('ru')}
+                />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(v, name) => [v?.toLocaleString('ru') + ' \u20BD', name]}
+                />
+                <Legend
+                  wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
+                  formatter={(name) => name.length > 25 ? name.slice(0, 25) + '…' : name}
+                />
+                {competitorTrends.slice(0, 5).map((ct, idx) => {
+                  const colors = ['#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#10b981'];
+                  const shortName = (ct.product_name || `Конкурент ${idx + 1}`).slice(0, 30);
+                  return (
+                    <Line
+                      key={ct.product_id || idx}
+                      data={ct.data.map((p) => ({
+                        date: p.snapshot_at ? formatMsk(p.snapshot_at, 'dd.MM') : '',
+                        [shortName]: p.competitor_price,
+                      }))}
+                      type="monotone"
+                      dataKey={shortName}
+                      name={shortName}
+                      stroke={colors[idx % colors.length]}
+                      strokeWidth={2}
+                      dot={false}
+                      activeDot={{ r: 3 }}
                     />
-                    <YAxis
-                      tick={{ fontSize: 10, fill: '#9ca3af' }}
-                      tickLine={false}
-                      axisLine={false}
-                      width={52}
-                      tickFormatter={(v) => v.toLocaleString('ru')}
-                    />
-                    <Tooltip contentStyle={tooltipStyle} />
-                    <Legend wrapperStyle={{ fontSize: 11 }} />
-                    {competitorTrends.map((ct, idx) => {
-                      const colors = ['#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#10b981'];
-                      return (
-                        <Line
-                          key={ct.product_name || idx}
-                          data={ct.data.map((p) => ({
-                            date: p.snapshot_at ? formatMsk(p.snapshot_at, 'dd.MM') : p.label || '',
-                            [ct.product_name || `competitor_${idx}`]: p.competitor_price,
-                          }))}
-                          type="monotone"
-                          dataKey={ct.product_name || `competitor_${idx}`}
-                          name={ct.product_name || `Конкурент ${idx + 1}`}
-                          stroke={colors[idx % colors.length]}
-                          strokeWidth={2}
-                          dot={false}
-                          activeDot={{ r: 3 }}
-                        />
-                      );
-                    })}
-                  </LineChart>
-                </ResponsiveContainer>
-              ) : (
-                /* Fallback: render mini-cards for each competitor entry */
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {competitorTrends.map((ct, idx) => (
-                    <div
-                      key={idx}
-                      className="rounded-xl p-4 border"
-                      style={{
-                        background: 'hsl(var(--muted))',
-                        borderColor: 'var(--border, #e5e7eb)',
-                      }}
-                    >
-                      <p className="text-xs font-semibold truncate mb-2" style={{ color: 'var(--text)' }}>
-                        {ct.product_name || ct.name || `Конкурент ${idx + 1}`}
-                      </p>
-                      <div className="flex items-end justify-between">
-                        <div>
-                          <p className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: '#9ca3af' }}>
-                            Текущая цена
-                          </p>
-                          <p className="text-lg font-bold" style={{ color: '#f59e0b' }}>
-                            {(ct.current_price ?? ct.price ?? 0).toLocaleString('ru')} {'\u20BD'}
-                          </p>
-                        </div>
-                        {ct.change_percent != null && (
-                          <Badge
-                            variant="outline"
-                            className="text-[10px] font-semibold"
-                            style={{
-                              borderColor: ct.change_percent >= 0 ? 'rgba(239,68,68,.3)' : 'rgba(34,197,94,.3)',
-                              color: ct.change_percent >= 0 ? '#ef4444' : '#16a34a',
-                            }}
-                          >
-                            {ct.change_percent >= 0 ? '+' : ''}{ct.change_percent.toFixed(1)}%
-                          </Badge>
-                        )}
-                      </div>
-                      {ct.min_price != null && ct.max_price != null && (
-                        <p className="text-[10px] mt-2" style={{ color: 'var(--text-3)' }}>
-                          Диапазон: {ct.min_price.toLocaleString('ru')} — {ct.max_price.toLocaleString('ru')} {'\u20BD'}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+                  );
+                })}
+              </LineChart>
+            </ResponsiveContainer>
           ) : (
             <div className="flex items-center justify-center h-40 rounded-lg" style={{ background: 'hsl(var(--muted))' }}>
               <p className="text-sm" style={{ color: 'var(--text-3)' }}>
