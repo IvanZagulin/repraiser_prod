@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { BarChart2, TrendingUp, CheckCircle2, RefreshCw, Activity, Loader2 } from 'lucide-react';
 import { getRepricerRuns, getProducts, getPriceDynamics, getCompetitorTrends, getProductStats } from '../api/client';
 import { formatMsk } from '../utils/date';
@@ -40,7 +40,6 @@ const tooltipStyle = {
 export default function Analytics() {
   const [loading, setLoading] = useState(true);
   const [runs, setRuns] = useState([]);
-  const [products, setProducts] = useState([]);
   const [competitorTrends, setCompetitorTrends] = useState([]);
 
   // Price dynamics state
@@ -52,7 +51,7 @@ export default function Analytics() {
   const [priceLoading, setPriceLoading] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
-  const searchTimerRef = useState(null);
+  const searchTimerRef = useRef(null);
 
   const [runStats, setRunStats] = useState({ total: 0, total_updated: 0, total_completed: 0 });
   const [productStats, setProductStats] = useState(null);
@@ -60,17 +59,15 @@ export default function Analytics() {
   const fetchMainData = () =>
     Promise.all([
       getRepricerRuns({ limit: 1000 }).catch(() => ({ data: { runs: [], total: 0, total_updated: 0, total_completed: 0 } })),
-      getProducts({ page: 1, page_size: 1000 }).catch(() => ({ data: { products: [] } })),
       getCompetitorTrends(30).catch(() => ({ data: { trends: [] } })),
       getProductStats().catch(() => ({ data: null })),
-    ]).then(([runsRes, prodRes, trendsRes, statsRes]) => {
+    ]).then(([runsRes, trendsRes, statsRes]) => {
       setRuns(runsRes.data.runs || []);
       setRunStats({
         total: runsRes.data.total ?? 0,
         total_updated: runsRes.data.total_updated ?? 0,
         total_completed: runsRes.data.total_completed ?? 0,
       });
-      setProducts(prodRes.data.products || []);
       setCompetitorTrends(trendsRes.data.trends || trendsRes.data || []);
       setProductStats(statsRes.data);
     });
@@ -108,9 +105,9 @@ export default function Analytics() {
   const handleProductSearchChange = (val) => {
     setProductSearch(val);
     setShowProductDropdown(true);
-    if (searchTimerRef[0]) clearTimeout(searchTimerRef[0]);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     if (!val.trim()) { setSearchResults([]); return; }
-    searchTimerRef[0] = setTimeout(() => {
+    searchTimerRef.current = setTimeout(() => {
       setSearchLoading(true);
       getProducts({ search: val.trim(), page: 1, page_size: 50 })
         .then((res) => setSearchResults(res.data.products || []))
@@ -548,7 +545,7 @@ export default function Analytics() {
                   <div className="flex items-center justify-between">
                     <span className="text-xs" style={{ color: 'var(--text-3)' }}>Всего</span>
                     <span className="text-sm font-bold" style={{ color: 'var(--text)' }}>
-                      {productStats?.total ?? products.length}
+                      {productStats?.total ?? 0}
                     </span>
                   </div>
                 </div>
