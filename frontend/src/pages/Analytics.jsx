@@ -1,6 +1,7 @@
-import { useRef, useState } from 'react';
-import { Search, TrendingUp, Loader2, X, BarChart2, Percent } from 'lucide-react';
+import { useRef, useState, useCallback } from 'react';
+import { Search, TrendingUp, Loader2, X, BarChart2, Percent, ArrowUpDown, ExternalLink } from 'lucide-react';
 import { getProducts, getPriceDynamics } from '../api/client';
+import { useNavigate } from 'react-router-dom';
 import { formatMsk } from '../utils/date';
 import {
   ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid,
@@ -106,6 +107,41 @@ export default function Analytics() {
   const changeDays = (d) => {
     setDays(d);
     if (selectedProduct) loadDynamics(selectedProduct.id, d);
+  };
+
+  /* ── Margin analysis state ── */
+  const [marginOp, setMarginOp] = useState('lt');
+  const [marginVal, setMarginVal] = useState('');
+  const [marginProducts, setMarginProducts] = useState([]);
+  const [marginTotal, setMarginTotal] = useState(0);
+  const [marginLoading, setMarginLoading] = useState(false);
+  const [marginPage, setMarginPage] = useState(1);
+  const navigate = useNavigate();
+
+  const loadMarginProducts = useCallback((op, val, p = 1) => {
+    if (val === '' || isNaN(Number(val))) return;
+    setMarginLoading(true);
+    const params = { page: p, page_size: 50 };
+    if (op === 'gt') params.margin_min = Number(val);
+    else params.margin_max = Number(val);
+    getProducts(params)
+      .then((res) => {
+        setMarginProducts(res.data.products || []);
+        setMarginTotal(res.data.total || 0);
+        setMarginPage(p);
+      })
+      .catch(() => {})
+      .finally(() => setMarginLoading(false));
+  }, []);
+
+  const applyMarginFilter = () => loadMarginProducts(marginOp, marginVal, 1);
+
+  const getMarginColor = (m) => {
+    if (m == null) return '#9ca3af';
+    if (m < 0) return '#ef4444';
+    if (m < 15) return '#f59e0b';
+    if (m < 30) return '#22c55e';
+    return '#00c8ff';
   };
 
   /* ── Stats ── */
@@ -503,6 +539,163 @@ export default function Analytics() {
           )}
         </>
       )}
+
+      {/* ═══ Margin analysis ═══ */}
+      <Card className="border" style={{ borderColor: 'rgba(245,158,11,.2)' }}>
+        <CardHeader className="pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'rgba(245,158,11,.1)' }}>
+              <ArrowUpDown className="w-4 h-4" style={{ color: '#f59e0b' }} />
+            </div>
+            <CardTitle className="text-base font-semibold" style={{ color: 'var(--text)' }}>
+              Анализ маржи
+            </CardTitle>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-3 mb-5 flex-wrap">
+            <span className="text-sm" style={{ color: 'var(--text-2)' }}>Показать товары где маржа</span>
+            <select
+              value={marginOp}
+              onChange={(e) => setMarginOp(e.target.value)}
+              className="input w-24 text-sm"
+            >
+              <option value="lt">меньше</option>
+              <option value="gt">больше</option>
+            </select>
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                value={marginVal}
+                onChange={(e) => setMarginVal(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && applyMarginFilter()}
+                placeholder="0"
+                className="input w-24 text-sm"
+              />
+              <span className="text-sm font-semibold" style={{ color: 'var(--text-2)' }}>%</span>
+            </div>
+            <button
+              onClick={applyMarginFilter}
+              disabled={marginVal === '' || marginLoading}
+              className="px-4 py-2 rounded-lg text-sm font-semibold transition-all"
+              style={{
+                background: marginVal !== '' ? '#f59e0b' : 'hsl(var(--muted))',
+                color: marginVal !== '' ? '#fff' : 'var(--text-3)',
+                cursor: marginVal !== '' ? 'pointer' : 'default',
+              }}
+            >
+              {marginLoading ? 'Поиск...' : 'Найти'}
+            </button>
+            {marginTotal > 0 && (
+              <span className="text-sm" style={{ color: 'var(--text-3)' }}>
+                Найдено: <strong style={{ color: 'var(--text)' }}>{marginTotal}</strong>
+              </span>
+            )}
+          </div>
+
+          {marginLoading ? (
+            <div className="flex items-center justify-center h-32 gap-2">
+              <Loader2 className="w-5 h-5 animate-spin" style={{ color: '#f59e0b' }} />
+              <span className="text-sm" style={{ color: 'var(--text-3)' }}>Загрузка...</span>
+            </div>
+          ) : marginProducts.length > 0 ? (
+            <>
+              <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border)' }}>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr style={{ background: 'hsl(var(--muted))' }}>
+                      {['Артикул', 'Название', 'Стратегия', 'Цена продавца', 'Маржа', ''].map((h) => (
+                        <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider"
+                          style={{ color: '#9ca3af' }}>
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {marginProducts.map((p, i) => (
+                      <tr key={p.id}
+                        style={{ borderTop: i > 0 ? '1px solid var(--border)' : undefined }}
+                        className="hover:bg-primary/5 transition-colors"
+                      >
+                        <td className="px-4 py-2.5">
+                          <span className="font-mono text-xs font-semibold" style={{ color: '#00c8ff' }}>
+                            {p.seller_sku}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2.5 max-w-xs">
+                          <span className="truncate block text-xs" style={{ color: 'var(--text-2)' }}>
+                            {p.name || '—'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2.5">
+                          {p.config?.strategy ? (
+                            <span className="text-xs px-2 py-0.5 rounded-full font-semibold"
+                              style={{
+                                background: p.config.strategy === 'rrp' ? 'rgba(0,200,255,.1)' : 'rgba(0,102,255,.1)',
+                                color: p.config.strategy === 'rrp' ? '#00c8ff' : '#0066ff',
+                              }}>
+                              {p.config.strategy === 'rrp' ? 'РРЦ' : 'Конкурент'}
+                            </span>
+                          ) : <span style={{ color: 'var(--text-3)' }}>—</span>}
+                        </td>
+                        <td className="px-4 py-2.5 font-semibold text-xs" style={{ color: 'var(--text)' }}>
+                          {p.current_seller_price ? `${Number(p.current_seller_price).toLocaleString('ru')} ₽` : '—'}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <span className="font-bold text-sm" style={{ color: getMarginColor(p.margin) }}>
+                            {p.margin != null ? `${p.margin}%` : '—'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <button
+                            onClick={() => navigate(`/products/${p.id}`)}
+                            className="text-xs flex items-center gap-1 hover:underline"
+                            style={{ color: '#00c8ff' }}
+                          >
+                            Открыть <ExternalLink className="w-3 h-3" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {marginTotal > 50 && (
+                <div className="flex items-center justify-center gap-2 mt-4">
+                  <button
+                    disabled={marginPage === 1}
+                    onClick={() => loadMarginProducts(marginOp, marginVal, marginPage - 1)}
+                    className="px-3 py-1.5 rounded-lg text-xs border disabled:opacity-40"
+                    style={{ borderColor: 'var(--border)' }}
+                  >← Назад</button>
+                  <span className="text-xs" style={{ color: 'var(--text-3)' }}>
+                    Стр. {marginPage} из {Math.ceil(marginTotal / 50)}
+                  </span>
+                  <button
+                    disabled={marginPage >= Math.ceil(marginTotal / 50)}
+                    onClick={() => loadMarginProducts(marginOp, marginVal, marginPage + 1)}
+                    className="px-3 py-1.5 rounded-lg text-xs border disabled:opacity-40"
+                    style={{ borderColor: 'var(--border)' }}
+                  >Вперёд →</button>
+                </div>
+              )}
+            </>
+          ) : marginVal !== '' && !marginLoading ? (
+            <div className="flex items-center justify-center h-20 rounded-xl" style={{ background: 'hsl(var(--muted))' }}>
+              <p className="text-sm" style={{ color: 'var(--text-3)' }}>Товаров не найдено</p>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-20 rounded-xl border-2 border-dashed"
+              style={{ borderColor: 'rgba(245,158,11,.2)' }}>
+              <p className="text-sm" style={{ color: 'var(--text-3)' }}>
+                Введите значение маржи и нажмите «Найти»
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
     </div>
   );
 }
