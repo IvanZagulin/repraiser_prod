@@ -421,7 +421,6 @@ export default function ImportExport() {
           <div className="space-y-4">
             {/* Import products */}
             <div
-              className="p-4 rounded-xl border-2 border-dashed"
               className="p-4 rounded-xl border-2 border-dashed border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30"
             >
               <div className="flex items-center gap-2 mb-1">
@@ -518,7 +517,6 @@ export default function ImportExport() {
 
             {/* Filters */}
             <div
-              className="p-3 rounded-lg mb-3 space-y-2"
               className="p-3 rounded-lg mb-3 space-y-2 bg-blue-50/60 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-800"
             >
               <div className="flex items-center gap-1.5 mb-2">
