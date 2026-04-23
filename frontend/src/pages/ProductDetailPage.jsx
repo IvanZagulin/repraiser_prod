@@ -415,7 +415,6 @@ export default function ProductDetailPage() {
               За 7 дней: <strong style={{ color: stats.changes_7d > 0 ? '#7c3aed' : 'var(--text-3)' }}>{stats.changes_7d}</strong>
             </p>
           </div>
-        </div>
 
           {/* Stock */}
           <div className="card">
@@ -433,6 +432,7 @@ export default function ProductDetailPage() {
               <p className="text-2xl font-bold" style={{ color: 'var(--text-3)' }}>—</p>
             )}
           </div>
+        </div>
 
         {/* Strategy card */}
         <div className="col-span-4">
