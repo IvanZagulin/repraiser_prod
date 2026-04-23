@@ -113,18 +113,22 @@ export default function Analytics() {
   const [marginOp, setMarginOp] = useState('lt');
   const [marginVal, setMarginVal] = useState('');
   const [marginSort, setMarginSort] = useState('asc');
+  const [marginStockFilter, setMarginStockFilter] = useState('all');
   const [marginProducts, setMarginProducts] = useState([]);
   const [marginTotal, setMarginTotal] = useState(0);
   const [marginLoading, setMarginLoading] = useState(false);
   const [marginPage, setMarginPage] = useState(1);
   const navigate = useNavigate();
 
-  const loadMarginProducts = useCallback((op, val, sort, p = 1) => {
+  const loadMarginProducts = useCallback((op, val, sort, stockFilter = 'all', p = 1) => {
     if (val === '' || isNaN(Number(val))) return;
     setMarginLoading(true);
     const params = { page: p, page_size: 50, margin_sort: sort };
     if (op === 'gt') params.margin_min = Number(val);
     else params.margin_max = Number(val);
+    if (stockFilter === 'in_stock' || stockFilter === 'out_of_stock') {
+      params.stock_filter = stockFilter;
+    }
     getProducts(params)
       .then((res) => {
         setMarginProducts(res.data.products || []);
@@ -135,7 +139,7 @@ export default function Analytics() {
       .finally(() => setMarginLoading(false));
   }, []);
 
-  const applyMarginFilter = () => loadMarginProducts(marginOp, marginVal, marginSort, 1);
+  const applyMarginFilter = () => loadMarginProducts(marginOp, marginVal, marginSort, marginStockFilter, 1);
 
   const getMarginColor = (m) => {
     if (m == null) return '#9ca3af';
@@ -575,9 +579,19 @@ export default function Analytics() {
               />
               <span className="text-sm font-semibold" style={{ color: 'var(--text-2)' }}>%</span>
             </div>
+            <span className="text-sm" style={{ color: 'var(--text-2)' }}>и остаток</span>
+            <select
+              value={marginStockFilter}
+              onChange={(e) => setMarginStockFilter(e.target.value)}
+              className="input w-44 text-sm"
+            >
+              <option value="all">любой</option>
+              <option value="in_stock">в наличии</option>
+              <option value="out_of_stock">нет в наличии</option>
+            </select>
             <div className="flex items-center gap-1 rounded-lg border overflow-hidden" style={{ borderColor: 'var(--border)' }}>
               <button
-                onClick={() => { setMarginSort('asc'); if (marginProducts.length) loadMarginProducts(marginOp, marginVal, 'asc', 1); }}
+                onClick={() => { setMarginSort('asc'); if (marginProducts.length) loadMarginProducts(marginOp, marginVal, 'asc', marginStockFilter, 1); }}
                 className="px-3 py-2 text-xs font-semibold transition-colors"
                 style={{
                   background: marginSort === 'asc' ? 'rgba(245,158,11,.15)' : 'transparent',
@@ -585,7 +599,7 @@ export default function Analytics() {
                 }}
               >↑ По возр.</button>
               <button
-                onClick={() => { setMarginSort('desc'); if (marginProducts.length) loadMarginProducts(marginOp, marginVal, 'desc', 1); }}
+                onClick={() => { setMarginSort('desc'); if (marginProducts.length) loadMarginProducts(marginOp, marginVal, 'desc', marginStockFilter, 1); }}
                 className="px-3 py-2 text-xs font-semibold transition-colors"
                 style={{
                   background: marginSort === 'desc' ? 'rgba(245,158,11,.15)' : 'transparent',
@@ -632,7 +646,7 @@ export default function Analytics() {
                               onClick={() => {
                                 const next = marginSort === 'asc' ? 'desc' : 'asc';
                                 setMarginSort(next);
-                                loadMarginProducts(marginOp, marginVal, next, 1);
+                                loadMarginProducts(marginOp, marginVal, next, marginStockFilter, 1);
                               }}
                             >
                               Маржа {marginSort === 'asc' ? '↑' : '↓'}
@@ -695,7 +709,7 @@ export default function Analytics() {
                 <div className="flex items-center justify-center gap-2 mt-4">
                   <button
                     disabled={marginPage === 1}
-                    onClick={() => loadMarginProducts(marginOp, marginVal, marginSort, marginPage - 1)}
+                    onClick={() => loadMarginProducts(marginOp, marginVal, marginSort, marginStockFilter, marginPage - 1)}
                     className="px-3 py-1.5 rounded-lg text-xs border disabled:opacity-40"
                     style={{ borderColor: 'var(--border)' }}
                   >← Назад</button>
@@ -704,7 +718,7 @@ export default function Analytics() {
                   </span>
                   <button
                     disabled={marginPage >= Math.ceil(marginTotal / 50)}
-                    onClick={() => loadMarginProducts(marginOp, marginVal, marginSort, marginPage + 1)}
+                    onClick={() => loadMarginProducts(marginOp, marginVal, marginSort, marginStockFilter, marginPage + 1)}
                     className="px-3 py-1.5 rounded-lg text-xs border disabled:opacity-40"
                     style={{ borderColor: 'var(--border)' }}
                   >Вперёд →</button>

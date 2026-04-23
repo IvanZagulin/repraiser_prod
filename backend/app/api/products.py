@@ -164,9 +164,9 @@ async def list_products(
             .filter(Product.cost_price.isnot(None), Product.cost_price > 0)
         )
         if margin_min is not None:
-            query = query.filter(margin_expr >= margin_min)
+            query = query.filter(margin_expr > margin_min)
         if margin_max is not None:
-            query = query.filter(margin_expr <= margin_max)
+            query = query.filter(margin_expr < margin_max)
         if margin_sort == "asc":
             query = query.order_by(margin_expr.asc())
         elif margin_sort == "desc":
