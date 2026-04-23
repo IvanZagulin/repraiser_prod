@@ -242,7 +242,7 @@ async def list_products(
                     (acquiring_type,  acquiring_value),
                 ]:
                     fees += sp * fval / 100 if ftype == "pct" else fval
-                product_data['margin'] = round((sp - cost_price - fees) / cost_price * 100, 1)
+                product_data['margin'] = round((sp - cost_price - fees) / cost_price * 100, 2)
 
         response_products.append(ProductWithPriceResponse(**product_data))
 

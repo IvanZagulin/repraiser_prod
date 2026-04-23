@@ -688,7 +688,9 @@ export default function Analytics() {
                         </td>
                         <td className="px-4 py-2.5">
                           <span className="font-bold text-sm" style={{ color: getMarginColor(p.margin) }}>
-                            {p.margin != null ? `${p.margin}%` : '—'}
+                            {p.margin != null
+                              ? `${Number(p.margin).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`
+                              : '—'}
                           </span>
                         </td>
                         <td className="px-4 py-2.5">
