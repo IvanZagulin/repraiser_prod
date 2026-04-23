@@ -54,6 +54,7 @@ async def list_products(
     margin_min: Optional[float] = Query(None),
     margin_max: Optional[float] = Query(None),
     margin_sort: Optional[str] = Query(None, regex="^(asc|desc)$"),
+    stock_filter: Optional[str] = Query(None, regex="^(in_stock|out_of_stock)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=1000),
 ):
@@ -106,6 +107,31 @@ async def list_products(
             Product.name.ilike(term),
             cast(Product.nm_id, String).ilike(term),
         ))
+
+    if stock_filter:
+        # Join latest snapshot for stock filtering (if not already joined by margin_filter)
+        if not margin_filter:
+            _sq = (
+                db.query(
+                    PriceSnapshot.product_id,
+                    sa_func.max(PriceSnapshot.snapshot_at).label("max_at"),
+                )
+                .group_by(PriceSnapshot.product_id)
+                .subquery()
+            )
+            query = (
+                query
+                .join(_sq, Product.id == _sq.c.product_id)
+                .join(PriceSnapshot,
+                      (PriceSnapshot.product_id == _sq.c.product_id) &
+                      (PriceSnapshot.snapshot_at == _sq.c.max_at))
+            )
+        if stock_filter == "in_stock":
+            query = query.filter(PriceSnapshot.total_quantity > 0)
+        elif stock_filter == "out_of_stock":
+            query = query.filter(
+                (PriceSnapshot.total_quantity == None) | (PriceSnapshot.total_quantity <= 0)
+            )
 
     if margin_filter:
         # Build SQL margin expression and filter in the DB — avoids loading all products in Python
@@ -192,6 +218,7 @@ async def list_products(
             'cost_price': product.cost_price,
             'margin': None,
             'account_name': _accounts_map.get(product.account_id, ""),
+            'total_quantity': None,
         }
 
         if product.config:
@@ -203,6 +230,7 @@ async def list_products(
             product_data['current_seller_price'] = latest_snapshot.seller_price
             product_data['current_final_price']  = latest_snapshot.final_price
             product_data['last_updated']          = latest_snapshot.snapshot_at
+            product_data['total_quantity']        = latest_snapshot.total_quantity
 
             cost_price = float(product.cost_price) if product.cost_price else None
             if cost_price and cost_price > 0:
@@ -824,6 +852,7 @@ async def get_product_detail(
                 else None
             ),
             "in_stock": latest_snap.total_quantity > 0 if latest_snap and latest_snap.total_quantity else False,
+            "total_quantity": latest_snap.total_quantity if latest_snap else None,
             "is_in_promo": latest_snap.is_in_promo if latest_snap else False,
             "snapshot_at": latest_snap.snapshot_at.isoformat() if latest_snap else None,
         } if latest_snap else None,

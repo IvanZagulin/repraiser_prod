@@ -417,6 +417,23 @@ export default function ProductDetailPage() {
           </div>
         </div>
 
+          {/* Stock */}
+          <div className="card">
+            <p className="text-xs mb-1" style={{ color: 'var(--text-3)' }}>Остаток</p>
+            {current_price?.total_quantity != null ? (
+              <>
+                <p className="text-2xl font-bold" style={{ color: current_price.total_quantity > 0 ? '#22c55e' : '#ef4444' }}>
+                  {current_price.total_quantity > 0 ? current_price.total_quantity : '0'}
+                </p>
+                <p className="text-xs mt-1" style={{ color: current_price.total_quantity > 0 ? '#22c55e' : '#ef4444' }}>
+                  {current_price.total_quantity > 0 ? 'шт. в наличии' : 'Нет в наличии'}
+                </p>
+              </>
+            ) : (
+              <p className="text-2xl font-bold" style={{ color: 'var(--text-3)' }}>—</p>
+            )}
+          </div>
+
         {/* Strategy card */}
         <div className="col-span-4">
           <div className="card h-full">
@@ -611,8 +628,11 @@ export default function ProductDetailPage() {
       {/* Status badges row */}
       {current_price && (
         <div className="flex gap-2 mb-4">
-          <span className={`badge ${current_price.in_stock ? 'badge-success' : 'badge-warning'}`}>
-            {current_price.in_stock ? 'В наличии' : 'Нет в наличии'}
+          <span className={`badge ${current_price.in_stock ? 'badge-success' : 'badge-danger'}`}
+            style={!current_price.in_stock ? { background: 'rgba(239,68,68,.12)', color: '#ef4444', border: '1px solid rgba(239,68,68,.3)' } : {}}>
+            {current_price.in_stock
+              ? `В наличии${current_price.total_quantity != null ? ` · ${current_price.total_quantity} шт.` : ''}`
+              : 'Нет в наличии'}
           </span>
           {config?.is_active && (
             <span className="badge badge-success">Репрайсер активен</span>

@@ -111,6 +111,7 @@ class ProductWithPriceResponse(ProductResponse):
     cost_price: Optional[Decimal] = None
     margin: Optional[float] = None
     account_name: Optional[str] = None
+    total_quantity: Optional[int] = None
 
 
 class ProductListResponse(BaseModel):

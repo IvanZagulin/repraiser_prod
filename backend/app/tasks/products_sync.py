@@ -46,7 +46,7 @@ def sync_products_from_catalog_task(self, account_id: int):
                 FROM wb_catalog c
                 WHERE p.account_id = c.account_id
                   AND p.nm_id = c.nm_id
-                  AND (p.name IS NULL OR p.name LIKE 'Товар %')
+                  AND (p.name IS NULL OR p.name LIKE 'Товар %' OR p.name = p.seller_sku)
                   AND c.name IS NOT NULL AND c.name != ''
             """)).rowcount
             if name_updated:

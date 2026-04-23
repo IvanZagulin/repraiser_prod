@@ -729,18 +729,32 @@ class RepricerEngine:
         _snap_comp_price = self._current_competitor_price
         _snap_comp_nm_id = self._current_competitor_nm_id
         
-        # Если цена не изменилась
+        # Если цена не изменилась — всё равно проверяем защиту маржи
         if new_price is None:
-            self._save_price_snapshot(product, current_data,
-                competitor_nm_id=_snap_comp_nm_id, competitor_price=_snap_comp_price)
-            self._save_price_change(
-                run, product, current_data, None, None,
-                reason_code, reason_msg
-            )
-            logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": reason_code, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
-            return reason_code
-        
-        # Применяем лимиты
+            current_price = current_data["seller_price"]
+            checked_price, limit_reason = self._apply_limits(current_price, config)
+            if checked_price != current_price:
+                # Маржа ниже минимума — нужно поднять цену даже без сигнала стратегии
+                logger.info(
+                    f"Стратегия не меняла цену, но защита маржи требует подъёма: "
+                    f"{current_price}₽ → {checked_price}₽ ({limit_reason})"
+                )
+                new_price = checked_price
+                reason_code = limit_reason
+                reason_msg = f"Маржа ниже минимума, цена поднята: {current_price}₽ → {checked_price}₽"
+                # Продолжаем выполнение (не возвращаемся) — обновим цену ниже
+            else:
+                self._save_price_snapshot(product, current_data,
+                    competitor_nm_id=_snap_comp_nm_id, competitor_price=_snap_comp_price)
+                self._save_price_change(
+                    run, product, current_data, None, None,
+                    reason_code, reason_msg
+                )
+                logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": reason_code, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
+                return reason_code
+
+        # Применяем лимиты (если new_price уже прошёл через _apply_limits выше —
+        # _apply_limits идемпотентна: повторное применение даст тот же результат)
         final_new_price, limit_reason = self._apply_limits(new_price, config)
         
         # Если после лимитов цена не изменилась
@@ -935,10 +949,22 @@ class RepricerEngine:
         _snap_comp_nm_id = self._current_competitor_nm_id
 
         if new_price is None:
-            return {"product": product, "needs_update": False, "skip_code": reason_code,
-                    "current_data": current_data, "new_price": None, "limit_reason": None,
-                    "reason_msg": reason_msg, "_t0": _t0,
-                    "competitor_price": _snap_comp_price, "competitor_nm_id": _snap_comp_nm_id}
+            # Стратегия не меняет цену — но проверяем защиту маржи
+            current_price = current_data["seller_price"]
+            checked_price, limit_reason_margin = self._apply_limits(current_price, config)
+            if checked_price != current_price:
+                logger.info(
+                    "Стратегия не меняла цену, но защита маржи требует подъёма: %s₽ → %s₽ (%s)",
+                    current_price, checked_price, limit_reason_margin
+                )
+                new_price = checked_price
+                reason_code = limit_reason_margin
+                reason_msg = f"Маржа ниже минимума, цена поднята: {current_price}₽ → {checked_price}₽"
+            else:
+                return {"product": product, "needs_update": False, "skip_code": reason_code,
+                        "current_data": current_data, "new_price": None, "limit_reason": None,
+                        "reason_msg": reason_msg, "_t0": _t0,
+                        "competitor_price": _snap_comp_price, "competitor_nm_id": _snap_comp_nm_id}
 
         final_new_price, limit_reason = self._apply_limits(new_price, config)
 
