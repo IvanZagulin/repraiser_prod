@@ -139,6 +139,7 @@ def import_products_task(self, file_bytes_b64: str, user_id: int):
         catalog_by_sku = {}
         catalog_image = {}
         catalog_by_nm = {}
+        catalog_name = {}
         for acc_id, skus in needed_skus.items():
             if not _get_account(acc_id):
                 continue
@@ -149,6 +150,7 @@ def import_products_task(self, file_bytes_b64: str, user_id: int):
             catalog_by_sku[acc_id] = {r.vendor_code: r.nm_id for r in rows}
             catalog_by_nm[acc_id] = {r.nm_id: r.vendor_code for r in rows}
             catalog_image[acc_id] = {r.nm_id: r.image_url for r in rows if r.image_url}
+            catalog_name[acc_id] = {r.nm_id: r.name for r in rows if r.name}
 
         for product_data in products_data:
             nm_id = product_data.get("nm_id")
@@ -189,7 +191,7 @@ def import_products_task(self, file_bytes_b64: str, user_id: int):
                 nm_id=nm_id,
                 account_id=account_id,
                 seller_sku=seller_sku or str(nm_id),
-                name=name or seller_sku or str(nm_id),
+                name=name or catalog_name.get(account_id, {}).get(nm_id) or seller_sku or str(nm_id),
                 image_url=catalog_image.get(account_id, {}).get(nm_id),
             ))
             results["created"] += 1

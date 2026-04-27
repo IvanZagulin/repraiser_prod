@@ -9,6 +9,7 @@ from slowapi import Limiter
 
 from app.database import get_db
 from app.models import Product, ProductConfig, PriceSnapshot, RepricerRun, PriceChange, Account, WBCatalog
+from app.models.competitor_entry import CompetitorEntry
 from app.models.user import User
 from app.api.auth import get_current_user
 from app.utils import get_user_id_key
@@ -467,7 +468,7 @@ async def import_strategy(
                     account_id=catalog_entry.account_id,
                     nm_id=catalog_entry.nm_id,
                     seller_sku=catalog_entry.vendor_code,
-                    name=catalog_entry.vendor_code,
+                    name=catalog_entry.name or catalog_entry.vendor_code,
                     image_url=catalog_entry.image_url,
                 )
                 db.add(new_product)
@@ -496,7 +497,20 @@ async def import_strategy(
                 **{k: v for k, v in config_data.items() if k not in ('seller_sku', 'account_id')}
             )
             db.add(config)
+            db.flush()
             results['created'] += 1
+
+        # Sync CompetitorEntry so the product card shows the competitor immediately
+        cfg_obj = product.config
+        if cfg_obj and cfg_obj.competitor_nm_id:
+            db.query(CompetitorEntry).filter(
+                CompetitorEntry.product_config_id == cfg_obj.id
+            ).delete()
+            db.add(CompetitorEntry(
+                product_config_id=cfg_obj.id,
+                nm_id=cfg_obj.competitor_nm_id,
+                alias=None,
+            ))
 
     # Один коммит в конце (fix: commit в цикле)
     try:

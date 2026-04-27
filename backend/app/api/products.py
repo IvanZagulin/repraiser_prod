@@ -145,15 +145,17 @@ async def list_products(
         )
 
         sp = PriceSnapshot.seller_price
+        disc = sa_func.coalesce(PriceSnapshot.discount, literal(0.0))
+        eff_sp = sp * (1 - disc / 100)
         cp = Product.cost_price
 
         def _fee(ftype, fval):
-            return sp * literal(fval / 100) if ftype == "pct" else literal(fval)
+            return eff_sp * literal(fval / 100) if ftype == "pct" else literal(fval)
 
         fees_expr = _fee(commission_type, commission_value) + \
                     _fee(logistics_type,  logistics_value)  + \
                     _fee(acquiring_type,  acquiring_value)
-        margin_expr = (sp - cp - fees_expr) / cp * 100
+        margin_expr = (eff_sp - cp - fees_expr) / cp * 100
 
         query = (
             query
@@ -235,14 +237,16 @@ async def list_products(
             cost_price = float(product.cost_price) if product.cost_price else None
             if cost_price and cost_price > 0:
                 sp = float(latest_snapshot.seller_price)
+                discount_pct = float(latest_snapshot.discount) if latest_snapshot.discount else 0.0
+                eff_sp = sp * (1 - discount_pct / 100)
                 fees = 0.0
                 for ftype, fval in [
                     (commission_type, commission_value),
                     (logistics_type,  logistics_value),
                     (acquiring_type,  acquiring_value),
                 ]:
-                    fees += sp * fval / 100 if ftype == "pct" else fval
-                product_data['margin'] = round((sp - cost_price - fees) / cost_price * 100, 2)
+                    fees += eff_sp * fval / 100 if ftype == "pct" else fval
+                product_data['margin'] = round((eff_sp - cost_price - fees) / cost_price * 100, 2)
 
         response_products.append(ProductWithPriceResponse(**product_data))
 
@@ -784,6 +788,8 @@ async def get_product_detail(
     fees_total = None
     if latest_snap and product.cost_price and float(product.cost_price) > 0:
         sp = float(latest_snap.seller_price)
+        discount_pct = float(latest_snap.discount) if latest_snap.discount else 0.0
+        eff_sp = sp * (1 - discount_pct / 100)
         cost = float(product.cost_price)
         fees = 0.0
         for ftype, fval in [
@@ -791,9 +797,9 @@ async def get_product_detail(
             (logistics_type, logistics_value),
             (acquiring_type, acquiring_value),
         ]:
-            fees += sp * fval / 100 if ftype == "pct" else fval
+            fees += eff_sp * fval / 100 if ftype == "pct" else fval
         fees_total = round(fees, 2)
-        margin = round((sp - cost - fees) / cost * 100, 1)
+        margin = round((eff_sp - cost - fees) / cost * 100, 1)
 
     # Config with competitors
     config_data = None

@@ -480,7 +480,8 @@ class RepricerEngine:
     def _apply_limits(
         self,
         new_price: Decimal,
-        config: ProductConfig
+        config: ProductConfig,
+        seller_discount: Decimal = Decimal("0")
     ) -> Tuple[Decimal, str]:
         """
         Применение защитных лимитов (min_price, max_price, min_margin_pct)
@@ -523,6 +524,7 @@ class RepricerEngine:
                 acquiring_value  = Decimal(s.get("acquiring_value",  "0"))
 
                 sp = Decimal(str(new_price))
+                eff_sp = sp * (1 - seller_discount / 100) if seller_discount > 0 else sp
                 fees = Decimal("0")
                 fee_items = [
                     (commission_type, commission_value),
@@ -530,9 +532,9 @@ class RepricerEngine:
                     (acquiring_type,  acquiring_value),
                 ]
                 for ftype, fval in fee_items:
-                    fees += sp * fval / 100 if ftype == "pct" else fval
+                    fees += eff_sp * fval / 100 if ftype == "pct" else fval
 
-                current_margin = (sp - cost_price - fees) / cost_price * 100
+                current_margin = (eff_sp - cost_price - fees) / cost_price * 100
 
                 if current_margin < min_margin_pct:
                     # Минимальная цена при которой маржа = min_margin_pct
@@ -544,7 +546,8 @@ class RepricerEngine:
                         (fval if ftype == "rub" else Decimal("0"))
                         for ftype, fval in fee_items
                     )
-                    denominator = Decimal("1") - pct_rate
+                    discount_factor = (1 - seller_discount / 100) if seller_discount > 0 else Decimal("1")
+                    denominator = discount_factor * (Decimal("1") - pct_rate)
                     if denominator > 0:
                         min_price_by_margin = (
                             cost_price * (1 + min_margin_pct / 100) + fixed_fees
@@ -755,7 +758,8 @@ class RepricerEngine:
 
         # Применяем лимиты (если new_price уже прошёл через _apply_limits выше —
         # _apply_limits идемпотентна: повторное применение даст тот же результат)
-        final_new_price, limit_reason = self._apply_limits(new_price, config)
+        _seller_disc = Decimal(str(current_data.get("discount") or 0))
+        final_new_price, limit_reason = self._apply_limits(new_price, config, _seller_disc)
         
         # Если после лимитов цена не изменилась
         if final_new_price == current_data['seller_price']:
@@ -951,7 +955,8 @@ class RepricerEngine:
         if new_price is None:
             # Стратегия не меняет цену — но проверяем защиту маржи
             current_price = current_data["seller_price"]
-            checked_price, limit_reason_margin = self._apply_limits(current_price, config)
+            _seller_disc = Decimal(str(current_data.get("discount") or 0))
+            checked_price, limit_reason_margin = self._apply_limits(current_price, config, _seller_disc)
             if checked_price != current_price:
                 logger.info(
                     "Стратегия не меняла цену, но защита маржи требует подъёма: %s₽ → %s₽ (%s)",
@@ -966,7 +971,8 @@ class RepricerEngine:
                         "reason_msg": reason_msg, "_t0": _t0,
                         "competitor_price": _snap_comp_price, "competitor_nm_id": _snap_comp_nm_id}
 
-        final_new_price, limit_reason = self._apply_limits(new_price, config)
+        _seller_disc = Decimal(str(current_data.get("discount") or 0))
+        final_new_price, limit_reason = self._apply_limits(new_price, config, _seller_disc)
 
         if final_new_price == current_data["seller_price"]:
             return {"product": product, "needs_update": False, "skip_code": "NO_CHANGE",

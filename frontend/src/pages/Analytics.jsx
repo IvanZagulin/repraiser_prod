@@ -114,13 +114,14 @@ export default function Analytics() {
   const [marginVal, setMarginVal] = useState('');
   const [marginSort, setMarginSort] = useState('asc');
   const [marginStockFilter, setMarginStockFilter] = useState('all');
+  const [marginActiveFilter, setMarginActiveFilter] = useState('all');
   const [marginProducts, setMarginProducts] = useState([]);
   const [marginTotal, setMarginTotal] = useState(0);
   const [marginLoading, setMarginLoading] = useState(false);
   const [marginPage, setMarginPage] = useState(1);
   const navigate = useNavigate();
 
-  const loadMarginProducts = useCallback((op, val, sort, stockFilter = 'all', p = 1) => {
+  const loadMarginProducts = useCallback((op, val, sort, stockFilter = 'all', activeFilter = 'all', p = 1) => {
     if (val === '' || isNaN(Number(val))) return;
     setMarginLoading(true);
     const params = { page: p, page_size: 50, margin_sort: sort };
@@ -129,6 +130,8 @@ export default function Analytics() {
     if (stockFilter === 'in_stock' || stockFilter === 'out_of_stock') {
       params.stock_filter = stockFilter;
     }
+    if (activeFilter === 'active') params.is_active = true;
+    else if (activeFilter === 'inactive') params.is_active = false;
     getProducts(params)
       .then((res) => {
         setMarginProducts(res.data.products || []);
@@ -139,7 +142,7 @@ export default function Analytics() {
       .finally(() => setMarginLoading(false));
   }, []);
 
-  const applyMarginFilter = () => loadMarginProducts(marginOp, marginVal, marginSort, marginStockFilter, 1);
+  const applyMarginFilter = () => loadMarginProducts(marginOp, marginVal, marginSort, marginStockFilter, marginActiveFilter, 1);
 
   const getMarginColor = (m) => {
     if (m == null) return '#9ca3af';
@@ -589,9 +592,19 @@ export default function Analytics() {
               <option value="in_stock">в наличии</option>
               <option value="out_of_stock">нет в наличии</option>
             </select>
+            <span className="text-sm" style={{ color: 'var(--text-2)' }}>стратегия</span>
+            <select
+              value={marginActiveFilter}
+              onChange={(e) => setMarginActiveFilter(e.target.value)}
+              className="input w-36 text-sm"
+            >
+              <option value="all">все</option>
+              <option value="active">активна</option>
+              <option value="inactive">не активна</option>
+            </select>
             <div className="flex items-center gap-1 rounded-lg border overflow-hidden" style={{ borderColor: 'var(--border)' }}>
               <button
-                onClick={() => { setMarginSort('asc'); if (marginProducts.length) loadMarginProducts(marginOp, marginVal, 'asc', marginStockFilter, 1); }}
+                onClick={() => { setMarginSort('asc'); if (marginProducts.length) loadMarginProducts(marginOp, marginVal, 'asc', marginStockFilter, marginActiveFilter, 1); }}
                 className="px-3 py-2 text-xs font-semibold transition-colors"
                 style={{
                   background: marginSort === 'asc' ? 'rgba(245,158,11,.15)' : 'transparent',
@@ -599,7 +612,7 @@ export default function Analytics() {
                 }}
               >↑ По возр.</button>
               <button
-                onClick={() => { setMarginSort('desc'); if (marginProducts.length) loadMarginProducts(marginOp, marginVal, 'desc', marginStockFilter, 1); }}
+                onClick={() => { setMarginSort('desc'); if (marginProducts.length) loadMarginProducts(marginOp, marginVal, 'desc', marginStockFilter, marginActiveFilter, 1); }}
                 className="px-3 py-2 text-xs font-semibold transition-colors"
                 style={{
                   background: marginSort === 'desc' ? 'rgba(245,158,11,.15)' : 'transparent',
@@ -646,7 +659,7 @@ export default function Analytics() {
                               onClick={() => {
                                 const next = marginSort === 'asc' ? 'desc' : 'asc';
                                 setMarginSort(next);
-                                loadMarginProducts(marginOp, marginVal, next, marginStockFilter, 1);
+                                loadMarginProducts(marginOp, marginVal, next, marginStockFilter, marginActiveFilter, 1);
                               }}
                             >
                               Маржа {marginSort === 'asc' ? '↑' : '↓'}
