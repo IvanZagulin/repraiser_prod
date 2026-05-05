@@ -1,7 +1,7 @@
 from typing import Annotated, Optional
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query, Body
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import desc, or_, cast, String, func, and_
 from slowapi import Limiter
 import logging
@@ -34,6 +34,7 @@ def _user_product(db: Session, product_id: int, user: User) -> Product:
         db.query(Product)
         .join(Account, Product.account_id == Account.id)
         .filter(Product.id == product_id, Account.user_id == user.id)
+        .options(joinedload(Product.config).selectinload(ProductConfig.competitors))
         .first()
     )
     if not product:
@@ -55,6 +56,7 @@ async def list_products(
     margin_max: Optional[float] = Query(None),
     margin_sort: Optional[str] = Query(None, regex="^(asc|desc)$"),
     stock_filter: Optional[str] = Query(None, regex="^(in_stock|out_of_stock)$"),
+    brand: Optional[str] = Query(None, max_length=200),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=1000),
 ):
@@ -91,7 +93,7 @@ async def list_products(
         .join(Account, Product.account_id == Account.id)
         .filter(Account.user_id == current_user.id)
         .join(ProductConfig, Product.id == ProductConfig.product_id, isouter=True)
-        .options(_jl(Product.config))
+        .options(_jl(Product.config).selectinload(ProductConfig.competitors))
     )
 
     if account_id:
@@ -107,6 +109,8 @@ async def list_products(
             Product.name.ilike(term),
             cast(Product.nm_id, String).ilike(term),
         ))
+    if brand:
+        query = query.filter(Product.brand.ilike(f"%{brand.strip()}%"))
 
     if stock_filter:
         # Join latest snapshot for stock filtering (if not already joined by margin_filter)
@@ -218,6 +222,7 @@ async def list_products(
             'current_final_price': None,
             'last_updated': None,
             'cost_price': product.cost_price,
+            'brand': product.brand,
             'margin': None,
             'account_name': _accounts_map.get(product.account_id, ""),
             'total_quantity': None,
@@ -486,6 +491,26 @@ async def get_products_stats(
 
 
 
+
+
+@router.get("/brands")
+@limiter.limit("30/minute")
+async def get_brands(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Список брендов пользователя с количеством уникальных артикулов продавца."""
+    rows = (
+        db.query(Product.brand, func.count(Product.seller_sku.distinct()).label("sku_count"))
+        .join(Account, Product.account_id == Account.id)
+        .filter(Account.user_id == current_user.id, Product.brand.isnot(None), Product.brand != "")
+        .group_by(Product.brand)
+        .order_by(Product.brand)
+        .all()
+    )
+    return [{"brand": r.brand, "sku_count": r.sku_count} for r in rows]
+
 @router.get("/by-sku/{seller_sku}")
 @limiter.limit("30/minute")
 async def get_products_by_sku(
@@ -607,8 +632,18 @@ async def create_product_config(
     if product.config:
         raise HTTPException(status_code=400, detail=f"Config already exists for product {product_id}")
 
-    config = ProductConfig(product_id=product_id, **config_data.model_dump())
+    config = ProductConfig(product_id=product_id, **config_data.model_dump(exclude={"competitors"}))
     db.add(config)
+    db.flush()
+
+    if config_data.competitors:
+        for entry in config_data.competitors:
+            db.add(CompetitorEntry(
+                product_config_id=config.id,
+                nm_id=entry.nm_id,
+                alias=entry.alias,
+            ))
+
     db.commit()
     db.refresh(config)
     return ProductConfigResponse.model_validate(config)
@@ -834,6 +869,7 @@ async def get_product_detail(
             "nm_id": product.nm_id,
             "seller_sku": product.seller_sku,
             "name": product.name,
+            "brand": product.brand,
             "image_url": product.image_url,
             "cost_price": float(product.cost_price) if product.cost_price else None,
             "account_id": product.account_id,
@@ -879,7 +915,11 @@ async def get_product_detail(
                 "snapshot_at": s.snapshot_at.isoformat(),
                 "seller_price": float(s.seller_price),
                 "final_price": float(s.final_price),
-                "competitor_price": float(s.competitor_price) if s.competitor_price else None,
+                "competitor_price": (
+                    float(s.competitor_price)
+                    if s.competitor_price and product.config and product.config.strategy == "competitor"
+                    else None
+                ),
                 "spp": float(s.spp) if s.spp else None,
                 "is_in_promo": s.is_in_promo,
                 "in_stock": s.total_quantity > 0 if s.total_quantity else False,

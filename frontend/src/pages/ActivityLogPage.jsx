@@ -42,7 +42,7 @@ function descriptionFromDetails(details) {
 
   const parts = [];
   if (parsed.product_name) parts.push(parsed.product_name);
-  if (parsed.sku) parts.push(`SKU: ${parsed.sku}`);
+  if (parsed.sku) parts.push(`Артикул: ${parsed.sku}`);
   if (parsed.old_price != null && parsed.new_price != null) {
     parts.push(`${parsed.old_price} ₽ → ${parsed.new_price} ₽`);
   }

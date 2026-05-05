@@ -228,11 +228,12 @@ class ExcelExporter:
         headers = [
             "Артикул продавца *",
             "Себестоимость (₽) *",
+            "ID кабинета",
         ]
         ws.append(headers)
         ExcelExporter._style_header(ws)
         for _ in range(5):
-            ws.append(["", ""])
+            ws.append(["", "", ""])
         ExcelExporter.auto_size_columns(ws, min_width=20)
         ws.freeze_panes = "A2"
 
@@ -241,12 +242,12 @@ class ExcelExporter:
         wi.append(["Примеры заполнения"])
         wi["A1"].font = Font(bold=True, size=12)
         wi.append([])
-        wi.append(["Артикул продавца *", "Себестоимость (₽) *"])
+        wi.append(["Артикул продавца *", "Себестоимость (₽) *", "ID кабинета"])
         ExcelExporter._style_header(wi, row=3, color=COLOR_HEADER2)
         examples = [
-            ["ваш-арт-001", 1500],
-            ["ваш-арт-002", 850.50],
-            ["ваш-арт-003", 3200],
+            ["ваш-арт-001", 1500,   1],
+            ["ваш-арт-002", 850.50, ""],
+            ["ваш-арт-003", 3200,   2],
         ]
         for ex in examples:
             wi.append(ex)
@@ -259,6 +260,123 @@ class ExcelExporter:
         notes = [
             ("A — Артикул продавца *", "vendorCode товара. Должен уже быть в системе. Обязательно."),
             ("B — Себестоимость *",    "Закупочная цена товара в рублях. Используется для расчёта маржи."),
+            ("C — ID кабинета",        "Числовой ID кабинета из раздела Аккаунты. Необязательно — если пусто, применится ко всем кабинетам где есть артикул."),
+        ]
+        for note in notes:
+            wi.append(list(note))
+        ExcelExporter.auto_size_columns(wi)
+
+        wb.active = ws
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return output
+
+
+    @staticmethod
+    def generate_min_prices_template() -> BytesIO:
+        """Пустой шаблон для загрузки минимальных цен.
+        Лист «Мин цены» — заголовок + пустые строки.
+        Лист «Инструкция» — примеры и описание.
+        """
+        wb = ExcelExporter.create_workbook()
+
+        ws = wb.create_sheet("Мин цены")
+        headers = [
+            "Артикул продавца *",
+            "Минимальная цена (₽) *",
+            "ID кабинета",
+        ]
+        ws.append(headers)
+        ExcelExporter._style_header(ws)
+        for _ in range(5):
+            ws.append(["", "", ""])
+        ExcelExporter.auto_size_columns(ws, min_width=20)
+        ws.freeze_panes = "A2"
+
+        wi = wb.create_sheet("Инструкция")
+        wi.append(["Примеры заполнения"])
+        wi["A1"].font = Font(bold=True, size=12)
+        wi.append([])
+        wi.append(["Артикул продавца *", "Минимальная цена (₽) *", "ID кабинета"])
+        ExcelExporter._style_header(wi, row=3, color=COLOR_HEADER2)
+        examples = [
+            ["ваш-арт-001", 500,     1],
+            ["ваш-арт-002", 1200.50, ""],
+            ["ваш-арт-003", 300,     2],
+        ]
+        for ex in examples:
+            wi.append(ex)
+        for row_num in (4, 5, 6):
+            for cell in wi[row_num]:
+                cell.font = Font(italic=True, color=COLOR_EXAMPLE)
+        wi.append([])
+        wi.append(["Поле", "Описание"])
+        ExcelExporter._style_header(wi, row=8, color=COLOR_HEADER)
+        notes = [
+            ("A — Артикул продавца *", "vendorCode товара. Обязательно."),
+            ("B — Минимальная цена *",  "Нижняя граница цены в рублях. Репрайсер никогда не опустит цену ниже этого значения."),
+            ("C — ID кабинета",         "Числовой ID кабинета из раздела Аккаунты. Необязательно — если пусто, применится ко всем кабинетам где есть артикул."),
+        ]
+        for note in notes:
+            wi.append(list(note))
+        ExcelExporter.auto_size_columns(wi)
+
+        wb.active = ws
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return output
+
+
+    @staticmethod
+    def generate_characteristics_template() -> BytesIO:
+        """Шаблон для загрузки характеристик товаров: бренд, себестоимость, МРЦ.
+        Все поля кроме артикула необязательны — заполняйте только нужные.
+        """
+        wb = ExcelExporter.create_workbook()
+
+        ws = wb.create_sheet("Характеристики")
+        headers = [
+            "Артикул продавца *",
+            "Бренд",
+            "Себестоимость (₽)",
+            "Мин. цена (₽)",
+            "ID кабинета",
+        ]
+        ws.append(headers)
+        ExcelExporter._style_header(ws)
+        for _ in range(5):
+            ws.append(["", "", "", "", ""])
+        ExcelExporter.auto_size_columns(ws, min_width=18)
+        ws.freeze_panes = "A2"
+
+        wi = wb.create_sheet("Инструкция")
+        wi.append(["Шаблон характеристик товаров"])
+        wi["A1"].font = Font(bold=True, size=12)
+        wi.append([])
+        wi.append(headers)
+        ExcelExporter._style_header(wi, row=3, color=COLOR_HEADER2)
+        examples = [
+            ["ваш-арт-001", "Nike",   1500,   500,  1],
+            ["ваш-арт-002", "Adidas", "",     300,  ""],
+            ["ваш-арт-003", "",       850.50, "",   2],
+            ["ваш-арт-004", "Nike",   "",     "",   ""],
+        ]
+        for ex in examples:
+            wi.append(ex)
+        for row_num in (4, 5, 6, 7):
+            for cell in wi[row_num]:
+                cell.font = Font(italic=True, color=COLOR_EXAMPLE)
+        wi.append([])
+        wi.append(["Поле", "Описание"])
+        ExcelExporter._style_header(wi, row=9, color=COLOR_HEADER)
+        notes = [
+            ("A — Артикул продавца *", "vendorCode товара. Обязательно."),
+            ("B — Бренд",              "Бренд товара. Необязательно."),
+            ("C — Себестоимость",      "Закупочная цена в рублях. Необязательно."),
+            ("D — Мин. цена",          "Нижняя граница цены в рублях. Необязательно."),
+            ("E — ID кабинета",        "Числовой ID кабинета. Необязательно — если пусто, применится ко всем кабинетам."),
         ]
         for note in notes:
             wi.append(list(note))
@@ -284,6 +402,7 @@ class ExcelExporter:
         headers = [
             "Артикул продавца",
             "Название",
+            "Бренд",
             "nmID",
             "Аккаунт",
             "Статус",
@@ -319,6 +438,7 @@ class ExcelExporter:
             row = [
                 _safe_str(p.get("seller_sku", "")),
                 _safe_str(p.get("name", "")),
+                _safe_str(p.get("brand", "")),
                 p.get("nm_id", ""),
                 _safe_str(p.get("account_id", "")),
                 status,
@@ -358,7 +478,7 @@ class ExcelExporter:
                     ws.cell(row=row_idx, column=col_idx).fill = fill
 
         # Фиксированные ширины — быстрее auto_size для тысяч строк
-        col_widths = [20, 30, 12, 18, 12, 14, 10, 12, 10, 12, 14, 16, 14, 14, 12, 18, 16, 18]
+        col_widths = [20, 30, 15, 12, 18, 12, 14, 10, 12, 10, 12, 14, 16, 14, 14, 12, 18, 16, 18]
         for i, width in enumerate(col_widths, start=1):
             ws.column_dimensions[get_column_letter(i)].width = width
         ws.freeze_panes = "A2"
@@ -660,6 +780,7 @@ class ExcelImporter:
                 continue
             sku_val = row[0]
             cost_val = row[1]
+            acc_val = row[2] if len(row) > 2 else None
             if sku_val is None or str(sku_val).strip() == "":
                 continue
             if cost_val is None or str(cost_val).strip() == "":
@@ -670,15 +791,135 @@ class ExcelImporter:
                     raise ExcelImportError(f"Строка {row_idx}: себестоимость не может быть отрицательной")
             except (ValueError, TypeError):
                 raise ExcelImportError(f"Строка {row_idx}: неверный формат себестоимости — {cost_val!r}")
+            try:
+                account_id = int(acc_val) if acc_val is not None and str(acc_val).strip() != "" else None
+            except (ValueError, TypeError):
+                raise ExcelImportError(f"Строка {row_idx}: неверный формат ID кабинета — {acc_val!r}")
 
             costs.append({
                 "seller_sku": str(sku_val).strip(),
                 "cost_price": cost_price,
+                "account_id": account_id,
             })
 
         logger.info(f"Импортировано {len(costs)} себестоимостей из Excel")
         return costs
 
+
+
+    @staticmethod
+    def import_min_prices(file_content: bytes) -> list:
+        """
+        Импорт минимальных цен из Excel (шаблон generate_min_prices_template).
+
+        A  seller_sku *
+        B  min_price *
+        """
+        wb = openpyxl.load_workbook(BytesIO(file_content))
+        if "Мин цены" in wb.sheetnames:
+            ws = wb["Мин цены"]
+        else:
+            ws = wb.worksheets[0]
+
+        items = []
+
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            if not row or len(row) < 2:
+                continue
+            sku_val = row[0]
+            price_val = row[1]
+            acc_val = row[2] if len(row) > 2 else None
+            if sku_val is None or str(sku_val).strip() == "":
+                continue
+            if price_val is None or str(price_val).strip() == "":
+                continue
+            try:
+                min_price = Decimal(str(price_val))
+                if min_price < 0:
+                    raise ExcelImportError(f"Строка {row_idx}: минимальная цена не может быть отрицательной")
+            except (ValueError, TypeError):
+                raise ExcelImportError(f"Строка {row_idx}: неверный формат цены — {price_val!r}")
+            try:
+                account_id = int(acc_val) if acc_val is not None and str(acc_val).strip() != "" else None
+            except (ValueError, TypeError):
+                raise ExcelImportError(f"Строка {row_idx}: неверный формат ID кабинета — {acc_val!r}")
+
+            items.append({
+                "seller_sku": str(sku_val).strip(),
+                "min_price": min_price,
+                "account_id": account_id,
+            })
+
+        logger.info(f"Импортировано {len(items)} минимальных цен из Excel")
+        return items
+
+
+    @staticmethod
+    def import_characteristics(file_content: bytes) -> list:
+        """
+        Импорт характеристик товаров из единого шаблона.
+
+        A  seller_sku *
+        B  brand        (необязательно)
+        C  cost_price   (необязательно)
+        D  min_price    (необязательно)
+        E  account_id   (необязательно)
+        """
+        wb = openpyxl.load_workbook(BytesIO(file_content))
+        if "Характеристики" in wb.sheetnames:
+            ws = wb["Характеристики"]
+        else:
+            ws = wb.worksheets[0]
+
+        items = []
+
+        def _dec(v):
+            if v is None or str(v).strip() == "":
+                return None
+            return Decimal(str(v))
+
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            if not row or len(row) < 1:
+                continue
+            sku_val = row[0]
+            if sku_val is None or str(sku_val).strip() == "":
+                continue
+            brand_val    = row[1] if len(row) > 1 else None
+            cost_val     = row[2] if len(row) > 2 else None
+            min_val      = row[3] if len(row) > 3 else None
+            acc_val      = row[4] if len(row) > 4 else None
+
+            brand = str(brand_val).strip() if brand_val is not None and str(brand_val).strip() else None
+            try:
+                cost_price = _dec(cost_val)
+                if cost_price is not None and cost_price < 0:
+                    raise ExcelImportError(f"Строка {row_idx}: себестоимость не может быть отрицательной")
+            except (ValueError, TypeError):
+                raise ExcelImportError(f"Строка {row_idx}: неверный формат себестоимости — {cost_val!r}")
+            try:
+                min_price = _dec(min_val)
+                if min_price is not None and min_price < 0:
+                    raise ExcelImportError(f"Строка {row_idx}: мин. цена не может быть отрицательной")
+            except (ValueError, TypeError):
+                raise ExcelImportError(f"Строка {row_idx}: неверный формат мин. цены — {min_val!r}")
+            try:
+                account_id = int(acc_val) if acc_val is not None and str(acc_val).strip() != "" else None
+            except (ValueError, TypeError):
+                raise ExcelImportError(f"Строка {row_idx}: неверный формат ID кабинета — {acc_val!r}")
+
+            if brand is None and cost_price is None and min_price is None:
+                continue  # пустая строка — нечего обновлять
+
+            items.append({
+                "seller_sku": str(sku_val).strip(),
+                "brand": brand,
+                "cost_price": cost_price,
+                "min_price": min_price,
+                "account_id": account_id,
+            })
+
+        logger.info(f"Импортировано {len(items)} характеристик из Excel")
+        return items
 
 # Singleton instances
 excel_exporter = ExcelExporter()

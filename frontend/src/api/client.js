@@ -82,6 +82,9 @@ export const getProductStats = () => api.get('/api/products/stats');
 export const getProducts = (params) =>
   api.get('/api/products', { params });
 
+export const getProductBrands = () =>
+  api.get('/api/products/brands');
+
 export const searchWBProduct = (accountId, text) =>
   api.get('/api/products/search-wb', { params: { account_id: accountId, text } });
 
@@ -239,6 +242,31 @@ export const importCosts = (file) => {
 
 export const downloadCostsTemplate = () =>
   api.get('/api/export/template/costs', { responseType: 'blob' });
+
+export const importMinPrices = (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  return api.post('/api/export/import/min_prices', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+};
+
+export const downloadMinPricesTemplate = () =>
+  api.get('/api/export/template/min_prices', { responseType: 'blob' });
+
+export const downloadCharacteristicsTemplate = () =>
+  api.get('/api/export/template/characteristics', { responseType: 'blob' });
+
+export const importCharacteristics = (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  return api.post('/api/export/import/characteristics', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+};
+
+export const getMarginByBrand = () =>
+  api.get('/api/analytics/margin-by-brand');
 
 // Reports
 export const generateReport = (days = 30) =>

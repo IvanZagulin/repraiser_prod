@@ -262,3 +262,81 @@ def summary(
         "avg_update_per_run": avg_update_per_run,
         "most_changed_products": most_changed,
     }
+
+
+@router.get("/margin-by-brand")
+@limiter.limit("30/minute")
+def margin_by_brand(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Average margin grouped by brand for products with cost_price set."""
+    from app.models.app_setting import AppSetting
+    uid = current_user.id
+    fee_keys = ["commission_type", "commission_value", "logistics_type",
+                "logistics_value", "acquiring_type", "acquiring_value"]
+    fee_defaults = {"commission_type": "pct", "commission_value": "0",
+                    "logistics_type": "rub", "logistics_value": "0",
+                    "acquiring_type": "pct", "acquiring_value": "0"}
+    fee_rows = db.query(AppSetting).filter(
+        AppSetting.key.in_(fee_keys),
+        AppSetting.user_id.in_([uid, None])
+    ).all()
+    fee_map = dict(fee_defaults)
+    for row in fee_rows:
+        if row.user_id is None and row.key not in {r.key for r in fee_rows if r.user_id == uid}:
+            fee_map[row.key] = row.value
+        elif row.user_id == uid:
+            fee_map[row.key] = row.value
+
+    commission_pct = float(fee_map["commission_value"]) / 100 if fee_map["commission_type"] == "pct" else 0
+    logistics_rub  = float(fee_map["logistics_value"])  if fee_map["logistics_type"]  == "rub" else 0
+    acquiring_pct  = float(fee_map["acquiring_value"])  / 100 if fee_map["acquiring_type"]  == "pct" else 0
+
+    products = (
+        db.query(Product)
+        .join(Account, Product.account_id == Account.id)
+        .filter(
+            Account.user_id == uid,
+            Product.cost_price.isnot(None),
+            Product.cost_price > 0,
+            Product.brand.isnot(None),
+        )
+        .all()
+    )
+
+    from collections import defaultdict
+    brand_margins: dict = defaultdict(list)
+    brand_skus: dict = defaultdict(set)
+
+    for p in products:
+        cost = float(p.cost_price)
+        if cost <= 0:
+            continue
+        sku_key = p.seller_sku or str(p.nm_id)
+        brand_skus[p.brand].add(sku_key)
+        snap = (
+            db.query(PriceSnapshot)
+            .filter(PriceSnapshot.product_id == p.id)
+            .order_by(PriceSnapshot.snapshot_at.desc())
+            .first()
+        )
+        if not snap or not snap.seller_price:
+            continue
+        sp = float(snap.seller_price)
+        fees = sp * (commission_pct + acquiring_pct) + logistics_rub
+        margin = (sp - cost - fees) / cost * 100
+        brand_margins[p.brand].append(margin)
+
+    result = []
+    for brand_name, skus in brand_skus.items():
+        margins = brand_margins.get(brand_name, [])
+        result.append({
+            "brand": brand_name,
+            "avg_margin": round(sum(margins) / len(margins), 1) if margins else None,
+            "products_count": len(skus),
+            "products_with_margin": len(margins),
+        })
+    result.sort(key=lambda x: (x["avg_margin"] is None, -(x["avg_margin"] or 0)))
+    return result

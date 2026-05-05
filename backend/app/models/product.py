@@ -20,6 +20,7 @@ class Product(Base):
     name = Column(String(500), nullable=True, comment="Название товара (может быть заполнено автоматически)")
     image_url = Column(String(500), nullable=True, comment="URL фото товара из WB Content API")
     cost_price = Column(Numeric(10, 2), nullable=True, comment="Себестоимость товара")
+    brand = Column(String(255), nullable=True, comment="Бренд товара")
     created_at = Column(DateTime, default=_utcnow, nullable=False)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 

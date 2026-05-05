@@ -46,7 +46,7 @@ class ProductConfigBase(BaseModel):
 
 class ProductConfigCreate(ProductConfigBase):
     """Схема создания конфигурации"""
-    pass
+    competitors: Optional[List[CompetitorEntrySchema]] = None
 
 
 class ProductConfigUpdate(BaseModel):

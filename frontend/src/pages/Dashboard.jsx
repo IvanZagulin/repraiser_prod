@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import {
-  TrendingUp, Package, PlayCircle, Users, Zap, ChevronRight, Activity,
+  TrendingUp, Package, PlayCircle, Users, Zap, ChevronRight, Activity, HelpCircle,
   BarChart2, Loader2, DollarSign, Eye, EyeOff, GripVertical, Settings2,
   X, Clock,
 } from 'lucide-react';
@@ -240,7 +240,7 @@ export default function Dashboard() {
         totalAccounts: accounts.length,
         totalProducts: s.total || prods.length,
         activeProducts: s.active ?? prods.filter((p) => p.config?.is_active).length,
-        inactiveProducts: (s.total ?? prods.length) - (s.active ?? prods.filter((p) => p.config?.is_active).length),
+        inactiveProducts: s.inactive ?? prods.filter((p) => p.config && !p.config.is_active).length,
         rrp: s.rrp ?? null,
         competitor: s.competitor ?? null,
         noConfig: s.no_config ?? null,
@@ -333,6 +333,7 @@ export default function Dashboard() {
     { title: 'Товаров',    value: stats.totalProducts,    icon: Package,    color: 'var(--accent-blue)' },
     { title: 'Активных',   value: stats.activeProducts,   icon: TrendingUp, color: '#22c55e' },
     { title: 'Неактивных', value: stats.inactiveProducts, icon: PlayCircle, color: '#f59e0b' },
+    { title: 'Без стратегии', value: stats.noConfig ?? 0,      icon: HelpCircle,  color: '#94a3b8' },
   ];
 
   if (loading) {
@@ -347,7 +348,7 @@ export default function Dashboard() {
   // ── Widget renderers ──
   const widgetRenderers = {
     stats: () => (
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         {statCards.map((s, i) => (
           <Card key={i} className="stat-card">
             <CardContent className="p-5">

@@ -169,7 +169,7 @@ export default function ConfigModal({ product, onClose }) {
             <div className="grid grid-cols-2 gap-3">
               {[
                 { id: 'rrp', label: 'РРЦ', desc: 'Диапазон вокруг рекомендованной розничной цены' },
-                { id: 'competitor', label: 'Конкурент', desc: 'Привязка к цене конкурента по nmID' },
+                { id: 'competitor', label: 'Конкурент', desc: 'Привязка к цене конкурента по артикулу WB' },
               ].map((s) => (
                 <button
                   key={s.id}
@@ -330,7 +330,7 @@ export default function ConfigModal({ product, onClose }) {
                         setErrors(p => ({ ...p, competitors: undefined }));
                       }}
                       className="input flex-1"
-                      placeholder="nmID (напр. 123456789)"
+                      placeholder="Артикул WB (напр. 123456789)"
                     />
                     <input
                       type="text"

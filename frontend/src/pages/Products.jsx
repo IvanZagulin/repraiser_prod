@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Settings, Trash2, Play, Search, LayoutGrid, List, LineChart, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { getProducts, deleteProduct, runRepricer, getSettings, fetchPrices, bulkActivate, bulkDelete, bulkStrategy, getAccounts } from '../api/client';
+import { getProducts, deleteProduct, runRepricer, getSettings, fetchPrices, bulkActivate, bulkDelete, bulkStrategy, getAccounts, getProductBrands } from '../api/client';
 import { useProductsStore } from '../store';
 import ProductModal from '../components/ProductModal';
 import ConfigModal from '../components/ConfigModal';
@@ -45,7 +45,9 @@ export default function Products() {
   const [selected, setSelected] = useState(new Set());
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterAccount, setFilterAccount] = useState('');
+  const [filterBrand, setFilterBrand] = useState('');
   const [accounts, setAccounts] = useState([]);
+  const [brands, setBrands] = useState([]);
   const [showBulkStrategy, setShowBulkStrategy] = useState(false);
   const [bulkStrategyType, setBulkStrategyType] = useState('rrp');
   const [bulkMinPrice, setBulkMinPrice] = useState('');
@@ -61,7 +63,7 @@ export default function Products() {
   // Reload when debounced search or strategy changes
   useEffect(() => {
     loadProducts(1);
-  }, [debouncedSearch, filterStrategy, filterStatus, filterAccount]);
+  }, [debouncedSearch, filterStrategy, filterStatus, filterAccount, filterBrand]);
 
   useEffect(() => {
     isMounted.current = true;
@@ -70,6 +72,9 @@ export default function Products() {
       .catch(() => {});
     getAccounts()
       .then((res) => { if (isMounted.current) setAccounts(res.data.accounts || []); })
+      .catch(() => {});
+    getProductBrands()
+      .then((res) => { if (isMounted.current) setBrands(res.data || []); })
       .catch(() => {});
     const interval = setInterval(() => refreshProductsSilent(), 30000);
     return () => {
@@ -87,6 +92,7 @@ export default function Products() {
       if (filterStatus === 'active') params.is_active = true;
       if (filterStatus === 'inactive') params.is_active = false;
       if (filterAccount) params.account_id = filterAccount;
+      if (filterBrand) params.brand = filterBrand;
       const response = await getProducts(params);
       setProducts(response.data.products);
       setTotalProducts(response.data.total);
@@ -228,7 +234,7 @@ export default function Products() {
   const getStrategyLabel = (strategy) => {
     if (strategy === 'rrp') return 'РРЦ';
     if (strategy === 'competitor') return 'Конкурент';
-    return 'N/A';
+    return '—';
   };
 
   const getMarginColor = (m) => {
@@ -307,6 +313,16 @@ export default function Products() {
             <option value="">Все кабинеты</option>
             {accounts.map((a) => (
               <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+          <select
+            value={filterBrand}
+            onChange={(e) => setFilterBrand(e.target.value)}
+            className="input w-44"
+          >
+            <option value="">Все бренды</option>
+            {brands.map((b) => (
+              <option key={b.brand} value={b.brand}>{b.brand} ({b.sku_count})</option>
             ))}
           </select>
 
@@ -466,7 +482,7 @@ export default function Products() {
                   <th>Артикул</th>
                   <th>Кабинет</th>
                   <th>Название</th>
-                  <th>nmID</th>
+                  <th>Артикул WB</th>
                   <th>Стратегия</th>
                   <th>Цена (СПП)</th>
                   <th>С кошельком</th>

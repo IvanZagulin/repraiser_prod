@@ -61,7 +61,7 @@ const ReasonBadge = ({ code }) => {
     UPDATED: { label: 'Обновлена', color: '#16a34a', bg: 'rgba(22,163,74,0.1)' },
     CLAMPED_TO_MIN: { label: 'Мин. цена', color: '#d97706', bg: 'rgba(217,119,6,0.1)' },
     CLAMPED_TO_MAX: { label: 'Макс. цена', color: '#d97706', bg: 'rgba(217,119,6,0.1)' },
-    CLAMPED_TO_MARGIN: { label: 'Margin Guard', color: '#ef4444', bg: 'rgba(239,68,68,0.1)' },
+    CLAMPED_TO_MARGIN: { label: 'Защита маржи', color: '#ef4444', bg: 'rgba(239,68,68,0.1)' },
     SKIPPED: { label: 'Пропущена', color: '#9ca3af', bg: 'rgba(156,163,175,0.1)' },
     ERROR: { label: 'Ошибка', color: '#ef4444', bg: 'rgba(239,68,68,0.1)' },
   };
@@ -132,7 +132,7 @@ export default function ProductDetailPage() {
 
   const copyNmId = () => {
     navigator.clipboard.writeText(String(data.product.nm_id));
-    toast.success('nmID скопирован');
+    toast.success('Артикул WB скопирован');
   };
 
   const handleDelete = async () => {
@@ -203,6 +203,9 @@ export default function ProductDetailPage() {
         </button>
         <div className="flex-1">
           <h1 className="page-h1">{product.name || product.seller_sku}</h1>
+          {product.brand && (
+            <p className="text-sm mt-0.5" style={{ color: 'var(--text-3)' }}>{product.brand}</p>
+          )}
           <div className="flex items-center gap-3 mt-1">
             <span className="text-sm" style={{ color: 'var(--text-3)' }}>
               Артикул: <strong style={{ color: 'var(--text-2)' }}>{product.seller_sku}</strong>
@@ -212,7 +215,7 @@ export default function ProductDetailPage() {
               className="flex items-center gap-1 text-sm hover:text-primary transition-colors"
               style={{ color: 'var(--text-3)' }}
             >
-              nmID: <strong style={{ color: 'var(--text-2)' }}>{product.nm_id}</strong>
+              Арт. WB: <strong style={{ color: 'var(--text-2)' }}>{product.nm_id}</strong>
               <Copy className="w-3 h-3" />
             </button>
             <a
@@ -617,7 +620,7 @@ export default function ProductDetailPage() {
                   <span>Макс: {r.max_price ? `${Math.round(r.max_price).toLocaleString('ru')}₽` : '∞'}</span>
                 </div>
                 <div className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
-                  nmID: {r.nm_id}
+                  Арт. WB: {r.nm_id}
                 </div>
               </div>
             ))}
@@ -686,7 +689,9 @@ export default function ProductDetailPage() {
               <Legend formatter={(v) => v === 'seller' ? 'Цена продавца' : v === 'final' ? 'Цена покупателя' : 'Конкурент'} wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
               <Line type="monotone" dataKey="seller" name="seller" stroke="#7c3aed" strokeWidth={2} dot={false} activeDot={{ r: 4, strokeWidth: 0 }} />
               <Line type="monotone" dataKey="final" name="final" stroke="#16a34a" strokeWidth={2} dot={false} activeDot={{ r: 4, strokeWidth: 0 }} strokeDasharray="5 3" />
-              <Line type="monotone" dataKey="competitor" name="competitor" stroke="#f97316" strokeWidth={1.5} dot={false} activeDot={{ r: 4, strokeWidth: 0 }} strokeDasharray="4 3" connectNulls={false} />
+              {config?.strategy === 'competitor' && (
+                <Line type="monotone" dataKey="competitor" name="competitor" stroke="#f97316" strokeWidth={1.5} dot={false} activeDot={{ r: 4, strokeWidth: 0 }} strokeDasharray="4 3" connectNulls={false} />
+              )}
             </LineChart>
           </ResponsiveContainer>
         ) : (

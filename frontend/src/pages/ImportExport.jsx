@@ -6,8 +6,8 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
-  importStrategy, importProducts, getTaskStatus, importCosts,
-  exportHistory, exportProducts, downloadTemplate, downloadCostsTemplate
+  importStrategy, importProducts, getTaskStatus, importCharacteristics,
+  exportHistory, exportProducts, downloadTemplate, downloadCharacteristicsTemplate
 } from '../api/client';
 
 /* ─── helpers ─── */
@@ -104,7 +104,9 @@ export default function ImportExport() {
   // Template downloads
   const [loadingTplProducts, setLoadingTplProducts] = useState(false);
   const [loadingTplStrategy, setLoadingTplStrategy] = useState(false);
-  const [loadingTplCosts,    setLoadingTplCosts]    = useState(false);
+  const [loadingTplChar, setLoadingTplChar] = useState(false);
+  const [uploadingChar, setUploadingChar] = useState(false);
+  const [importResultChar, setImportResultChar] = useState(null);
 
   // Export
   const [loadingExpProducts, setLoadingExpProducts] = useState(false);
@@ -114,14 +116,12 @@ export default function ImportExport() {
   // Import
   const [uploadingProducts, setUploadingProducts] = useState(false);
   const [uploadingStrategy, setUploadingStrategy] = useState(false);
-  const [uploadingCosts,    setUploadingCosts]    = useState(false);
   const [importResultProd,  setImportResultProd]  = useState(null);
   const [importResultStrat, setImportResultStrat] = useState(null);
-  const [importResultCosts, setImportResultCosts] = useState(null);
 
   const fileInputProducts = useRef(null);
   const fileInputStrategy = useRef(null);
-  const fileInputCosts    = useRef(null);
+  const fileInputChar = useRef(null);
 
   /* ── templates ── */
   const handleDownloadTemplate = async (type) => {
@@ -139,16 +139,16 @@ export default function ImportExport() {
     }
   };
 
-  const handleDownloadCostsTemplate = async () => {
-    setLoadingTplCosts(true);
+  const handleDownloadCharacteristicsTemplate = async () => {
+    setLoadingTplChar(true);
     try {
-      const res = await downloadCostsTemplate();
-      triggerDownload(res.data, 'template_costs.xlsx');
+      const res = await downloadCharacteristicsTemplate();
+      triggerDownload(res.data, 'template_characteristics.xlsx');
       toast.success('Шаблон скачан');
     } catch {
       toast.error('Ошибка скачивания шаблона');
     } finally {
-      setLoadingTplCosts(false);
+      setLoadingTplChar(false);
     }
   };
 
@@ -264,22 +264,22 @@ export default function ImportExport() {
     }
   };
 
-  const handleCostsImport = async (e) => {
+  const handleCharImport = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    setUploadingCosts(true);
-    setImportResultCosts(null);
+    setUploadingChar(true);
+    setImportResultChar(null);
     try {
-      const res = await importCosts(file);
-      setImportResultCosts(res.data);
-      toast.success(`Себестоимость обновлена: ${res.data.updated} товаров`);
+      const res = await importCharacteristics(file);
+      setImportResultChar(res.data);
+      toast.success(`Характеристики обновлены: ${res.data.updated} товаров`);
       if (res.data.errors?.length) toast.error(`Ошибок: ${res.data.errors.length}`);
     } catch (err) {
       const msg = parseImportError(err);
       toast.error(msg);
-      setImportResultCosts({ errors: [msg] });
+      setImportResultChar({ errors: [msg] });
     } finally {
-      setUploadingCosts(false);
+      setUploadingChar(false);
       e.target.value = '';
     }
   };
@@ -322,7 +322,7 @@ export default function ImportExport() {
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-foreground">Шаблон товаров</p>
-                  <p className="text-xs text-muted-foreground">nmID + ID кабинета обязательны</p>
+                  <p className="text-xs text-muted-foreground">Артикул WB + ID кабинета обязательны</p>
                 </div>
               </div>
               <button
@@ -357,23 +357,23 @@ export default function ImportExport() {
               </button>
             </div>
 
-            {/* Costs template */}
+            {/* Characteristics template */}
             <div className="flex items-center justify-between gap-3 p-3.5 rounded-xl border border-border bg-muted/30">
               <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-cyan-100 dark:bg-cyan-900/30">
-                  <TrendingUp className="w-4 h-4 text-cyan-500" />
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-purple-100 dark:bg-purple-900/30">
+                  <FileSpreadsheet className="w-4 h-4 text-purple-500" />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-sm font-medium text-foreground">Шаблон себестоимостей</p>
-                  <p className="text-xs text-muted-foreground">Артикул + закупочная цена</p>
+                  <p className="text-sm font-medium text-foreground">Шаблон характеристик</p>
+                  <p className="text-xs text-muted-foreground">Бренд + себестоимость + МРЦ</p>
                 </div>
               </div>
               <button
                 className="btn btn-secondary btn-sm gap-1.5 flex-shrink-0"
-                onClick={handleDownloadCostsTemplate}
-                disabled={loadingTplCosts}
+                onClick={handleDownloadCharacteristicsTemplate}
+                disabled={loadingTplChar}
               >
-                {loadingTplCosts ? <Spin /> : <ArrowDown className="w-3.5 h-3.5" />}
+                {loadingTplChar ? <Spin /> : <ArrowDown className="w-3.5 h-3.5" />}
                 .xlsx
               </button>
             </div>
@@ -387,8 +387,8 @@ export default function ImportExport() {
               </summary>
               <div className="mt-2 p-3 rounded-lg bg-muted/50 border border-border text-xs text-muted-foreground space-y-1.5">
                 <div className="font-semibold text-foreground mb-1">Хотя бы одно из A или B обязательно:</div>
-                <div><b>A — nmID</b> — числовой артикул WB (если есть)</div>
-                <div><b>B — Артикул продавца</b> — vendorCode (если нет nmID, система найдёт его сама)</div>
+                <div><b>A — Артикул WB</b> — числовой артикул (если есть)</div>
+                <div><b>B — Артикул продавца</b> — (если нет артикула WB, система найдёт его сама)</div>
                 <div className="pt-1 border-t border-gray-200 mt-1"><b>C — ID аккаунта *</b> — из раздела Аккаунты (обязательно)</div>
                 <div><b>D — Название</b> — <i>необязательно</i>, подтянется из WB автоматически</div>
               </div>
@@ -403,7 +403,7 @@ export default function ImportExport() {
                 <div><b>C</b> — Активен: <code>да</code> / <code>нет</code></div>
                 <div><b>D</b> — МРЦ — мин. цена *</div>
                 <div><b>E–H</b> — Макс. цена, РРЦ, допуск, кошелёк</div>
-                <div><b>I</b> — nmID конкурента, <b>J</b> — тип смещения (rub/pct), <b>K</b> — направление (above/below), <b>L</b> — смещение</div>
+                <div><b>I</b> — артикул WB конкурента, <b>J</b> — тип смещения (rub/pct), <b>K</b> — направление (ниже/выше), <b>L</b> — смещение</div>
               </div>
             </details>
           </div>
@@ -429,7 +429,7 @@ export default function ImportExport() {
                 {uploadingProducts && <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600 ml-auto" />}
               </div>
               <p className="text-xs text-muted-foreground mb-3">
-                Достаточно nmID <b>или</b> артикула продавца + ID кабинета. Название и фото подтянутся автоматически.
+                Достаточно артикула WB <b>или</b> артикула продавца + ID кабинета. Название и фото подтянутся автоматически.
               </p>
               <input ref={fileInputProducts} type="file" accept=".xlsx,.xls"
                      onChange={handleProductsImport} disabled={uploadingProducts} className="hidden" />
@@ -467,30 +467,30 @@ export default function ImportExport() {
             </div>
             <ImportResult result={importResultStrat} />
 
-            {/* Import costs */}
+            {/* Import characteristics */}
             <div
-              className="p-4 rounded-xl border-2 border-dashed border-cyan-200 bg-cyan-50 dark:border-cyan-800 dark:bg-cyan-950/30"
+              className="p-4 rounded-xl border-2 border-dashed border-purple-200 bg-purple-50 dark:border-purple-800 dark:bg-purple-950/30"
             >
               <div className="flex items-center gap-2 mb-1">
-                <TrendingUp className="w-4 h-4 text-cyan-600" />
-                <span className="text-sm font-medium text-foreground">Себестоимости</span>
-                {uploadingCosts && <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-600 ml-auto" />}
+                <FileSpreadsheet className="w-4 h-4 text-purple-600" />
+                <span className="text-sm font-medium text-foreground">Характеристики</span>
+                {uploadingChar && <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-600 ml-auto" />}
               </div>
               <p className="text-xs text-muted-foreground mb-3">
-                Загрузить закупочные цены для расчёта маржи по артикулу продавца
+                Бренд, себестоимость, МРЦ — любые поля сразу
               </p>
-              <input ref={fileInputCosts} type="file" accept=".xlsx,.xls"
-                     onChange={handleCostsImport} disabled={uploadingCosts} className="hidden" />
+              <input ref={fileInputChar} type="file" accept=".xlsx,.xls"
+                     onChange={handleCharImport} disabled={uploadingChar} className="hidden" />
               <button
-                className="btn btn-sm w-full gap-1.5 bg-cyan-600 hover:bg-cyan-700 text-white"
-                onClick={() => fileInputCosts.current?.click()}
-                disabled={uploadingCosts}
+                className="btn btn-sm w-full gap-1.5 bg-purple-600 hover:bg-purple-700 text-white"
+                onClick={() => fileInputChar.current?.click()}
+                disabled={uploadingChar}
               >
-                {uploadingCosts ? <Spin /> : <Upload className="w-3.5 h-3.5" />}
-                {uploadingCosts ? 'Загрузка…' : 'Выбрать файл'}
+                {uploadingChar ? <Spin /> : <Upload className="w-3.5 h-3.5" />}
+                {uploadingChar ? 'Загрузка…' : 'Выбрать файл'}
               </button>
             </div>
-            <ImportResult result={importResultCosts} />
+            <ImportResult result={importResultChar} />
           </div>
         </div>
 

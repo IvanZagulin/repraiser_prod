@@ -28,6 +28,7 @@ schema_config:
 limits_config:
   retention_period: 168h   # хранить 7 дней
   max_query_parallelism: 32
+  query_timeout: 120s
 
 query_scheduler:
   max_outstanding_requests_per_tenant: 2048

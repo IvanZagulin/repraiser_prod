@@ -56,3 +56,12 @@ docker-compose.override.yml
 
 # Logs
 *.log
+
+# Backups
+*.bak
+*.bak_*
+*.bak2
+*.bak2_*
+*.broken
+*_fix.py
+node_modules/

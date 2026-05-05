@@ -112,7 +112,7 @@ export default function ProductModal({ onClose }) {
                 onChange={(e) => { setSearchText(e.target.value); setFound(null); }}
                 onKeyDown={handleKeyDown}
                 className="input flex-1"
-                placeholder="12345678 или SKU-001"
+                placeholder="12345678 или МОЙ-АРТИКУЛ"
               />
               <button
                 type="button"
@@ -125,7 +125,7 @@ export default function ProductModal({ onClose }) {
               </button>
             </div>
             <p className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
-              nmID (артикул WB) или vendorCode (артикул продавца)
+              Артикул WB (цифровой) или артикул продавца
             </p>
           </div>
 

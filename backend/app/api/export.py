@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Query
 from fastapi.responses import Response
@@ -9,11 +10,12 @@ from slowapi import Limiter
 
 from app.database import get_db
 from app.models import Product, ProductConfig, PriceSnapshot, RepricerRun, PriceChange, Account, WBCatalog
-from app.models.competitor_entry import CompetitorEntry
 from app.models.user import User
 from app.api.auth import get_current_user
 from app.utils import get_user_id_key
 from app.utils.excel import excel_exporter, excel_importer, ExcelImportError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -112,25 +114,27 @@ async def export_products(
     product_ids = [p.id for p in products]
     last_snapshots: dict = {}
     if product_ids:
-        # Для каждого product_id берём последний снимок через subquery
-        from sqlalchemy import func
-        subq = (
-            db.query(
-                PriceSnapshot.product_id,
-                func.max(PriceSnapshot.snapshot_at).label("max_at")
+        BATCH_SIZE = 5000
+        for batch_start in range(0, len(product_ids), BATCH_SIZE):
+            batch_ids = product_ids[batch_start:batch_start+BATCH_SIZE]
+            from sqlalchemy import func
+            subq = (
+                db.query(
+                    PriceSnapshot.product_id,
+                    func.max(PriceSnapshot.snapshot_at).label("max_at")
+                )
+                .filter(PriceSnapshot.product_id.in_(batch_ids))
+                .group_by(PriceSnapshot.product_id)
+                .subquery()
             )
-            .filter(PriceSnapshot.product_id.in_(product_ids))
-            .group_by(PriceSnapshot.product_id)
-            .subquery()
-        )
-        rows = (
-            db.query(PriceSnapshot)
-            .join(subq, (PriceSnapshot.product_id == subq.c.product_id) &
-                        (PriceSnapshot.snapshot_at == subq.c.max_at))
-            .all()
-        )
-        last_snapshots = {s.product_id: s for s in rows}
-
+            rows = (
+                db.query(PriceSnapshot)
+                .join(subq, (PriceSnapshot.product_id == subq.c.product_id) &
+                            (PriceSnapshot.snapshot_at == subq.c.max_at))
+                .all()
+            )
+            for s in rows:
+                last_snapshots[s.product_id] = s
     products_data = []
     for product in products:
         last_snapshot = last_snapshots.get(product.id)
@@ -155,6 +159,7 @@ async def export_products(
         products_data.append({
             "seller_sku":           product.seller_sku,
             "name":                 product.name,
+            "brand":                product.brand,
             "nm_id":                product.nm_id,
             "account_id":         product.account.name if product.account else "",
             "config":               cfg_dict,
@@ -382,7 +387,8 @@ async def import_costs(
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail="Ошибка сохранения данных")
+        logger.exception("import_costs commit failed")
+        raise HTTPException(status_code=500, detail=f"Ошибка сохранения данных: {e}")
 
     return {
         "success": True,
@@ -434,6 +440,8 @@ async def import_strategy(
         'errors': []
     }
 
+    processed_product_ids: set = set()
+
     for config_data in configs:
         # IDOR fix: ищем товар только среди товаров текущего пользователя
         q = (
@@ -468,7 +476,7 @@ async def import_strategy(
                     account_id=catalog_entry.account_id,
                     nm_id=catalog_entry.nm_id,
                     seller_sku=catalog_entry.vendor_code,
-                    name=catalog_entry.name or catalog_entry.vendor_code,
+                    name=catalog_entry.name if catalog_entry.name and catalog_entry.name != catalog_entry.vendor_code else None,
                     image_url=catalog_entry.image_url,
                 )
                 db.add(new_product)
@@ -486,10 +494,31 @@ async def import_strategy(
             continue
         product = products_found[0]
 
-        if product.config:
+        if product.id in processed_product_ids:
+            # Дубль — применяем, если РРЦ в этой строке выше уже обработанного
+            new_rrp = config_data.get('rrp_price')
+            if new_rrp is not None:
+                db.flush()
+                dup_config = db.query(ProductConfig).filter(
+                    ProductConfig.product_id == product.id
+                ).first()
+                if dup_config and (dup_config.rrp_price is None or new_rrp > dup_config.rrp_price):
+                    for key, value in config_data.items():
+                        if key not in ('seller_sku', 'account_id') and value is not None:
+                            setattr(dup_config, key, value)
+            continue
+        processed_product_ids.add(product.id)
+
+        # flush перед запросом — autoflush=False, иначе pending-объекты не видны
+        db.flush()
+        existing_config = db.query(ProductConfig).filter(
+            ProductConfig.product_id == product.id
+        ).first()
+
+        if existing_config:
             for key, value in config_data.items():
                 if key not in ('seller_sku', 'account_id') and value is not None:
-                    setattr(product.config, key, value)
+                    setattr(existing_config, key, value)
             results['updated'] += 1
         else:
             config = ProductConfig(
@@ -497,27 +526,15 @@ async def import_strategy(
                 **{k: v for k, v in config_data.items() if k not in ('seller_sku', 'account_id')}
             )
             db.add(config)
-            db.flush()
             results['created'] += 1
-
-        # Sync CompetitorEntry so the product card shows the competitor immediately
-        cfg_obj = product.config
-        if cfg_obj and cfg_obj.competitor_nm_id:
-            db.query(CompetitorEntry).filter(
-                CompetitorEntry.product_config_id == cfg_obj.id
-            ).delete()
-            db.add(CompetitorEntry(
-                product_config_id=cfg_obj.id,
-                nm_id=cfg_obj.competitor_nm_id,
-                alias=None,
-            ))
 
     # Один коммит в конце (fix: commit в цикле)
     try:
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail="Ошибка сохранения данных")
+        logger.exception("import_strategy commit failed")
+        raise HTTPException(status_code=500, detail=f"Ошибка сохранения данных: {e}")
 
     return {
         "success": True,

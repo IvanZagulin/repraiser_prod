@@ -1,6 +1,8 @@
 import { useRef, useState, useCallback } from 'react';
 import { Search, TrendingUp, Loader2, X, BarChart2, Percent, ArrowUpDown, ExternalLink } from 'lucide-react';
-import { getProducts, getPriceDynamics } from '../api/client';
+import { getProducts, getPriceDynamics,
+  getMarginByBrand
+} from '../api/client';
 import { useNavigate } from 'react-router-dom';
 import { formatMsk } from '../utils/date';
 import {
@@ -45,6 +47,22 @@ function StatCard({ label, value, sub, color }) {
 
 export default function Analytics() {
   const [productSearch, setProductSearch] = useState('');
+  const [brandMargins, setBrandMargins] = useState([]);
+  const [brandMarginLoading, setBrandMarginLoading] = useState(false);
+  const [brandMarginLoaded, setBrandMarginLoaded] = useState(false);
+
+  const loadBrandMargins = async () => {
+    setBrandMarginLoading(true);
+    try {
+      const res = await getMarginByBrand();
+      setBrandMargins(res.data);
+      setBrandMarginLoaded(true);
+    } catch {
+      // ignore
+    } finally {
+      setBrandMarginLoading(false);
+    }
+  };
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
@@ -754,6 +772,54 @@ export default function Analytics() {
           )}
         </CardContent>
       </Card>
+
+      {/* МАРЖА ПО БРЕНДАМ */}
+      <div className="card mt-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-base font-semibold" style={{color:'var(--text)'}}>Маржа по брендам</h2>
+            <p className="text-xs mt-0.5" style={{color:'var(--text-3)'}}>Средняя маржа по товарам с заполненной себестоимостью</p>
+          </div>
+          {!brandMarginLoaded && (
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={loadBrandMargins}
+              disabled={brandMarginLoading}
+            >
+              {brandMarginLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Загрузить'}
+            </button>
+          )}
+        </div>
+        {brandMarginLoaded && brandMargins.length === 0 && (
+          <p className="text-sm" style={{color:'var(--text-3)'}}>Нет данных — заполните бренды и себестоимости товаров</p>
+        )}
+        {brandMargins.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b" style={{borderColor:'var(--border)'}}>
+                  <th className="text-left py-2 pr-4 font-medium" style={{color:'var(--text-3)'}}>Бренд</th>
+                  <th className="text-right py-2 pr-4 font-medium" style={{color:'var(--text-3)'}}>Ср. маржа</th>
+                  <th className="text-right py-2 font-medium" style={{color:'var(--text-3)'}}>Артикулов</th>
+                </tr>
+              </thead>
+              <tbody>
+                {brandMargins.map((b) => (
+                  <tr key={b.brand} className="border-b" style={{borderColor:'rgba(var(--border-rgb),.4)'}}>
+                    <td className="py-2 pr-4 font-medium" style={{color:'var(--text)'}}>{b.brand || '—'}</td>
+                    <td className="py-2 pr-4 text-right">
+                      <span style={{color: b.avg_margin >= 20 ? '#16a34a' : b.avg_margin >= 0 ? '#ca8a04' : '#dc2626', fontWeight:600}}>
+                        {b.avg_margin !== null ? `${b.avg_margin}%` : '—'}
+                      </span>
+                    </td>
+                    <td className="py-2 text-right" style={{color:'var(--text-3)'}}>{b.products_count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
     </div>
   );

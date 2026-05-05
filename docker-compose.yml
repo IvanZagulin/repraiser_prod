@@ -244,8 +244,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256m
-          cpus: "0.25"
+          memory: 512m
+          cpus: "0.5"
     restart: unless-stopped
     networks:
       - wb_network
@@ -283,7 +283,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256m
+          memory: 512m
           cpus: "0.25"
     restart: unless-stopped
     networks:
@@ -306,7 +306,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256m
+          memory: 512m
           cpus: "0.25"
     restart: unless-stopped
     networks:

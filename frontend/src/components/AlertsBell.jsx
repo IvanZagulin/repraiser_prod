@@ -218,7 +218,7 @@ export default function AlertsBell() {
                     }}
                   >
                     <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-2)' }}>
-                      nmID: {alert.competitor_nm_id}
+                      Арт. WB: {alert.competitor_nm_id}
                     </span>
                     <span style={{ fontSize: 10, color: 'var(--text-3)' }}>
                       {formatMsk(alert.created_at, 'dd.MM HH:mm')}
