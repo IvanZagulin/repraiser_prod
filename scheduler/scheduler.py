@@ -55,7 +55,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Database setup
-engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
+engine = create_engine(
+    settings.DATABASE_URL,
+    pool_pre_ping=True,
+    pool_timeout=10,
+    connect_args={"connect_timeout": 10},
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Глобальная ссылка на планировщик
@@ -161,11 +166,9 @@ def _user_should_run(db, user_id: int) -> bool:
     return True
 
 
-async def repricer_job():
-    """
-    Тик планировщика (каждые 5 мин): проверяет каждого пользователя
-    и запускает репрайсер если подошло время по его расписанию.
-    """
+def _repricer_job_sync():
+    """Синхронная часть repricer_job — выполняется в отдельном потоке,
+    чтобы блокирующие DB-вызовы не замораживали asyncio event loop."""
     logger.info("=" * 70)
     logger.info("Планировщик: проверка пользователей")
     logger.info("=" * 70)
@@ -183,16 +186,13 @@ async def repricer_job():
         dispatched = 0
         for (user_id,) in users:
             try:
-                # Проверяем расписание, план, рабочие часы
                 if not _user_should_run(db, user_id):
                     continue
 
-                # Не ставим задачу в очередь если прогон уже идёт — защита от мусорных дублей
                 if _is_run_locked(user_id):
                     logger.info(f"  user={user_id}: прогон уже идёт (Redis-лок), пропускаем")
                     continue
 
-                # Проверяем наличие товаров С активными конфигами
                 product_rows = db.execute(
                     text("""
                         SELECT p.id FROM products p
@@ -223,13 +223,45 @@ async def repricer_job():
         logger.info(f"Отправлено задач: {dispatched}")
 
     except Exception as e:
-        logger.error(f"Критическая ошибка в repricer_job: {e}", exc_info=True)
-        await telegram_notifier.notify_scheduler_error(str(e))
+        logger.error(f"Критическая ошибка в _repricer_job_sync: {e}", exc_info=True)
+        raise
 
     finally:
         db.close()
 
     logger.info("=" * 70)
+
+
+async def repricer_job():
+    """
+    Тик планировщика (каждый час в :00): проверяет каждого пользователя
+    и запускает репрайсер если подошло время по его расписанию.
+
+    Синхронные DB-запросы выполняются в отдельном потоке (asyncio.to_thread),
+    чтобы не замораживать event loop. asyncio.wait_for гарантирует прерывание
+    за 25 секунд — защита от зависания при недоступной БД.
+    """
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(_repricer_job_sync),
+            timeout=25.0,
+        )
+    except asyncio.TimeoutError:
+        logger.error(
+            "repricer_job: превышен timeout (25s) — вероятно БД недоступна. "            "Задача пропущена, следующий запуск через час."
+        )
+        try:
+            await telegram_notifier.notify_scheduler_error(
+                "repricer_job завис и был прерван по timeout (25s). "                "Проверьте доступность PostgreSQL."
+            )
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"repricer_job: необработанная ошибка: {e}", exc_info=True)
+        try:
+            await telegram_notifier.notify_scheduler_error(str(e))
+        except Exception:
+            pass
 
 
 async def health_check_proxies():
@@ -373,16 +405,16 @@ def setup_scheduler() -> AsyncIOScheduler:
     """Настройка и запуск планировщика"""
     scheduler = AsyncIOScheduler(timezone="UTC")
 
-    # Единый тик каждые 5 минут — внутри проверяется per-user расписание
+    # Тик ровно в начале каждого часа (xx:00) — 9:00, 10:00, 11:00 и т.д.
     scheduler.add_job(
         repricer_job,
-        trigger=IntervalTrigger(minutes=TICK_MINUTES),
+        trigger=CronTrigger(minute=0, timezone="UTC"),
         id="repricer_job",
-        name="Repricer Tick",
+        name="Repricer Hourly Tick",
         replace_existing=True,
         max_instances=1
     )
-    logger.info(f"Задача 'repricer_job' зарегистрирована (тик каждые {TICK_MINUTES} мин.)")
+    logger.info("Задача 'repricer_job' зарегистрирована (каждый час ровно в :00)")
 
     scheduler.add_job(
         health_check_proxies,

@@ -1,4 +1,4 @@
-from typing import Annotated, Optional
+from typing import Annotated, Optional, List
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query, Body
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -10,6 +10,7 @@ from app.database import get_db
 from app.models import Product, ProductConfig, PriceSnapshot, Account, ConfigChangeLog
 from app.models.user import User
 from app.models.competitor_entry import CompetitorEntry
+from app.models.rrp_spp_tier import RRPSPPTier
 from app.models.price_change import PriceChange
 from app.models.pricing_rule import PricingRule
 from app.schemas.product import (
@@ -704,6 +705,69 @@ async def update_product_config(
     return ProductConfigResponse.model_validate(product.config)
 
 
+@router.put("/{product_id}/spp-tiers")
+@limiter.limit("30/minute")
+async def update_spp_tiers(
+    request: Request,
+    product_id: int,
+    tiers: List[dict],
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Replace all SPP tiers for a product config.
+
+    Each tier: {spp_min, spp_max (null=∞), seller_price (null or >0), rrp_price (null or >0)}
+    Exactly one of seller_price or rrp_price must be set per row.
+    """
+    from decimal import Decimal as _D
+    product = _user_product(db, product_id, current_user)
+    config = db.query(ProductConfig).filter(ProductConfig.product_id == product.id).first()
+    if not config:
+        raise HTTPException(status_code=404, detail="Стратегия не настроена")
+
+    # Validate tiers
+    for i, t in enumerate(tiers):
+        sp = t.get("seller_price")
+        rp = t.get("rrp_price")
+        has_sp = sp is not None and str(sp).strip() not in ("", "null")
+        has_rp = rp is not None and str(rp).strip() not in ("", "null")
+        if not has_sp and not has_rp:
+            raise HTTPException(status_code=400,
+                detail=f"Ступень {i+1}: укажите цену продавца или РРЦ")
+        if has_sp and has_rp:
+            raise HTTPException(status_code=400,
+                detail=f"Ступень {i+1}: заполните только одно — цену продавца или РРЦ")
+
+    # Replace all tiers
+    db.query(RRPSPPTier).filter(RRPSPPTier.product_config_id == config.id).delete()
+    for t in tiers:
+        sp_val = t.get("seller_price")
+        rp_val = t.get("rrp_price")
+        sm_val = t.get("spp_max")
+        db.add(RRPSPPTier(
+            product_config_id=config.id,
+            spp_min=_D(str(t["spp_min"])),
+            spp_max=_D(str(sm_val)) if sm_val not in (None, "", "null") else None,
+            seller_price=_D(str(sp_val)) if sp_val not in (None, "", "null") else None,
+            rrp_price=_D(str(rp_val)) if rp_val not in (None, "", "null") else None,
+        ))
+    db.commit()
+    db.refresh(config)
+    return {
+        "success": True,
+        "count": len(tiers),
+        "tiers": [
+            {
+                "spp_min": float(t.spp_min),
+                "spp_max": float(t.spp_max) if t.spp_max is not None else None,
+                "seller_price": float(t.seller_price) if t.seller_price else None,
+                "rrp_price": float(t.rrp_price) if t.rrp_price else None,
+            }
+            for t in config.rrp_spp_tiers
+        ],
+    }
+
+
 @router.get("/{product_id}/history")
 @limiter.limit("30/minute")
 async def get_product_history(
@@ -854,12 +918,28 @@ async def get_product_detail(
             "rrp_price": float(product.config.rrp_price) if product.config.rrp_price else None,
             "rrp_tolerance": float(product.config.rrp_tolerance) if product.config.rrp_tolerance else None,
             "rrp_consider_wallet": product.config.rrp_consider_wallet,
+            "skip_margin_check": getattr(product.config, "skip_margin_check", False),
             "competitor_nm_id": product.config.competitor_nm_id,
             "competitor_offset_type": product.config.competitor_offset_type,
             "competitor_offset_direction": product.config.competitor_offset_direction,
             "competitor_offset_value": float(product.config.competitor_offset_value) if product.config.competitor_offset_value else None,
             "competitor_select_rule": product.config.competitor_select_rule,
             "competitors": competitors,
+            # Night price boost
+            "night_price_enabled": getattr(product.config, "night_price_enabled", False),
+            "night_start_msk": product.config.night_start_msk,
+            "night_end_msk": product.config.night_end_msk,
+            "night_seller_price": float(product.config.night_seller_price) if getattr(product.config, "night_seller_price", None) else None,
+            # SPP tiers
+            "rrp_spp_tiers": [
+                {
+                    "spp_min": float(t.spp_min),
+                    "spp_max": float(t.spp_max) if t.spp_max is not None else None,
+                    "seller_price": float(t.seller_price) if t.seller_price is not None else None,
+                    "rrp_price": float(t.rrp_price) if t.rrp_price is not None else None,
+                }
+                for t in (product.config.rrp_spp_tiers or [])
+            ],
             "updated_at": product.config.updated_at.isoformat() if product.config.updated_at else None,
         }
 

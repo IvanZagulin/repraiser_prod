@@ -214,3 +214,51 @@ def get_stats(
             "updated": last_run.updated_count if last_run else 0,
         } if last_run else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Leads
+# ---------------------------------------------------------------------------
+from app.models.lead import Lead as LeadModel
+from pydantic import BaseModel as PydanticBase
+from typing import Optional
+
+
+class LeadOut(PydanticBase):
+    id: int
+    name: str
+    email: str
+    phone: Optional[str] = None
+    status: str
+    source: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class LeadStatusBody(PydanticBase):
+    status: str
+
+
+@router.get("/leads", response_model=list[LeadOut])
+def get_leads(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    return db.query(LeadModel).order_by(LeadModel.created_at.desc()).all()
+
+
+@router.put("/leads/{lead_id}/status")
+def update_lead_status(
+    lead_id: int,
+    body: LeadStatusBody,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    lead = db.query(LeadModel).filter(LeadModel.id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="not_found")
+    lead.status = body.status
+    db.commit()
+    return {"ok": True}

@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback } from 'react';
-import { Search, TrendingUp, Loader2, X, BarChart2, Percent, ArrowUpDown, ExternalLink } from 'lucide-react';
+import { Search, TrendingUp, Loader2, X, BarChart2, Percent, ArrowUpDown, ExternalLink, Download } from 'lucide-react';
 import { getProducts, getPriceDynamics,
-  getMarginByBrand
+  getMarginByBrand, exportBrandReport
 } from '../api/client';
 import { useNavigate } from 'react-router-dom';
 import { formatMsk } from '../utils/date';
@@ -50,6 +50,41 @@ export default function Analytics() {
   const [brandMargins, setBrandMargins] = useState([]);
   const [brandMarginLoading, setBrandMarginLoading] = useState(false);
   const [brandMarginLoaded, setBrandMarginLoaded] = useState(false);
+
+  const [selectedBrands, setSelectedBrands] = useState([]);
+  const [brandExportLoading, setBrandExportLoading] = useState(false);
+
+  const toggleBrand = (brand) => {
+    setSelectedBrands(prev =>
+      prev.includes(brand) ? prev.filter(b => b !== brand) : [...prev, brand]
+    );
+  };
+
+  const handleBrandExport = async () => {
+    setBrandExportLoading(true);
+    try {
+      const res = await exportBrandReport(selectedBrands);
+      const blob = new Blob([res.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      const suffix = selectedBrands.length ? selectedBrands.join('_').slice(0, 40) : 'all';
+      a.download = `brand_report_${suffix}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+      toast.success('Отчёт скачан');
+    } catch (e) {
+      console.error('brand export error', e);
+      toast.error('Ошибка при скачивании отчёта');
+    } finally {
+      setBrandExportLoading(false);
+    }
+  };
 
   const loadBrandMargins = async () => {
     setBrandMarginLoading(true);
@@ -778,18 +813,50 @@ export default function Analytics() {
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-base font-semibold" style={{color:'var(--text)'}}>Маржа по брендам</h2>
-            <p className="text-xs mt-0.5" style={{color:'var(--text-3)'}}>Средняя маржа по товарам с заполненной себестоимостью</p>
+            <p className="text-xs mt-0.5" style={{color:'var(--text-3)'}}>Средняя маржа по товарам с заполненной себестоимостью. Кликните по строке для выбора брендов.</p>
           </div>
-          {!brandMarginLoaded && (
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={loadBrandMargins}
-              disabled={brandMarginLoading}
-            >
-              {brandMarginLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Загрузить'}
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {!brandMarginLoaded && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={loadBrandMargins}
+                disabled={brandMarginLoading}
+              >
+                {brandMarginLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Загрузить'}
+              </button>
+            )}
+            {brandMarginLoaded && (
+              <button
+                onClick={handleBrandExport}
+                disabled={brandExportLoading}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                style={{background:'#16a34a', color:'#fff'}}
+                title={selectedBrands.length ? `Скачать: ${selectedBrands.join(', ')}` : 'Скачать отчёт по всем брендам'}
+              >
+                {brandExportLoading
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : <Download className="w-3.5 h-3.5" />}
+                {selectedBrands.length ? `Скачать (${selectedBrands.length})` : 'Скачать всё'}
+              </button>
+            )}
+          </div>
         </div>
+        {selectedBrands.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            {selectedBrands.map(b => (
+              <span key={b}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold cursor-pointer"
+                style={{background:'rgba(22,163,74,.15)', color:'#16a34a'}}
+                onClick={() => toggleBrand(b)}
+              >
+                {b} <X className="w-3 h-3" />
+              </span>
+            ))}
+            <button className="text-xs underline ml-1" style={{color:'var(--text-3)'}} onClick={() => setSelectedBrands([])}>
+              сбросить
+            </button>
+          </div>
+        )}
         {brandMarginLoaded && brandMargins.length === 0 && (
           <p className="text-sm" style={{color:'var(--text-3)'}}>Нет данных — заполните бренды и себестоимости товаров</p>
         )}
@@ -800,21 +867,35 @@ export default function Analytics() {
                 <tr className="border-b" style={{borderColor:'var(--border)'}}>
                   <th className="text-left py-2 pr-4 font-medium" style={{color:'var(--text-3)'}}>Бренд</th>
                   <th className="text-right py-2 pr-4 font-medium" style={{color:'var(--text-3)'}}>Ср. маржа</th>
-                  <th className="text-right py-2 font-medium" style={{color:'var(--text-3)'}}>Артикулов</th>
+                  <th className="text-right py-2 pr-4 font-medium" style={{color:'var(--text-3)'}}>Товаров</th>
+                  <th className="text-center py-2 font-medium w-10" style={{color:'var(--text-3)'}}></th>
                 </tr>
               </thead>
               <tbody>
-                {brandMargins.map((b) => (
-                  <tr key={b.brand} className="border-b" style={{borderColor:'rgba(var(--border-rgb),.4)'}}>
-                    <td className="py-2 pr-4 font-medium" style={{color:'var(--text)'}}>{b.brand || '—'}</td>
-                    <td className="py-2 pr-4 text-right">
-                      <span style={{color: b.avg_margin >= 20 ? '#16a34a' : b.avg_margin >= 0 ? '#ca8a04' : '#dc2626', fontWeight:600}}>
-                        {b.avg_margin !== null ? `${b.avg_margin}%` : '—'}
-                      </span>
-                    </td>
-                    <td className="py-2 text-right" style={{color:'var(--text-3)'}}>{b.products_count}</td>
-                  </tr>
-                ))}
+                {brandMargins.map((b) => {
+                  const isSelected = selectedBrands.includes(b.brand);
+                  return (
+                    <tr key={b.brand}
+                      className="border-b cursor-pointer hover:bg-primary/5 transition-colors"
+                      style={{borderColor:'rgba(var(--border-rgb),.4)', background: isSelected ? 'rgba(22,163,74,.06)' : undefined}}
+                      onClick={() => toggleBrand(b.brand)}
+                    >
+                      <td className="py-2 pr-4 font-medium" style={{color: isSelected ? '#16a34a' : 'var(--text)'}}>{b.brand || '—'}</td>
+                      <td className="py-2 pr-4 text-right">
+                        <span style={{color: b.avg_margin >= 20 ? '#16a34a' : b.avg_margin >= 0 ? '#ca8a04' : '#dc2626', fontWeight:600}}>
+                          {b.avg_margin !== null ? `${b.avg_margin}%` : '—'}
+                        </span>
+                      </td>
+                      <td className="py-2 pr-4 text-right" style={{color:'var(--text-3)'}}>{b.products_count}</td>
+                      <td className="py-2 text-center">
+                        <input type="checkbox" readOnly checked={isSelected}
+                          className="cursor-pointer accent-green-600 w-3.5 h-3.5"
+                          onClick={e => { e.stopPropagation(); toggleBrand(b.brand); }}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

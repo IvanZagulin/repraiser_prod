@@ -4,6 +4,7 @@ from io import BytesIO
 from datetime import datetime
 from decimal import Decimal
 import openpyxl
+from openpyxl.cell import WriteOnlyCell
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.comments import Comment
@@ -158,6 +159,10 @@ class ExcelExporter:
             "Направление (above=выше / below=ниже)",
             "Значение смещения",
             "ID кабинета",
+            "Ночная цена (да/нет)",
+            "Ночь — начало МСК (HH:MM)",
+            "Ночь — конец МСК (HH:MM)",
+            "Ночная цена продавца (₽)",
         ]
 
         # ── Лист данных ──
@@ -177,8 +182,8 @@ class ExcelExporter:
         wi.append(headers)
         ExcelExporter._style_header(wi, row=3, color=COLOR_HEADER2)
 
-        ex_rrp        = ["ваш-арт-001", "rrp",        "да", 500, 3000, 1999, 5,  "нет", "",         "",      "",       "", "Кассандра"]
-        ex_competitor = ["ваш-арт-002", "competitor",  "да", 300, "",   "",   "",  "",    987654321, "rub",  "below",  50, "Астарта"]
+        ex_rrp        = ["ваш-арт-001", "rrp",        "да", 500, 3000, 1999, 5,  "нет", "",         "",      "",       "", "Кассандра", "да", "01:00", "07:00", 4999]
+        ex_competitor = ["ваш-арт-002", "competitor",  "да", 300, "",   "",   "",  "",    987654321, "rub",  "below",  50, "Астарта",  "нет", "",      "",      ""]
         wi.append(ex_rrp)
         wi.append(ex_competitor)
         for row_num in (4, 5):
@@ -202,6 +207,10 @@ class ExcelExporter:
             ("Тип смещения",             "rub — в рублях; pct — в процентах"),
             ("Направление",              "above — выше конкурента; below — ниже"),
             ("Значение смещения",        "Числовое значение смещения (≥ 0)"),
+            ("Ночная цена",              "да — включить ночное повышение цены для поднятия средней (перед акциями WB)"),
+            ("Ночь — начало МСК",        "Начало ночного окна по Москве, формат HH:MM. Пример: 01:00"),
+            ("Ночь — конец МСК",         "Конец ночного окна по Москве, формат HH:MM. Пример: 07:00"),
+            ("Ночная цена продавца",     "Завышенная цена продавца на WB в ночные часы. Пример: 4999"),
         ]
         for note in notes:
             wi.append(list(note))
@@ -229,6 +238,7 @@ class ExcelExporter:
             "Артикул продавца *",
             "Себестоимость (₽) *",
             "ID кабинета",
+            "Не учитывать маржу (да/нет)",
         ]
         ws.append(headers)
         ExcelExporter._style_header(ws)
@@ -347,7 +357,7 @@ class ExcelExporter:
         ws.append(headers)
         ExcelExporter._style_header(ws)
         for _ in range(5):
-            ws.append(["", "", "", "", ""])
+            ws.append(["", "", "", "", "", "", ""])
         ExcelExporter.auto_size_columns(ws, min_width=18)
         ws.freeze_panes = "A2"
 
@@ -377,6 +387,99 @@ class ExcelExporter:
             ("C — Себестоимость",      "Закупочная цена в рублях. Необязательно."),
             ("D — Мин. цена",          "Нижняя граница цены в рублях. Необязательно."),
             ("E — ID кабинета",        "Числовой ID кабинета. Необязательно — если пусто, применится ко всем кабинетам."),
+        ]
+        for note in notes:
+            wi.append(list(note))
+        ExcelExporter.auto_size_columns(wi)
+
+        wb.active = ws
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return output
+
+
+    @staticmethod
+    def generate_rrp_spp_template() -> BytesIO:
+        """Template for loading SPP-based RRP tiers.
+
+        Each row defines one tier for one SKU.
+        Tiers are matched by range [spp_min, spp_max).
+        The last tier for a SKU may have empty spp_max (= no upper limit).
+        """
+        wb = ExcelExporter.create_workbook()
+
+        ws = wb.create_sheet("РРЦ по СПП")
+        headers = [
+            "Артикул продавца *",
+            "МРЦ — мин. цена (₽)",
+            "СПП от (%) *",
+            "СПП до (%) — пусто = без верхней границы",
+            "Цена продавца (₽) — до скидок и СПП",
+            "РРЦ — финальная цена покупателя (₽)",
+            "ID кабинета",
+        ]
+        ws.append(headers)
+        ExcelExporter._style_header(ws)
+        for _ in range(5):
+            ws.append(["", "", "", "", "", "", "", ""])
+        ExcelExporter.auto_size_columns(ws, min_width=18)
+        ws.freeze_panes = "A2"
+
+        wi = wb.create_sheet("Инструкция")
+        wi.append(["Шаблон: РРЦ по уровням СПП"])
+        wi["A1"].font = Font(bold=True, size=12)
+        wi.append([])
+        wi.append([
+            "Как работает:",
+            "Репрайсер выбирает РРЦ по текущему СПП товара.",
+            "",
+            "Диапазон: от <= СПП < до. Если «до» пусто — нет верхней границы.",
+        ])
+        wi.merge_cells("B3:D3")
+        wi.append([])
+        wi.append(headers)
+        ExcelExporter._style_header(wi, row=5, color=COLOR_HEADER2)
+
+        examples = [
+            ["ваш-арт-001", 500,  0,  5,  1500,     "",   "", "да"],
+            ["ваш-арт-001",  "",  5, 15,  1700,     "",   "",   ""],
+            ["ваш-арт-001",  "", 15, "",  1900,     "",   "",   ""],
+            ["ваш-арт-002", 300,  0, 10,  "",    3500,   1,    ""],
+            ["ваш-арт-002",  "", 10, "",  "",    4000,   1,    ""],
+        ]
+        for ex in examples:
+            wi.append(ex)
+        for row_num in range(6, 6 + len(examples)):
+            for cell in wi[row_num]:
+                cell.font = Font(italic=True, color=COLOR_EXAMPLE)
+
+        wi.append([])
+        wi.append(["Поле", "Описание"])
+        ExcelExporter._style_header(wi, row=6 + len(examples) + 1, color=COLOR_HEADER)
+        notes = [
+            ("A — Артикул продавца *",
+             "vendorCode товара. Обязательно."),
+            ("B — МРЦ (₽)",
+             "Минимальная цена. Указывается только в первой строке артикула. "
+             "Если пусто — МРЦ=0 (без ограничения снизу). "
+             "Если стратегия уже настроена, МРЦ из файла игнорируется."),
+            ("C — СПП от (%) *",
+             "Нижняя граница СПП, включительно. Например: 0, 5, 15. Обязательно."),
+            ("D — СПП до (%)",
+             "Верхняя граница СПП, не включая. Пусто — ступень без верхней границы."),
+            ("E — Цена продавца (₽)",
+             "Прямая цена продавца на WB (до скидок и СПП). "
+             "Передаётся на WB как есть. Заполните D или E, не оба сразу."),
+            ("F — РРЦ — финальная цена покупателя (₽)",
+             "Целевая финальная цена. Движок сам посчитает цену продавца обратным расчётом. "
+             "Заполните D или E, не оба сразу."),
+            ("G — ID кабинета",
+             "Числовой ID кабинета. Если пусто — применится ко всем кабинетам."),
+            ("H — Не учитывать маржу",
+             "да — отключить защиту маржи для этого товара. "
+             "Указывается только в первой строке артикула. "
+             "Если пусто — защита маржи работает (по умолчанию)."),
         ]
         for note in notes:
             wi.append(list(note))
@@ -584,6 +687,104 @@ class ExcelExporter:
         return output
 
 
+    @staticmethod
+    def export_brand_report(rows):
+        """Отчёт по брендам: товар, цена, маржа, РРЦ, цена до СПП, цена конкурента."""
+        wb = openpyxl.Workbook(write_only=True)
+        ws = wb.create_sheet("Отчёт по брендам")
+
+        STRATEGY_LABELS = {"rrp": "РРЦ", "competitor": "Конкурент"}
+
+        headers = [
+            "Артикул",
+            "Название",
+            "Бренд",
+            "nmID",
+            "Аккаунт",
+            "Стратегия",
+            "Цена продавца (₽)",
+            "Цена до СПП (₽)",
+            "СПП (%)",
+            "Остаток",
+            "Цена конкурента (₽)",
+            "РРЦ (₽)",
+            "МРЦ (₽)",
+            "Себестоимость (₽)",
+            "Маржа (%)",
+        ]
+        header_fill = PatternFill(start_color="1E3A5F", end_color="1E3A5F", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF", size=11)
+        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        header_row = []
+        for title in headers:
+            cell = WriteOnlyCell(ws, value=title)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_alignment
+            header_row.append(cell)
+        ws.append(header_row)
+
+        margin_font_red   = Font(bold=True, color="CC0000")
+        margin_font_amber = Font(bold=True, color="CC7700")
+        margin_font_green = Font(bold=True, color="006600")
+        margin_font_blue  = Font(bold=True, color="0055BB")
+        money_format = '#,##0.00'
+        margin_format = '0.00"%"'
+        stock_format = '0'
+        money_columns = {7, 8, 11, 12, 13, 14}
+
+        for row_data in rows:
+            margin = row_data.get("margin")
+            strategy = row_data.get("strategy") or ""
+            values = [
+                _safe_str(row_data.get("seller_sku", "")),
+                _safe_str(row_data.get("name", "")),
+                _safe_str(row_data.get("brand", "")),
+                row_data.get("nm_id", ""),
+                _safe_str(row_data.get("account", "")),
+                STRATEGY_LABELS.get(strategy, strategy),
+                row_data.get("seller_price") or "",
+                row_data.get("final_price") or "",
+                row_data.get("spp") or "",
+                row_data.get("stock_quantity") or "",
+                row_data.get("competitor_price") or "",
+                row_data.get("rrp_price") or "",
+                row_data.get("min_price") or "",
+                row_data.get("cost_price") or "",
+                margin if margin is not None else "",
+            ]
+
+            excel_row = []
+            for idx, value in enumerate(values, start=1):
+                cell = WriteOnlyCell(ws, value=value)
+                if idx in money_columns and isinstance(value, (int, float)) and value != "":
+                    cell.number_format = money_format
+                elif idx == 10 and isinstance(value, (int, float)) and value != "":
+                    cell.number_format = stock_format
+                elif idx == 15 and isinstance(value, (int, float)) and value != "":
+                    cell.number_format = margin_format
+                    if margin < 0:
+                        cell.font = margin_font_red
+                    elif margin < 15:
+                        cell.font = margin_font_amber
+                    elif margin < 30:
+                        cell.font = margin_font_green
+                    else:
+                        cell.font = margin_font_blue
+                excel_row.append(cell)
+            ws.append(excel_row)
+
+        col_widths = [20, 30, 18, 12, 16, 12, 18, 16, 8, 10, 18, 12, 12, 16, 12]
+        for i, w in enumerate(col_widths, 1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+        ws.freeze_panes = "A2"
+
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return output
+
+
 class ExcelImporter:
     """Импорт данных из Excel"""
 
@@ -606,6 +807,10 @@ class ExcelImporter:
         K  competitor_offset_direction
         L  competitor_offset_value
         M  account_id            (необязательно, если артикул уникален)
+        N  night_price_enabled   (да/нет, необязательно)
+        O  night_start_msk       (HH:MM, необязательно)
+        P  night_end_msk         (HH:MM, необязательно)
+        Q  night_seller_price    (₽, необязательно)
         """
         wb = openpyxl.load_workbook(BytesIO(file_content))
         # Читаем по имени листа данных; если не нашли — берём первый лист
@@ -621,14 +826,16 @@ class ExcelImporter:
                 return default
             return str(val).strip().lower() in ("true", "1", "да", "yes")
 
+        # Определяем формат по заголовку: новый формат имеет колонку "кошелёк" (H)
+        header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
+        has_wallet_col = any(
+            h and ("кошелёк" in str(h).lower() or "wallet" in str(h).lower())
+            for h in header_row
+        )
+
         for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             if not row[0]:
                 continue
-
-            # Поддерживаем оба формата: старый (11 колонок) и новый (12 колонок с кошельком)
-            has_wallet_col = len(row) >= 12 and row[7] is not None and str(row[7]).strip().lower() in (
-                "true", "false", "да", "нет", "yes", "no", "1", "0", ""
-            )
 
             try:
                 if has_wallet_col:
@@ -646,6 +853,10 @@ class ExcelImporter:
                         "competitor_offset_direction":   str(row[10]).strip().lower() if row[10] else None,
                         "competitor_offset_value":       Decimal(str(row[11])) if row[11] is not None and str(row[11]).strip() else None,
                         "account_id":                  int(row[12]) if len(row) > 12 and row[12] is not None and str(row[12]).strip() else None,
+                        "night_price_enabled":         to_bool(row[13], default=False) if len(row) > 13 and row[13] is not None else False,
+                        "night_start_msk":             str(row[14]).strip() if len(row) > 14 and row[14] is not None and str(row[14]).strip() else None,
+                        "night_end_msk":               str(row[15]).strip() if len(row) > 15 and row[15] is not None and str(row[15]).strip() else None,
+                        "night_seller_price":          Decimal(str(row[16])) if len(row) > 16 and row[16] is not None and str(row[16]).strip() else None,
                     }
                 else:
                     # Старый формат без колонки кошелька (11 колонок)
@@ -663,6 +874,10 @@ class ExcelImporter:
                         "competitor_offset_direction":   str(row[9]).strip().lower()  if row[9]  else None,
                         "competitor_offset_value":       Decimal(str(row[10])) if row[10] is not None and str(row[10]).strip() else None,
                         "account_id":                  int(row[11]) if len(row) > 11 and row[11] is not None and str(row[11]).strip() else None,
+                        "night_price_enabled":         to_bool(row[12], default=False) if len(row) > 12 and row[12] is not None else False,
+                        "night_start_msk":             str(row[13]).strip() if len(row) > 13 and row[13] is not None and str(row[13]).strip() else None,
+                        "night_end_msk":               str(row[14]).strip() if len(row) > 14 and row[14] is not None and str(row[14]).strip() else None,
+                        "night_seller_price":          Decimal(str(row[15])) if len(row) > 15 and row[15] is not None and str(row[15]).strip() else None,
                     }
 
                 if not cfg["seller_sku"]:
@@ -876,7 +1091,10 @@ class ExcelImporter:
         def _dec(v):
             if v is None or str(v).strip() == "":
                 return None
-            return Decimal(str(v))
+            try:
+                return Decimal(str(v))
+            except Exception:
+                raise ValueError(f"не число: {v!r}")
 
         for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             if not row or len(row) < 1:
@@ -919,6 +1137,153 @@ class ExcelImporter:
             })
 
         logger.info(f"Импортировано {len(items)} характеристик из Excel")
+        return items
+
+
+    @staticmethod
+    def import_rrp_spp_tiers(file_content: bytes) -> list:
+        """Import SPP-based RRP tiers from Excel (generate_rrp_spp_template).
+
+        Supports two formats (auto-detected by column B header):
+
+        NEW (8-col, col B header contains "МРЦ"):
+        A  seller_sku *
+        B  min_price        (optional, МРЦ — first row of SKU only)
+        C  spp_min *
+        D  spp_max          (optional, None = no upper limit)
+        E  seller_price     (optional — direct WB price)
+        F  rrp_price        (optional — target final buyer price)
+        G  account_id       (optional)
+        H  skip_margin_check (optional, да/нет — first row of SKU only)
+
+        OLD (6-col, col B header contains "СПП"):
+        A  seller_sku *
+        B  spp_min *
+        C  spp_max          (optional)
+        D  seller_price     (optional)
+        E  rrp_price        (optional)
+        F  account_id       (optional)
+        """
+        wb = openpyxl.load_workbook(BytesIO(file_content))
+        if "РРЦ по СПП" in wb.sheetnames:
+            ws = wb["РРЦ по СПП"]
+        else:
+            ws = wb.worksheets[0]
+
+        # Auto-detect format by column B header
+        header_row = [cell.value for cell in ws[1]]
+        col_b_header = str(header_row[1]).lower() if len(header_row) > 1 and header_row[1] else ""
+        new_format = "мрц" in col_b_header or "min" in col_b_header
+        logger.info(f"import_rrp_spp_tiers: detected format = {'new' if new_format else 'old (6-col compat)'}")
+
+        items = []
+
+        def _dec(v, field):
+            if v is None or str(v).strip() == "":
+                return None
+            try:
+                return Decimal(str(v))
+            except Exception:
+                raise ExcelImportError(f"Неверный формат {field}: {v!r}")
+
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            if not row or len(row) < 4:
+                continue
+            sku_val = row[0]
+            if sku_val is None or str(sku_val).strip() == "":
+                continue
+
+            if new_format:
+                # New 8-column format: A=sku, B=min_price, C=spp_min, D=spp_max,
+                #                     E=seller_price, F=rrp, G=account, H=skip_margin
+                min_price_val    = row[1] if len(row) > 1 else None
+                spp_min_val      = row[2] if len(row) > 2 else None
+                spp_max_val      = row[3] if len(row) > 3 else None
+                seller_price_val = row[4] if len(row) > 4 else None
+                rrp_val          = row[5] if len(row) > 5 else None
+                acc_val          = row[6] if len(row) > 6 else None
+                skip_margin_val  = row[7] if len(row) > 7 else None
+            else:
+                # Old 6-column format (no МРЦ, no skip_margin): A=sku, B=spp_min,
+                #                     C=spp_max, D=seller_price, E=rrp, F=account
+                min_price_val    = None
+                spp_min_val      = row[1] if len(row) > 1 else None
+                spp_max_val      = row[2] if len(row) > 2 else None
+                seller_price_val = row[3] if len(row) > 3 else None
+                rrp_val          = row[4] if len(row) > 4 else None
+                acc_val          = row[5] if len(row) > 5 else None
+                skip_margin_val  = None
+
+            min_price_str = str(min_price_val).strip() if min_price_val is not None else ""
+            if spp_min_val is None or str(spp_min_val).strip() == "":
+                raise ExcelImportError(f"Строка {row_idx}: 'СПП от' обязательно")
+            seller_price_str = str(seller_price_val).strip() if seller_price_val is not None else ""
+            rrp_str = str(rrp_val).strip() if rrp_val is not None else ""
+            if not seller_price_str and not rrp_str:
+                raise ExcelImportError(
+                    f"Строка {row_idx}: заполните 'Цена продавца' (колонка D) "
+                    f"или 'РРЦ' (колонка E) — одно из двух"
+                )
+            if seller_price_str and rrp_str:
+                raise ExcelImportError(
+                    f"Строка {row_idx}: заполните только одно — 'Цена продавца' или 'РРЦ', не оба"
+                )
+
+            try:
+                spp_min = _dec(spp_min_val, "СПП от")
+                if spp_min < 0:
+                    raise ExcelImportError(f"Строка {row_idx}: СПП от не может быть отрицательным")
+            except ExcelImportError:
+                raise
+            except Exception:
+                raise ExcelImportError(f"Строка {row_idx}: неверный формат 'СПП от': {spp_min_val!r}")
+
+            spp_max_str = str(spp_max_val).strip() if spp_max_val is not None else ""
+            spp_max = _dec(spp_max_val, "СПП до") if spp_max_str else None
+            if spp_max is not None and spp_max <= spp_min:
+                raise ExcelImportError(
+                    f"Строка {row_idx}: 'СПП до' ({spp_max}) должно быть больше 'СПП от' ({spp_min})"
+                )
+
+            seller_price = None
+            rrp_price = None
+            try:
+                if seller_price_str:
+                    seller_price = _dec(seller_price_val, "Цена продавца")
+                    if seller_price <= 0:
+                        raise ExcelImportError(f"Строка {row_idx}: цена продавца должна быть > 0")
+                elif rrp_str:
+                    rrp_price = _dec(rrp_val, "РРЦ")
+                    if rrp_price <= 0:
+                        raise ExcelImportError(f"Строка {row_idx}: РРЦ должен быть > 0")
+            except ExcelImportError:
+                raise
+            except Exception:
+                raise ExcelImportError(f"Строка {row_idx}: неверный формат цены в строке")
+
+            try:
+                account_id = int(acc_val) if acc_val is not None and str(acc_val).strip() != "" else None
+            except (ValueError, TypeError):
+                raise ExcelImportError(f"Строка {row_idx}: неверный формат ID кабинета: {acc_val!r}")
+
+            try:
+                min_price_parsed = Decimal(str(min_price_val)) if min_price_str else None
+            except Exception:
+                min_price_parsed = None
+            skip_margin_str = str(skip_margin_val).strip().lower() if skip_margin_val is not None else ""
+            skip_margin_check = skip_margin_str in ("да", "yes", "true", "1")
+            items.append({
+                "seller_sku":      str(sku_val).strip(),
+                "skip_margin_check": skip_margin_check,
+                "min_price":       min_price_parsed,
+                "spp_min":      spp_min,
+                "spp_max":      spp_max,
+                "seller_price": seller_price,
+                "rrp_price":    rrp_price,
+                "account_id":   account_id,
+            })
+
+        logger.info(f"Импортировано {len(items)} ступеней РРЦ по СПП из Excel")
         return items
 
 # Singleton instances

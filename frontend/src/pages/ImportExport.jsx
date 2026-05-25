@@ -7,7 +7,8 @@ import {
 import toast from 'react-hot-toast';
 import {
   importStrategy, importProducts, getTaskStatus, importCharacteristics,
-  exportHistory, exportProducts, downloadTemplate, downloadCharacteristicsTemplate
+  exportHistory, exportProducts, downloadTemplate, downloadCharacteristicsTemplate,
+  downloadRrpSppTemplate, importRrpSpp,
 } from '../api/client';
 
 /* ─── helpers ─── */
@@ -119,9 +120,14 @@ export default function ImportExport() {
   const [importResultProd,  setImportResultProd]  = useState(null);
   const [importResultStrat, setImportResultStrat] = useState(null);
 
+  const [loadingTplRrpSpp, setLoadingTplRrpSpp] = useState(false);
+  const [uploadingRrpSpp, setUploadingRrpSpp] = useState(false);
+  const [importResultRrpSpp, setImportResultRrpSpp] = useState(null);
+
   const fileInputProducts = useRef(null);
   const fileInputStrategy = useRef(null);
   const fileInputChar = useRef(null);
+  const fileInputRrpSpp = useRef(null);
 
   /* ── templates ── */
   const handleDownloadTemplate = async (type) => {
@@ -284,6 +290,40 @@ export default function ImportExport() {
     }
   };
 
+  const handleDownloadRrpSppTemplate = async () => {
+    setLoadingTplRrpSpp(true);
+    try {
+      const res = await downloadRrpSppTemplate();
+      triggerDownload(res.data, 'template_rrp_spp.xlsx');
+      toast.success('Шаблон скачан');
+    } catch {
+      toast.error('Ошибка скачивания шаблона');
+    } finally {
+      setLoadingTplRrpSpp(false);
+    }
+  };
+
+  const handleRrpSppImport = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploadingRrpSpp(true);
+    setImportResultRrpSpp(null);
+    try {
+      const res = await importRrpSpp(file);
+      setImportResultRrpSpp(res.data);
+      const { products_created = 0, products_replaced = 0 } = res.data;
+      toast.success(`СПП-ступени: создано ${products_created}, обновлено ${products_replaced}`);
+      if (res.data.errors?.length) toast.error(`Ошибок: ${res.data.errors.length}`);
+    } catch (err) {
+      const msg = parseImportError(err);
+      toast.error(msg);
+      setImportResultRrpSpp({ errors: [msg] });
+    } finally {
+      setUploadingRrpSpp(false);
+      e.target.value = '';
+    }
+  };
+
   const Spin = () => <Loader2 className="w-4 h-4 animate-spin" />;
 
   // Derived label for active filters badge
@@ -379,6 +419,28 @@ export default function ImportExport() {
             </div>
           </div>
 
+            {/* SPP tiers template */}
+            <div className="flex items-center justify-between gap-3 p-3.5 rounded-xl border border-border bg-muted/30 mt-6">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+                     style={{ background: '#f59e0b15' }}>
+                  <TrendingUp className="w-4 h-4 text-amber-500" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-foreground">Шаблон РРЦ по СПП</p>
+                  <p className="text-xs text-muted-foreground">Цена продавца / РРЦ по диапазонам СПП</p>
+                </div>
+              </div>
+              <button
+                className="btn btn-secondary btn-sm gap-1.5 flex-shrink-0"
+                onClick={handleDownloadRrpSppTemplate}
+                disabled={loadingTplRrpSpp}
+              >
+                {loadingTplRrpSpp ? <Spin /> : <ArrowDown className="w-3.5 h-3.5" />}
+                .xlsx
+              </button>
+            </div>
+
           {/* Collapsible column descriptions */}
           <div className="mt-4 space-y-2">
             <details>
@@ -404,6 +466,12 @@ export default function ImportExport() {
                 <div><b>D</b> — МРЦ — мин. цена *</div>
                 <div><b>E–H</b> — Макс. цена, РРЦ, допуск, кошелёк</div>
                 <div><b>I</b> — артикул WB конкурента, <b>J</b> — тип смещения (rub/pct), <b>K</b> — направление (ниже/выше), <b>L</b> — смещение</div>
+                <div><b>M</b> — ID кабинета</div>
+                <div className="pt-1 border-t border-gray-200 mt-1 font-semibold text-foreground">Ночное повышение цены (необязательно):</div>
+                <div><b>N</b> — Ночная цена: <code>да</code> / <code>нет</code></div>
+                <div><b>O</b> — Начало МСК (HH:MM), напр. <code>01:00</code></div>
+                <div><b>P</b> — Конец МСК (HH:MM), напр. <code>07:00</code></div>
+                <div><b>Q</b> — Цена продавца ночью, напр. <code>4999</code></div>
               </div>
             </details>
           </div>
@@ -491,6 +559,31 @@ export default function ImportExport() {
               </button>
             </div>
             <ImportResult result={importResultChar} />
+
+            {/* Import SPP tiers */}
+            <div
+              className="p-4 rounded-xl border-2 border-dashed border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30"
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <TrendingUp className="w-4 h-4 text-amber-600" />
+                <span className="text-sm font-medium text-foreground">Ступени РРЦ по СПП</span>
+                {uploadingRrpSpp && <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-600 ml-auto" />}
+              </div>
+              <p className="text-xs text-muted-foreground mb-3">
+                Цена продавца или РРЦ для каждого диапазона СПП. Заменяет базовый РРЦ стратегии.
+              </p>
+              <input ref={fileInputRrpSpp} type="file" accept=".xlsx,.xls"
+                     onChange={handleRrpSppImport} disabled={uploadingRrpSpp} className="hidden" />
+              <button
+                className="btn btn-sm w-full gap-1.5 bg-amber-600 hover:bg-amber-700 text-white"
+                onClick={() => fileInputRrpSpp.current?.click()}
+                disabled={uploadingRrpSpp}
+              >
+                {uploadingRrpSpp ? <Spin /> : <Upload className="w-3.5 h-3.5" />}
+                {uploadingRrpSpp ? 'Загрузка…' : 'Выбрать файл'}
+              </button>
+            </div>
+            <ImportResult result={importResultRrpSpp} />
           </div>
         </div>
 

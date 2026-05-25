@@ -254,6 +254,20 @@ export const importMinPrices = (file) => {
 export const downloadMinPricesTemplate = () =>
   api.get('/api/export/template/min_prices', { responseType: 'blob' });
 
+export const updateProductSppTiers = (productId, tiers) =>
+  api.put(`/api/products/${productId}/spp-tiers`, tiers);
+
+export const downloadRrpSppTemplate = () =>
+  api.get('/api/export/template/rrp-spp', { responseType: 'blob' });
+
+export const importRrpSpp = (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  return api.post('/api/export/import/rrp-spp', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+};
+
 export const downloadCharacteristicsTemplate = () =>
   api.get('/api/export/template/characteristics', { responseType: 'blob' });
 
@@ -312,5 +326,11 @@ export const getProductRules = (productId) => api.get(`/api/products/${productId
 export const createProductRule = (productId, data) => api.post(`/api/products/${productId}/rules`, data);
 export const updateProductRule = (productId, ruleId, data) => api.put(`/api/products/${productId}/rules/${ruleId}`, data);
 export const deleteProductRule = (productId, ruleId) => api.delete(`/api/products/${productId}/rules/${ruleId}`);
+
+export const exportBrandReport = (brands = []) => {
+  const params = {};
+  if (brands && brands.length) params.brands = brands.join(',');
+  return api.get('/api/analytics/export/brand', { params, responseType: 'blob' });
+};
 
 export default api;

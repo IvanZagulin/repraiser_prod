@@ -10,6 +10,7 @@ from slowapi import Limiter
 
 from app.database import get_db
 from app.models import Product, ProductConfig, PriceSnapshot, RepricerRun, PriceChange, Account, WBCatalog
+from app.models.rrp_spp_tier import RRPSPPTier
 from app.models.user import User
 from app.api.auth import get_current_user
 from app.utils import get_user_id_key
@@ -66,7 +67,34 @@ async def download_strategy_template(
     )
 
 
+@router.get("/template/characteristics")
+async def download_characteristics_template(
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    """Скачать пустой шаблон Excel для загрузки характеристик товаров"""
+    excel_file = await run_in_threadpool(excel_exporter.generate_characteristics_template)
+    return Response(
+        content=excel_file.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="template_characteristics.xlsx"'}
+    )
+
+
 # ─────────────────── ЭКСПОРТ ТОВАРОВ ───────────────────
+
+
+
+@router.get("/template/rrp-spp")
+async def download_rrp_spp_template(
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    """Скачать пустой шаблон Excel для загрузки РРЦ по уровням СПП"""
+    excel_file = await run_in_threadpool(excel_exporter.generate_rrp_spp_template)
+    return Response(
+        content=excel_file.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="template_rrp_spp.xlsx"'}
+    )
 
 @router.get("/products")
 @limiter.limit("10/minute")
@@ -88,12 +116,16 @@ async def export_products(
     Строки раскрашены по статусу репрайсера.
     Поддерживает фильтры по статусу и стратегии.
     """
-    # IDOR fix: фильтруем только товары текущего пользователя
+    from sqlalchemy import func
+    from sqlalchemy.orm import joinedload
+
+    # IDOR fix + eager load (устраняет N+1 на account и config)
     query = (
         db.query(Product)
         .join(Account, Product.account_id == Account.id)
         .filter(Account.user_id == current_user.id)
         .join(ProductConfig, Product.id == ProductConfig.product_id, isouter=True)
+        .options(joinedload(Product.account), joinedload(Product.config))
     )
 
     # Фильтр по статусу
@@ -110,31 +142,28 @@ async def export_products(
 
     products = query.all()
 
-    # Batch-загрузка последних снимков цен (fix N+1)
-    product_ids = [p.id for p in products]
+    # Один JOIN-запрос вместо батчевых IN-списков
     last_snapshots: dict = {}
-    if product_ids:
-        BATCH_SIZE = 5000
-        for batch_start in range(0, len(product_ids), BATCH_SIZE):
-            batch_ids = product_ids[batch_start:batch_start+BATCH_SIZE]
-            from sqlalchemy import func
-            subq = (
-                db.query(
-                    PriceSnapshot.product_id,
-                    func.max(PriceSnapshot.snapshot_at).label("max_at")
-                )
-                .filter(PriceSnapshot.product_id.in_(batch_ids))
-                .group_by(PriceSnapshot.product_id)
-                .subquery()
+    if products:
+        latest_snap_subq = (
+            db.query(
+                PriceSnapshot.product_id,
+                func.max(PriceSnapshot.snapshot_at).label("max_at")
             )
-            rows = (
-                db.query(PriceSnapshot)
-                .join(subq, (PriceSnapshot.product_id == subq.c.product_id) &
-                            (PriceSnapshot.snapshot_at == subq.c.max_at))
-                .all()
-            )
-            for s in rows:
-                last_snapshots[s.product_id] = s
+            .join(Product, PriceSnapshot.product_id == Product.id)
+            .join(Account, Product.account_id == Account.id)
+            .filter(Account.user_id == current_user.id)
+            .group_by(PriceSnapshot.product_id)
+            .subquery()
+        )
+        snap_rows = (
+            db.query(PriceSnapshot)
+            .join(latest_snap_subq,
+                  (PriceSnapshot.product_id == latest_snap_subq.c.product_id) &
+                  (PriceSnapshot.snapshot_at == latest_snap_subq.c.max_at))
+            .all()
+        )
+        last_snapshots = {s.product_id: s for s in snap_rows}
     products_data = []
     for product in products:
         last_snapshot = last_snapshots.get(product.id)
@@ -542,6 +571,223 @@ async def import_strategy(
         "created": results['created'],
         "updated": results['updated'],
         "errors": results['errors']
+    }
+
+
+
+@router.post("/import/rrp-spp")
+@limiter.limit("10/minute")
+async def import_rrp_spp(
+    request: Request,
+    file: Annotated[UploadFile, File(description="Excel файл со ступенями РРЦ по СПП")],
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    """
+    Импорт РРЦ по уровням СПП из Excel.
+
+    Для каждого артикула создаёт ступени (RRPSPPTier). Перед загрузкой
+    все существующие ступени для данного товара (в данном кабинете) удаляются
+    и заменяются строками из файла.
+
+    Формат: Артикул | СПП от (%) | СПП до (%) | РРЦ (₽) | ID кабинета
+    """
+    if not file.filename.endswith(('.xlsx', '.xls')):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File must be Excel (.xlsx or .xls)"
+        )
+
+    content_bytes = await file.read()
+    if len(content_bytes) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Файл слишком большой (максимум 10 МБ)"
+        )
+
+    try:
+        tiers = await run_in_threadpool(excel_importer.import_rrp_spp_tiers, content_bytes)
+    except ExcelImportError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    results = {"created": 0, "replaced": 0, "errors": []}
+
+    # Group by (seller_sku, account_id) to do one delete-and-insert per product
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for tier in tiers:
+        key = (tier["seller_sku"], tier.get("account_id"))
+        groups[key].append(tier)
+
+    for (seller_sku, account_id), rows in groups.items():
+        q = (
+            db.query(Product)
+            .join(Account, Product.account_id == Account.id)
+            .filter(
+                Product.seller_sku == seller_sku,
+                Account.user_id == current_user.id,
+            )
+        )
+        if account_id:
+            q = q.filter(Account.id == account_id)
+        products_found = q.all()
+
+        if not products_found:
+            results["errors"].append(f"Товар {seller_sku!r} не найден")
+            continue
+        if len(products_found) > 1 and not account_id:
+            acc_names = ", ".join(p.account.name for p in products_found)
+            results["errors"].append(
+                f"Артикул {seller_sku!r} найден в нескольких кабинетах ({acc_names}). "
+                "Укажите ID кабинета."
+            )
+            continue
+
+        product = products_found[0]
+        db.flush()
+        config = db.query(ProductConfig).filter(
+            ProductConfig.product_id == product.id
+        ).first()
+
+        if not config:
+            # Auto-create a minimal config so SPP tiers work standalone
+            # min_price comes from first row of this group (if provided)
+            first_row_min = next(
+                (r.get("min_price") for r in rows if r.get("min_price") is not None),
+                None
+            )
+            from decimal import Decimal as _D
+            first_skip = next(
+                (r.get("skip_margin_check") for r in rows if r.get("skip_margin_check")),
+                False
+            )
+            config = ProductConfig(
+                product_id=product.id,
+                strategy="rrp",
+                is_active=True,
+                min_price=first_row_min if first_row_min is not None else _D("0"),
+                skip_margin_check=bool(first_skip),
+            )
+            db.add(config)
+            db.flush()
+            results["created"] += 1
+
+        # Update skip_margin_check from first row (for existing config too)
+        first_skip_existing = next(
+            (r.get("skip_margin_check") for r in rows if r.get("skip_margin_check") is not None),
+            None
+        )
+        if first_skip_existing is not None and config:
+            config.skip_margin_check = bool(first_skip_existing)
+
+        # Delete existing tiers for this config
+        existing = db.query(RRPSPPTier).filter(
+            RRPSPPTier.product_config_id == config.id
+        ).all()
+        for t in existing:
+            db.delete(t)
+        db.flush()
+
+        # Insert new tiers
+        for row in rows:
+            db.add(RRPSPPTier(
+                product_config_id=config.id,
+                spp_min=row["spp_min"],
+                spp_max=row["spp_max"],
+                seller_price=row.get("seller_price"),
+                rrp_price=row.get("rrp_price"),
+            ))
+
+        if existing:
+            results["replaced"] += 1
+        else:
+            results["created"] += 1
+
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.exception("import_rrp_spp commit failed")
+        raise HTTPException(status_code=500, detail=f"Ошибка сохранения: {e}")
+
+    return {
+        "success": True,
+        "total_tiers": len(tiers),
+        "products_created": results["created"],
+        "products_replaced": results["replaced"],
+        "errors": results["errors"],
+        "message": (
+            f"Автоматически создана стратегия RRP для {results['created']} товаров."
+            if results["created"] else None
+        ),
+    }
+
+
+@router.post("/import/characteristics")
+@limiter.limit("10/minute")
+async def import_characteristics(
+    request: Request,
+    file: Annotated[UploadFile, File(description="Excel файл с характеристиками")],
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    """Импорт характеристик товаров (бренд, себестоимость, мин. цена) из Excel."""
+    if not file.filename.endswith(('.xlsx', '.xls')):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="File must be Excel (.xlsx or .xls)")
+
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            detail="Файл слишком большой (максимум 10 МБ)")
+
+    try:
+        items = await run_in_threadpool(excel_importer.import_characteristics, content)
+    except ExcelImportError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.exception("import_characteristics parse error")
+        raise HTTPException(status_code=500, detail=f"Ошибка разбора файла: {e}")
+
+    results = {'updated': 0, 'errors': []}
+
+    for item in items:
+        q = (
+            db.query(Product)
+            .join(Account, Product.account_id == Account.id)
+            .filter(Product.seller_sku == item['seller_sku'], Account.user_id == current_user.id)
+        )
+        if item.get('account_id'):
+            q = q.filter(Account.id == item['account_id'])
+        products = q.all()
+
+        if not products:
+            results['errors'].append(f"Товар {item['seller_sku']!r} не найден")
+            continue
+
+        for product in products:
+            if item.get('brand') is not None:
+                product.brand = item['brand']
+            if item.get('cost_price') is not None:
+                product.cost_price = item['cost_price']
+            if item.get('min_price') is not None:
+                cfg = db.query(ProductConfig).filter(ProductConfig.product_id == product.id).first()
+                if cfg:
+                    cfg.min_price = item['min_price']
+        results['updated'] += len(products)
+
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.exception("import_characteristics commit failed")
+        raise HTTPException(status_code=500, detail=f"Ошибка сохранения данных: {e}")
+
+    return {
+        "success": True,
+        "total": len(items),
+        "updated": results['updated'],
+        "errors": results['errors'],
     }
 
 

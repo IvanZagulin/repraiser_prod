@@ -4,7 +4,7 @@ import {
   ArrowLeft, Play, Settings, ExternalLink, TrendingUp, TrendingDown,
   Minus, Package, Shield, Clock, BarChart3, AlertTriangle,
   CheckCircle, XCircle, ArrowUpRight, ArrowDownRight, Copy, Edit3, Store,
-  Trash2,
+  Trash2, Moon,
 } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -438,122 +438,161 @@ export default function ProductDetailPage() {
         </div>
 
         {/* Strategy card */}
-        <div className="col-span-4">
-          <div className="card h-full">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                Стратегия
-              </h3>
+        <div className="col-span-4 self-start">
+          <div className="card p-0 overflow-hidden">
+
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>Стратегия</h3>
               <button onClick={() => setShowConfig(true)} className="btn btn-xs btn-secondary gap-1">
                 <Edit3 className="w-3 h-3" /> Изменить
               </button>
             </div>
 
             {!config ? (
-              <div className="flex flex-col items-center justify-center py-8 gap-3">
+              <div className="flex flex-col items-center justify-center py-10 gap-3 px-4">
                 <AlertTriangle className="w-8 h-8" style={{ color: '#d97706' }} />
                 <p className="text-sm" style={{ color: 'var(--text-3)' }}>Стратегия не настроена</p>
-                <button onClick={() => setShowConfig(true)} className="btn btn-sm btn-primary">
-                  Настроить
-                </button>
+                <button onClick={() => setShowConfig(true)} className="btn btn-sm btn-primary">Настроить</button>
               </div>
             ) : (
-              <div className="space-y-3">
-                {/* Status */}
+              <div className="px-4 py-3 space-y-3">
+
+                {/* Status + type badges */}
                 <div className="flex items-center gap-2">
-                  {config.is_active ? (
-                    <CheckCircle className="w-4 h-4 text-green-500" />
-                  ) : (
-                    <XCircle className="w-4 h-4 text-red-500" />
-                  )}
-                  <span className="text-sm font-medium" style={{
-                    color: config.is_active ? '#16a34a' : '#ef4444'
-                  }}>
+                  <span className={`badge ${config.is_active ? 'badge-success' : 'badge-error'} flex items-center gap-1`}>
+                    {config.is_active
+                      ? <CheckCircle className="w-3 h-3" />
+                      : <XCircle className="w-3 h-3" />}
                     {config.is_active ? 'Активен' : 'Отключён'}
+                  </span>
+                  <span className="badge badge-info">
+                    {config.strategy === 'rrp' ? 'РРЦ' : 'Конкурент'}
                   </span>
                 </div>
 
-                {/* Strategy type */}
-                <div className="p-3 rounded-lg bg-muted/50 border border-border">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="badge badge-info">
-                      {config.strategy === 'rrp' ? 'РРЦ' : 'Конкурент'}
-                    </span>
-                  </div>
+                {/* Strategy details */}
+                <div className="space-y-2 text-sm">
                   {config.strategy === 'rrp' ? (
-                    <div className="space-y-1 text-sm">
-                      <div className="flex justify-between">
-                        <span style={{ color: 'var(--text-3)' }}>РРЦ:</span>
-                        <span className="font-medium" style={{ color: 'var(--text)' }}>{fmt(config.rrp_price)}₽</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span style={{ color: 'var(--text-3)' }}>Допуск:</span>
-                        <span className="font-medium" style={{ color: 'var(--text)' }}>±{fmt(config.rrp_tolerance)}₽</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span style={{ color: 'var(--text-3)' }}>Кошелёк WB:</span>
-                        <span className="font-medium" style={{ color: config.rrp_consider_wallet ? '#16a34a' : 'var(--text-3)' }}>
-                          {config.rrp_consider_wallet ? 'Учитывается' : 'Нет'}
+                    <>
+                      <div className="flex justify-between items-center">
+                        <span style={{ color: 'var(--text-3)' }}>РРЦ</span>
+                        <span className="font-medium" style={{ color: 'var(--text)' }}>
+                          {config.rrp_price ? fmt(config.rrp_price) + '₽' : '—'}
                         </span>
                       </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-1 text-sm">
-                      {config.competitors?.length > 0 && (
-                        <div>
-                          <span style={{ color: 'var(--text-3)' }}>Конкуренты:</span>
-                          <div className="mt-1 space-y-1">
-                            {config.competitors.map((c, i) => (
-                              <a
-                                key={i}
-                                href={`https://www.wildberries.ru/catalog/${c.nm_id}/detail.aspx`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="flex items-center gap-1 text-primary hover:underline text-xs"
-                              >
-                                #{c.nm_id} {c.alias && `(${c.alias})`} <ExternalLink className="w-3 h-3" />
-                              </a>
-                            ))}
-                          </div>
+                      {config.rrp_tolerance > 0 && (
+                        <div className="flex justify-between items-center">
+                          <span style={{ color: 'var(--text-3)' }}>Допуск</span>
+                          <span className="font-medium" style={{ color: 'var(--text)' }}>±{fmt(config.rrp_tolerance)}₽</span>
                         </div>
                       )}
-                      <div className="flex justify-between">
-                        <span style={{ color: 'var(--text-3)' }}>Смещение:</span>
+                      {config.rrp_consider_wallet && (
+                        <div className="flex justify-between items-center">
+                          <span style={{ color: 'var(--text-3)' }}>Кошелёк WB</span>
+                          <span className="text-xs font-medium text-green-600">Учитывается</span>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {config.competitors?.length > 0 && (
+                        <div className="space-y-1">
+                          {config.competitors.map((comp, i) => (
+                            <a key={i}
+                              href={`https://www.wildberries.ru/catalog/${comp.nm_id}/detail.aspx`}
+                              target="_blank" rel="noopener noreferrer"
+                              className="flex items-center gap-1 text-primary hover:underline text-xs">
+                              #{comp.nm_id}{comp.alias && ` (${comp.alias})`}
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex justify-between items-center">
+                        <span style={{ color: 'var(--text-3)' }}>Смещение</span>
                         <span className="font-medium" style={{ color: 'var(--text)' }}>
-                          {config.competitor_offset_direction === 'below' ? '−' : '+'}{config.competitor_offset_value}
+                          {config.competitor_offset_direction === 'below' ? '−' : '+'}
+                          {config.competitor_offset_value}
                           {config.competitor_offset_type === 'pct' ? '%' : '₽'}
                         </span>
                       </div>
-                      <div className="flex justify-between">
-                        <span style={{ color: 'var(--text-3)' }}>Правило:</span>
+                      <div className="flex justify-between items-center">
+                        <span style={{ color: 'var(--text-3)' }}>Правило</span>
                         <span className="font-medium" style={{ color: 'var(--text)' }}>
-                          {config.competitor_select_rule === 'min_price' ? 'Минимальная' :
+                          {config.competitor_select_rule === 'min_price' ? 'Мин. цена' :
                            config.competitor_select_rule === 'avg_price' ? 'Средняя' : 'Мин. в наличии'}
                         </span>
                       </div>
-                    </div>
+                    </>
                   )}
                 </div>
 
                 {/* Price limits */}
-                <div className="flex gap-3 text-sm">
-                  <div className="flex-1 p-2 rounded bg-muted/50 text-center">
-                    <p className="text-xs" style={{ color: 'var(--text-3)' }}>Мин.</p>
-                    <p className="font-semibold" style={{ color: 'var(--text)' }}>{fmt(config.min_price)}₽</p>
+                <div className="grid grid-cols-2 gap-2 pt-3 border-t border-border/60">
+                  <div className="rounded-lg p-2.5 text-center" style={{ background: 'hsl(var(--border) / 0.5)' }}>
+                    <p className="text-xs mb-0.5" style={{ color: 'var(--text-3)' }}>Мин. цена</p>
+                    <p className="text-sm font-semibold" style={{ color: config.min_price ? 'var(--text)' : 'var(--text-3)' }}>
+                      {config.min_price ? fmt(config.min_price) + '₽' : 'Откл.'}
+                    </p>
                   </div>
-                  <div className="flex-1 p-2 rounded bg-muted/50 text-center">
-                    <p className="text-xs" style={{ color: 'var(--text-3)' }}>Макс.</p>
-                    <p className="font-semibold" style={{ color: 'var(--text)' }}>
-                      {config.max_price ? `${fmt(config.max_price)}₽` : '∞'}
+                  <div className="rounded-lg p-2.5 text-center" style={{ background: 'hsl(var(--border) / 0.5)' }}>
+                    <p className="text-xs mb-0.5" style={{ color: 'var(--text-3)' }}>Макс. цена</p>
+                    <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                      {config.max_price ? fmt(config.max_price) + '₽' : '∞'}
                     </p>
                   </div>
                 </div>
 
+                {/* SPP tiers */}
+                {config.rrp_spp_tiers?.length > 0 && (
+                  <div className="pt-3 border-t border-border/60 space-y-2">
+                    <div className="flex items-center gap-1.5">
+                      <TrendingUp className="w-3.5 h-3.5 text-amber-500" />
+                      <span className="text-xs font-semibold" style={{ color: 'var(--text)' }}>Ступени по СПП</span>
+                      <span className="ml-auto text-xs px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 font-medium">
+                        {config.rrp_spp_tiers.length} шт.
+                      </span>
+                    </div>
+                    <div className="space-y-1">
+                      {config.rrp_spp_tiers.map((t, i) => (
+                        <div key={i} className="flex items-center justify-between text-xs">
+                          <span className="font-mono px-2 py-0.5 rounded-md" style={{ background: 'hsl(var(--border) / 0.5)', color: 'var(--text-2)' }}>
+                            {t.spp_min}%{t.spp_max != null ? `→${t.spp_max}%` : '→∞'}
+                          </span>
+                          <span className="font-semibold" style={{ color: 'var(--text)' }}>
+                            {t.seller_price != null ? fmt(t.seller_price) + '₽' : 'РРЦ ' + fmt(t.rrp_price) + '₽'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Extra options */}
+                {(config.skip_margin_check || config.night_price_enabled) && (
+                  <div className="flex flex-wrap gap-1.5 pt-3 border-t border-border/60">
+                    {config.skip_margin_check && (
+                      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800" style={{ color: '#b45309' }}>
+                        <Shield className="w-3 h-3" /> Без защиты маржи
+                      </span>
+                    )}
+                    {config.night_price_enabled && (
+                      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800" style={{ color: '#4f46e5' }}>
+                        <Moon className="w-3 h-3" />
+                        {config.night_start_msk}–{config.night_end_msk} → {fmt(config.night_seller_price)}₽
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Updated at */}
                 {config.updated_at && (
-                  <p className="text-xs" style={{ color: 'var(--text-3)' }}>
+                  <p className="text-xs pt-3 border-t border-border/40" style={{ color: 'var(--text-3)' }}>
                     Обновлено: {formatMsk(config.updated_at, 'dd.MM.yyyy HH:mm')}
                   </p>
                 )}
+
               </div>
             )}
           </div>

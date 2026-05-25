@@ -83,7 +83,7 @@ class WBAPIClient:
         json_data: Optional[dict] = None,
         params: Optional[dict] = None,
         retry_on_429: bool = True,
-        max_retries: int = 3
+        max_retries: int = 5
     ) -> dict:
         """
         Выполнение HTTP запроса с обработкой ошибок.
@@ -106,7 +106,7 @@ class WBAPIClient:
             RateLimitError: При превышении лимита
         """
         retry_count = 0
-        backoff_delay = 5  # Начальная задержка при 429
+        backoff_delay = 7  # Начальная задержка при 429 (> 6s window WB rate limit)
 
         async with httpx.AsyncClient(
             base_url=self.base_url,

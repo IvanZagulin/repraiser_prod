@@ -37,8 +37,6 @@ class RepricerEngine:
         self.user_id = user_id  # None → глобальные/дефолтные настройки
         self._user_settings: Optional[Dict] = None  # loaded once per run
         self._prefetched_prices: Dict[int, object] = {}  # nm_id -> PriceData, cleared per chunk
-        self._current_competitor_price: Optional[Decimal] = None  # set during competitor strategy
-        self._current_competitor_nm_id: Optional[int] = None  # set during competitor strategy
 
     def _load_user_settings(self) -> Dict:
         """Load all repricer settings in 2 queries to avoid N+1 per product."""
@@ -258,6 +256,23 @@ class RepricerEngine:
             logger.error("Ошибка получения данных для nm_id=%s: %s", product.nm_id, e)
             return None
     
+    def _resolve_rrp(self, config, spp):
+        """Returns (seller_price_direct, rrp_price) for the current SPP level.
+
+        Checks rrp_spp_tiers first (ordered by spp_min ascending).
+        Returns (tier.seller_price, tier.rrp_price) for the matching tier.
+        If seller_price is set in the tier, the engine uses it directly
+        (no backward calculation). Falls back to (None, config.rrp_price).
+        Tier range: [spp_min, spp_max). spp_max=None means no upper limit.
+        """
+        tiers = getattr(config, 'rrp_spp_tiers', None) or []
+        for tier in tiers:
+            above_min = spp >= tier.spp_min
+            below_max = tier.spp_max is None or spp < tier.spp_max
+            if above_min and below_max:
+                return getattr(tier, 'seller_price', None), tier.rrp_price
+        return None, config.rrp_price
+
     async def _strategy_rrp(
         self,
         product: Product,
@@ -277,13 +292,27 @@ class RepricerEngine:
         Returns:
             Tuple (новая_цена_продавца, reason_code, reason_message)
         """
-        if not config.rrp_price:
+        spp = current_data.get('spp') or Decimal(0)
+        seller_price_direct, rrp = self._resolve_rrp(config, spp)
+
+        # Direct seller price mode: tier specifies exact WB seller price
+        if seller_price_direct is not None:
+            current_seller = current_data.get('seller_price') or Decimal(0)
+            if current_seller == seller_price_direct:
+                return None, "NO_CHANGE", (
+                    f"Цена продавца уже {seller_price_direct}₽ (ступень СПП={spp}%)"
+                )
+            return (
+                seller_price_direct,
+                "CALCULATED",
+                f"Ступень СПП: цена продавца {seller_price_direct}₽ при СПП={spp}%",
+            )
+
+        if not rrp:
             return None, "SKIPPED_INACTIVE", "РРЦ не настроен"
 
-        rrp = config.rrp_price
         tolerance = config.rrp_tolerance or Decimal(5)
         current_final = current_data['final_price']
-        spp = current_data.get('spp') or Decimal(0)
         seller_discount = current_data.get('discount') or Decimal(0)
 
         consider_wallet = bool(getattr(config, 'rrp_consider_wallet', False))
@@ -316,7 +345,7 @@ class RepricerEngine:
                     f"целевая до кошелька {target_final:.2f}₽, "
                     f"новая цена продавца {new_seller_price}₽"
                 )
-                return new_seller_price, "CALCULATED", reason_msg
+                return new_seller_price, "CALCULATED", reason_msg, competitor_price, winning_nm_id
             except ValueError as e:
                 return None, "PARSE_ERROR", f"Ошибка расчета: {e}"
 
@@ -341,7 +370,7 @@ class RepricerEngine:
                     f"РРЦ стратегия: целевая финальная {target_final}₽, "
                     f"новая цена продавца {new_seller_price}₽"
                 )
-                return new_seller_price, "CALCULATED", reason_msg
+                return new_seller_price, "CALCULATED", reason_msg, competitor_price, winning_nm_id
             except ValueError as e:
                 return None, "PARSE_ERROR", f"Ошибка расчета: {e}"
     
@@ -408,15 +437,13 @@ class RepricerEngine:
         product: Product,
         config: ProductConfig,
         current_data: Dict
-    ) -> Tuple[Optional[Decimal], str, Optional[str]]:
+    ) -> Tuple[Optional[Decimal], str, Optional[str], Optional[Decimal], Optional[int]]:
         """
         Стратегия Competitor (поддерживает несколько конкурентов).
 
         Returns:
-            Tuple (новая_цена_продавца, reason_code, reason_message)
+            Tuple (новая_цена_продавца, reason_code, reason_message, competitor_price, winning_nm_id)
         """
-        self._current_competitor_price = None
-        self._current_competitor_nm_id = None
         try:
             competitor_price, winning_nm_id = await self._get_competitor_price(config)
 
@@ -427,11 +454,8 @@ class RepricerEngine:
                     CompetitorEntry.product_config_id == config.id
                 ).all()
                 if not entries and not config.competitor_nm_id:
-                    return None, "SKIPPED_INACTIVE", "Конкурент не настроен"
-                return None, "COMPETITOR_OOS", "Все конкуренты не в наличии"
-
-            self._current_competitor_price = competitor_price
-            self._current_competitor_nm_id = winning_nm_id
+                    return None, "SKIPPED_INACTIVE", "Конкурент не настроен", None, None
+                return None, "COMPETITOR_OOS", "Все конкуренты не в наличии", None, None
 
             spp = current_data.get('spp') or Decimal(0)
             seller_discount = current_data.get('discount') or Decimal(0)
@@ -468,20 +492,19 @@ class RepricerEngine:
                     f"целевая {target_final}₽, новая цена продавца {new_seller_price}₽"
                 )
 
-                return new_seller_price, "CALCULATED", reason_msg
+                return new_seller_price, "CALCULATED", reason_msg, competitor_price, winning_nm_id
 
             except ValueError as e:
-                return None, "PARSE_ERROR", f"Ошибка расчета: {e}"
+                return None, "PARSE_ERROR", f"Ошибка расчета: {e}", None, None
 
         except Exception as e:
             logger.error(f"Ошибка стратегии Competitor: {e}")
-            return None, "PARSE_ERROR", f"Исключение при парсинге конкурента: {e}"
+            return None, "PARSE_ERROR", f"Исключение при парсинге конкурента: {e}", None, None
     
     def _apply_limits(
         self,
         new_price: Decimal,
-        config: ProductConfig,
-        seller_discount: Decimal = Decimal("0")
+        config: ProductConfig
     ) -> Tuple[Decimal, str]:
         """
         Применение защитных лимитов (min_price, max_price, min_margin_pct)
@@ -505,6 +528,10 @@ class RepricerEngine:
             logger.info(f"Цена ограничена максимумом: {original_price}₽ → {new_price}₽")
 
         # Проверка минимальной маржи (Margin Guard) — per-user настройки (из кеша)
+        # Если skip_margin_check=True для товара — пропускаем
+        if getattr(config, 'skip_margin_check', False):
+            return new_price, reason_code
+
         # Все расчёты в Decimal для точности финансовой математики
         s = self._user_settings or {}
         min_margin_pct = Decimal(s.get("min_margin_pct", "0"))
@@ -524,7 +551,6 @@ class RepricerEngine:
                 acquiring_value  = Decimal(s.get("acquiring_value",  "0"))
 
                 sp = Decimal(str(new_price))
-                eff_sp = sp * (1 - seller_discount / 100) if seller_discount > 0 else sp
                 fees = Decimal("0")
                 fee_items = [
                     (commission_type, commission_value),
@@ -532,9 +558,9 @@ class RepricerEngine:
                     (acquiring_type,  acquiring_value),
                 ]
                 for ftype, fval in fee_items:
-                    fees += eff_sp * fval / 100 if ftype == "pct" else fval
+                    fees += sp * fval / 100 if ftype == "pct" else fval
 
-                current_margin = (eff_sp - cost_price - fees) / cost_price * 100
+                current_margin = (sp - cost_price - fees) / cost_price * 100
 
                 if current_margin < min_margin_pct:
                     # Минимальная цена при которой маржа = min_margin_pct
@@ -546,8 +572,7 @@ class RepricerEngine:
                         (fval if ftype == "rub" else Decimal("0"))
                         for ftype, fval in fee_items
                     )
-                    discount_factor = (1 - seller_discount / 100) if seller_discount > 0 else Decimal("1")
-                    denominator = discount_factor * (Decimal("1") - pct_rate)
+                    denominator = Decimal("1") - pct_rate
                     if denominator > 0:
                         min_price_by_margin = (
                             cost_price * (1 + min_margin_pct / 100) + fixed_fees
@@ -648,6 +673,38 @@ class RepricerEngine:
         )
         self.db.add(change)
     
+    def _is_night_window(self, config) -> bool:
+        """Returns True if current Moscow time is within night_start..night_end."""
+        if not getattr(config, 'night_price_enabled', False):
+            return False
+        ns = getattr(config, 'night_start_msk', None)
+        ne = getattr(config, 'night_end_msk', None)
+        if not ns or not ne or not config.night_seller_price:
+            return False
+        try:
+            from datetime import timezone, timedelta, datetime as _dt
+            now_msk = _dt.now(timezone(timedelta(hours=3))).strftime('%H:%M')
+            if ns > ne:  # crosses midnight, e.g. 23:00-06:00
+                return now_msk >= ns or now_msk < ne
+            return ns <= now_msk < ne
+        except Exception as e:
+            logger.warning(f'Night window check failed: {e}')
+            return False
+
+    def _apply_night_boost(self, config, base_price):
+        """Returns (night_price, 'NIGHT_BOOST', msg) or (base_price, None, None)."""
+        if not self._is_night_window(config):
+            return base_price, None, None
+        night_price = config.night_seller_price
+        if night_price < config.min_price:
+            night_price = config.min_price
+        msg = (
+            f'Ночное окно МСК {config.night_start_msk}'
+            f'–{config.night_end_msk}: '
+            f'цена {night_price}₽ (повышение средней для акций WB)'
+        )
+        return night_price, 'NIGHT_BOOST', msg
+
     async def process_product(
         self,
         product: Product,
@@ -715,56 +772,47 @@ class RepricerEngine:
         wallet_pct = Decimal((self._user_settings or {}).get("wb_wallet_discount_pct", "0"))
 
         # Выполняем стратегию
+        snap_competitor_price = None
+        snap_competitor_nm_id = None
         if config.strategy == 'rrp':
             new_price, reason_code, reason_msg = await self._strategy_rrp(
                 product, config, current_data, wallet_pct
             )
         elif config.strategy == 'competitor':
-            new_price, reason_code, reason_msg = await self._strategy_competitor(
+            new_price, reason_code, reason_msg, snap_competitor_price, snap_competitor_nm_id = await self._strategy_competitor(
                 product, config, current_data
             )
         else:
             logger.error(f"Неизвестная стратегия: {config.strategy}")
             logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": "PARSE_ERROR", "duration_ms": int((time.monotonic() - _t0) * 1000)}))
             return "PARSE_ERROR"
-
-        # Capture competitor data set by _strategy_competitor (None for other strategies)
-        _snap_comp_price = self._current_competitor_price
-        _snap_comp_nm_id = self._current_competitor_nm_id
         
-        # Если цена не изменилась — всё равно проверяем защиту маржи
+        # Если цена не изменилась
         if new_price is None:
-            current_price = current_data["seller_price"]
-            checked_price, limit_reason = self._apply_limits(current_price, config)
-            if checked_price != current_price:
-                # Маржа ниже минимума — нужно поднять цену даже без сигнала стратегии
-                logger.info(
-                    f"Стратегия не меняла цену, но защита маржи требует подъёма: "
-                    f"{current_price}₽ → {checked_price}₽ ({limit_reason})"
-                )
-                new_price = checked_price
-                reason_code = limit_reason
-                reason_msg = f"Маржа ниже минимума, цена поднята: {current_price}₽ → {checked_price}₽"
-                # Продолжаем выполнение (не возвращаемся) — обновим цену ниже
-            else:
-                self._save_price_snapshot(product, current_data,
-                    competitor_nm_id=_snap_comp_nm_id, competitor_price=_snap_comp_price)
-                self._save_price_change(
-                    run, product, current_data, None, None,
-                    reason_code, reason_msg
-                )
-                logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": reason_code, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
-                return reason_code
+            self._save_price_snapshot(product, current_data, competitor_nm_id=snap_competitor_nm_id, competitor_price=snap_competitor_price)
+            self._save_price_change(
+                run, product, current_data, None, None,
+                reason_code, reason_msg
+            )
+            logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": reason_code, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
+            return reason_code
+        
+        # Применяем лимиты
+        final_new_price, limit_reason = self._apply_limits(new_price, config)
 
-        # Применяем лимиты (если new_price уже прошёл через _apply_limits выше —
-        # _apply_limits идемпотентна: повторное применение даст тот же результат)
-        _seller_disc = Decimal(str(current_data.get("discount") or 0))
-        final_new_price, limit_reason = self._apply_limits(new_price, config, _seller_disc)
+        # Night price boost: temporarily raise price during MSK night hours
+        # to increase the 30-day average price baseline before WB promotions.
+        night_price, night_reason, night_msg = self._apply_night_boost(
+            config, final_new_price
+        )
+        if night_reason:
+            final_new_price = night_price
+            limit_reason    = night_reason
+            reason_msg      = night_msg
         
         # Если после лимитов цена не изменилась
         if final_new_price == current_data['seller_price']:
-            self._save_price_snapshot(product, current_data,
-                competitor_nm_id=_snap_comp_nm_id, competitor_price=_snap_comp_price)
+            self._save_price_snapshot(product, current_data, competitor_nm_id=snap_competitor_nm_id, competitor_price=snap_competitor_price)
             self._save_price_change(
                 run, product, current_data, final_new_price, None,
                 "NO_CHANGE", f"После применения лимитов цена осталась прежней ({final_new_price}₽)"
@@ -793,8 +841,7 @@ class RepricerEngine:
             updated_data['seller_price'] = final_new_price
             if new_final:
                 updated_data['final_price'] = new_final
-            self._save_price_snapshot(product, updated_data,
-                competitor_nm_id=_snap_comp_nm_id, competitor_price=_snap_comp_price)
+            self._save_price_snapshot(product, updated_data, competitor_nm_id=snap_competitor_nm_id, competitor_price=snap_competitor_price)
 
             self._save_price_change(
                 run, product, current_data, final_new_price, new_final,
@@ -805,8 +852,7 @@ class RepricerEngine:
             logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": _reason, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
             return _reason
         else:
-            self._save_price_snapshot(product, current_data,
-                competitor_nm_id=_snap_comp_nm_id, competitor_price=_snap_comp_price)
+            self._save_price_snapshot(product, current_data, competitor_nm_id=snap_competitor_nm_id, competitor_price=snap_competitor_price)
             self._save_price_change(
                 run, product, current_data, final_new_price, None,
                 "WB_API_ERROR", "Не удалось применить цену в WB API"
@@ -938,52 +984,35 @@ class RepricerEngine:
         except Exception:
             wallet_pct = Decimal(0)
 
+        snap_competitor_price = None
+        snap_competitor_nm_id = None
         if config.strategy == "rrp":
             new_price, reason_code, reason_msg = await self._strategy_rrp(product, config, current_data, wallet_pct)
         elif config.strategy == "competitor":
-            new_price, reason_code, reason_msg = await self._strategy_competitor(product, config, current_data)
+            new_price, reason_code, reason_msg, snap_competitor_price, snap_competitor_nm_id = await self._strategy_competitor(product, config, current_data)
         else:
             return {"product": product, "needs_update": False, "skip_code": "PARSE_ERROR",
                     "current_data": current_data, "new_price": None, "limit_reason": None,
-                    "reason_msg": "Неизвестная стратегия", "_t0": _t0,
-                    "competitor_price": None, "competitor_nm_id": None}
-
-        # Capture competitor data set by _strategy_competitor (None for other strategies)
-        _snap_comp_price = self._current_competitor_price
-        _snap_comp_nm_id = self._current_competitor_nm_id
+                    "reason_msg": "Неизвестная стратегия", "_t0": _t0}
 
         if new_price is None:
-            # Стратегия не меняет цену — но проверяем защиту маржи
-            current_price = current_data["seller_price"]
-            _seller_disc = Decimal(str(current_data.get("discount") or 0))
-            checked_price, limit_reason_margin = self._apply_limits(current_price, config, _seller_disc)
-            if checked_price != current_price:
-                logger.info(
-                    "Стратегия не меняла цену, но защита маржи требует подъёма: %s₽ → %s₽ (%s)",
-                    current_price, checked_price, limit_reason_margin
-                )
-                new_price = checked_price
-                reason_code = limit_reason_margin
-                reason_msg = f"Маржа ниже минимума, цена поднята: {current_price}₽ → {checked_price}₽"
-            else:
-                return {"product": product, "needs_update": False, "skip_code": reason_code,
-                        "current_data": current_data, "new_price": None, "limit_reason": None,
-                        "reason_msg": reason_msg, "_t0": _t0,
-                        "competitor_price": _snap_comp_price, "competitor_nm_id": _snap_comp_nm_id}
+            return {"product": product, "needs_update": False, "skip_code": reason_code,
+                    "current_data": current_data, "new_price": None, "limit_reason": None,
+                    "reason_msg": reason_msg, "_t0": _t0,
+                    "snap_competitor_price": snap_competitor_price, "snap_competitor_nm_id": snap_competitor_nm_id}
 
-        _seller_disc = Decimal(str(current_data.get("discount") or 0))
-        final_new_price, limit_reason = self._apply_limits(new_price, config, _seller_disc)
+        final_new_price, limit_reason = self._apply_limits(new_price, config)
 
         if final_new_price == current_data["seller_price"]:
             return {"product": product, "needs_update": False, "skip_code": "NO_CHANGE",
                     "current_data": current_data, "new_price": final_new_price,
                     "limit_reason": limit_reason, "reason_msg": reason_msg, "_t0": _t0,
-                    "competitor_price": _snap_comp_price, "competitor_nm_id": _snap_comp_nm_id}
+                    "snap_competitor_price": snap_competitor_price, "snap_competitor_nm_id": snap_competitor_nm_id}
 
         return {"product": product, "needs_update": True, "skip_code": None,
                 "current_data": current_data, "new_price": final_new_price,
                 "limit_reason": limit_reason, "reason_msg": reason_msg, "_t0": _t0,
-                "competitor_price": _snap_comp_price, "competitor_nm_id": _snap_comp_nm_id}
+                "snap_competitor_price": snap_competitor_price, "snap_competitor_nm_id": snap_competitor_nm_id}
 
     def _finalize_decision(
         self,
@@ -1001,14 +1030,13 @@ class RepricerEngine:
         limit_reason = dec["limit_reason"]
         reason_msg = dec["reason_msg"]
         _t0 = dec.get("_t0", time.monotonic())
-        _comp_price = dec.get("competitor_price")
-        _comp_nm_id = dec.get("competitor_nm_id")
+        snap_competitor_price = dec.get("snap_competitor_price")
+        snap_competitor_nm_id = dec.get("snap_competitor_nm_id")
 
         if not dec["needs_update"]:
             reason_code = dec["skip_code"] or "SKIPPED_INACTIVE"
             if current_data:
-                self._save_price_snapshot(product, current_data,
-                    competitor_nm_id=_comp_nm_id, competitor_price=_comp_price)
+                self._save_price_snapshot(product, current_data, competitor_nm_id=snap_competitor_nm_id, competitor_price=snap_competitor_price)
                 self._save_price_change(run, product, current_data, new_price, None, reason_code, reason_msg)
             logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id,
                 "nm_id": product.nm_id, "sku": product.seller_sku, "reason": reason_code,
@@ -1016,8 +1044,7 @@ class RepricerEngine:
             return reason_code
 
         if failed:
-            self._save_price_snapshot(product, current_data,
-                competitor_nm_id=_comp_nm_id, competitor_price=_comp_price)
+            self._save_price_snapshot(product, current_data, competitor_nm_id=snap_competitor_nm_id, competitor_price=snap_competitor_price)
             self._save_price_change(run, product, current_data, new_price, None,
                                     "WB_API_ERROR", "Не удалось применить цену в WB API (batch)")
             logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id,
@@ -1035,8 +1062,7 @@ class RepricerEngine:
         updated_data["seller_price"] = new_price
         if new_final:
             updated_data["final_price"] = new_final
-        self._save_price_snapshot(product, updated_data,
-            competitor_nm_id=_comp_nm_id, competitor_price=_comp_price)
+        self._save_price_snapshot(product, updated_data, competitor_nm_id=snap_competitor_nm_id, competitor_price=snap_competitor_price)
         reason_code = limit_reason if limit_reason != "UPDATED" else "UPDATED"
         self._save_price_change(run, product, current_data, new_price, new_final,
                                 reason_code, str(reason_msg) + ". Цена применена: " + str(new_price) + "₽")

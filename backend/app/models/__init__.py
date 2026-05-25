@@ -3,6 +3,7 @@ from app.models.account import Account
 from app.models.product import Product
 from app.models.product_config import ProductConfig
 from app.models.competitor_entry import CompetitorEntry
+from app.models.rrp_spp_tier import RRPSPPTier
 from app.models.price_snapshot import PriceSnapshot
 from app.models.repricer_run import RepricerRun
 from app.models.price_change import PriceChange
@@ -15,6 +16,7 @@ from app.models.product_group import ProductGroup, ProductGroupMembership
 from app.models.competitor_alert import CompetitorAlert
 from app.models.pricing_rule import PricingRule
 from app.models.wb_catalog import WBCatalog
+from app.models.lead import Lead
 
 __all__ = [
     "User",
@@ -22,6 +24,7 @@ __all__ = [
     "Product",
     "ProductConfig",
     "CompetitorEntry",
+    "RRPSPPTier",
     "PriceSnapshot",
     "RepricerRun",
     "PriceChange",
@@ -35,4 +38,5 @@ __all__ = [
     "CompetitorAlert",
     "PricingRule",
     "WBCatalog",
+    "Lead",
 ]

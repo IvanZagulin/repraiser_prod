@@ -16,7 +16,7 @@ from slowapi.errors import RateLimitExceeded
 from app.config import settings
 from app.utils import get_real_ip
 from app.api import (
-    auth, accounts, products, repricer, export,
+    auth, accounts, products, repricer, export, leads as leads_api,
     settings as settings_api, admin, schedule, analytics, bulk, activity,
     reports, alerts, groups, audit,
 )
@@ -134,7 +134,7 @@ app = FastAPI(
 # например для локальной разработки: CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 import os as _os
 _extra_origins = [o.strip() for o in _os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
-ALLOWED_ORIGINS = ["https://qvaz.quasar-x.ru"] + _extra_origins
+ALLOWED_ORIGINS = ["https://qvaz.quasar-x.ru", "https://quasar-x.ru", "https://www.quasar-x.ru"] + _extra_origins
 
 # Rate limiter
 app.state.limiter = limiter
@@ -226,6 +226,7 @@ app.include_router(reports.router,      prefix="/api/reports",   tags=["Reports"
 app.include_router(alerts.router,       prefix="/api/alerts",    tags=["Competitor Alerts"])
 app.include_router(groups.router,       prefix="/api/groups",    tags=["Product Groups"])
 app.include_router(audit.router,        prefix="/api/audit",     tags=["Audit Log"])
+app.include_router(leads_api.router,    prefix="/api/leads",    tags=["Leads"])
 
 
 @app.on_event("startup")
