@@ -72,7 +72,8 @@ class ProxyPool:
         if not settings.SOCKS5_PROXIES:
             logger.warning("SOCKS5_PROXIES не настроены")
             return
-        
+
+        self.proxies = []  # reset — защита от дублей при повторной инициализации
         proxy_strings = settings.SOCKS5_PROXIES.split(';')
         for proxy_str in proxy_strings:
             if not proxy_str.strip():
@@ -134,13 +135,20 @@ class ProxyPool:
             logger.critical("⚠️ ВСЕ ПРОКСИ МЕРТВЫ! Парсинг невозможен!")
     
     async def initialize(self):
-        """Инициализация пула прокси"""
+        """Инициализация пула прокси (потокобезопасно).
+
+        Под локом с double-check: иначе при параллельном парсинге десятки
+        корутин одновременно вызовут load_from_config и продублируют список
+        прокси в N раз + запустят сотни лишних health-check.
+        """
         if self._initialized:
             return
-        
-        self.load_from_config()
-        await self.health_check_all()
-        self._initialized = True
+        async with self._lock:
+            if self._initialized:  # другой корутин успел инициализировать
+                return
+            self.load_from_config()
+            await self.health_check_all()
+            self._initialized = True
     
     async def get_next_proxy(self) -> Optional[ProxyConfig]:
         """
