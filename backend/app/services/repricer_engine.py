@@ -37,6 +37,7 @@ class RepricerEngine:
         self.user_id = user_id  # None → глобальные/дефолтные настройки
         self._user_settings: Optional[Dict] = None  # loaded once per run
         self._prefetched_prices: Dict[int, object] = {}  # nm_id -> PriceData, cleared per chunk
+        self._competitor_entries_map: Optional[Dict[int, list]] = None  # config_id -> [nm_id], прогрев на прогон
 
     def _load_user_settings(self) -> Dict:
         """Load all repricer settings in 2 queries to avoid N+1 per product."""
@@ -399,19 +400,24 @@ class RepricerEngine:
             Tuple (final_price конкурента, winning_nm_id, basic_price конкурента)
             или (None, None, None)
         """
-        from app.models.competitor_entry import CompetitorEntry
-
-        # Собираем список nm_id
-        entries = self.db.query(CompetitorEntry).filter(
-            CompetitorEntry.product_config_id == config.id
-        ).all()
-
-        if entries:
-            nm_ids = [e.nm_id for e in entries]
-        elif config.competitor_nm_id:
-            nm_ids = [config.competitor_nm_id]
+        # Список nm_id конкурентов. Берём из прогретой карты (run_repricer),
+        # иначе fallback на точечный запрос (например при вызове process_product
+        # вне основного прогона).
+        if self._competitor_entries_map is not None:
+            nm_ids = list(self._competitor_entries_map.get(config.id, []))
         else:
-            return None, None, None
+            from app.models.competitor_entry import CompetitorEntry
+            nm_ids = [
+                e.nm_id for e in self.db.query(CompetitorEntry.nm_id).filter(
+                    CompetitorEntry.product_config_id == config.id
+                ).all()
+            ]
+
+        if not nm_ids:
+            if config.competitor_nm_id:
+                nm_ids = [config.competitor_nm_id]
+            else:
+                return None, None, None
 
         rule = config.competitor_select_rule or "min_price"
 
@@ -1203,11 +1209,18 @@ class RepricerEngine:
         if all_product_ids:
             from app.models.competitor_entry import CompetitorEntry
             competitor_nm_ids: set[int] = set(direct_competitor_nm_ids)
+            # Один запрос вместо N: строим карту config_id -> [nm_id] и заодно
+            # собираем уникальные nm_id конкурентов для прогрева каталога.
+            self._competitor_entries_map = {}
             if all_config_ids:
-                entries = self.db.query(CompetitorEntry.nm_id).filter(
+                rows = self.db.query(
+                    CompetitorEntry.product_config_id, CompetitorEntry.nm_id
+                ).filter(
                     CompetitorEntry.product_config_id.in_(all_config_ids)
                 ).all()
-                competitor_nm_ids.update(e.nm_id for e in entries)
+                for cfg_id, nm in rows:
+                    self._competitor_entries_map.setdefault(cfg_id, []).append(nm)
+                    competitor_nm_ids.add(nm)
             cold_ids = [
                 nm_id for nm_id in competitor_nm_ids
                 if cache_get(f"wb_catalog:{nm_id}") is None
