@@ -123,7 +123,7 @@ class CatalogParser:
         """Запрос через прокси"""
         try:
             async with httpx.AsyncClient(
-                proxies=proxy.url,
+                proxy=proxy.url,  # httpx 0.28+: kwarg переименован proxies→proxy
                 timeout=15,
                 follow_redirects=True,
                 headers=_HEADERS,
