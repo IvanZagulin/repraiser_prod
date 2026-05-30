@@ -56,6 +56,12 @@ class ProductConfig(Base):
     match_competitor_basic = Column(Boolean, default=False, nullable=False,
                                      comment='Имитировать зачёркнутую цену конкурента (priceU+discount)')
 
+    # WB Price Quarantine: WB временно отвергает изменения цены этого товара
+    # (после серии резких снижений). Выставляется автоматически при отказе WB,
+    # репрайсер пропускает товар до истечения времени.
+    wb_blocked_until = Column(DateTime, nullable=True,
+                              comment='WB Price Quarantine — не трогать цену до этого времени')
+
     # Метаданные
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
