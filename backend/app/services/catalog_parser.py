@@ -174,21 +174,18 @@ class CatalogParser:
         url = self._build_url(nm_id)
         logger.info(f"Парсинг товара nm_id={nm_id}")
 
-        proxies_available = proxy_pool._initialized and proxy_pool.get_stats()['alive'] > 0
-
-        if proxies_available:
-            # Пробуем через прокси
-            for attempt in range(1, self.max_retries + 1):
-                proxy = await proxy_pool.get_next_proxy()
-                if not proxy:
-                    break
-                logger.debug(f"Попытка {attempt}/{self.max_retries} через {proxy}")
-                data = await self._request_with_proxy(url, proxy)
-                if data is not None:
-                    return self._parse_response(nm_id, data)
-                await asyncio.sleep(0.5)
-
-            logger.warning(f"nm_id={nm_id}: все прокси не сработали, пробуем напрямую")
+        # Сначала пытаемся через прокси (get_next_proxy сам инициализирует пул
+        # при первом вызове). Если прокси не загружены или все мёртвые — fallback
+        # на direct запрос.
+        for attempt in range(1, self.max_retries + 1):
+            proxy = await proxy_pool.get_next_proxy()
+            if not proxy:
+                break  # пул пустой или все мёртвые — выходим на direct
+            logger.debug(f"Попытка {attempt}/{self.max_retries} через {proxy}")
+            data = await self._request_with_proxy(url, proxy)
+            if data is not None:
+                return self._parse_response(nm_id, data)
+            await asyncio.sleep(0.5)
 
         # Прямой запрос (когда нет прокси или они все упали)
         data = await self._request_direct(url)
@@ -235,15 +232,16 @@ class CatalogParser:
                 url = self._build_batch_url(chunk)
                 data = None
 
-                proxies_available = proxy_pool._initialized and proxy_pool.get_stats()['alive'] > 0
-                if proxies_available:
-                    for attempt in range(1, self.max_retries + 1):
-                        proxy = await proxy_pool.get_next_proxy()
-                        if not proxy:
-                            break
-                        data = await self._request_with_proxy(url, proxy)
-                        if data is not None:
-                            break
+                # Всегда пробуем прокси (get_next_proxy auto-init); если None —
+                # сразу direct. Раньше проверяли _initialized, но он False до
+                # первого вызова → прокси не использовались в celery вообще.
+                for attempt in range(1, self.max_retries + 1):
+                    proxy = await proxy_pool.get_next_proxy()
+                    if not proxy:
+                        break
+                    data = await self._request_with_proxy(url, proxy)
+                    if data is not None:
+                        break
 
                 if data is None:
                     data = await self._request_direct(url)

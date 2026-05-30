@@ -141,7 +141,7 @@ class RepricerEngine:
 
         product_data = await catalog_parser.parse_product(nm_id)
         if product_data:
-            cache_set(cache_key, product_data.to_dict(), ttl=1200)
+            cache_set(cache_key, product_data.to_dict(), ttl=300)  # 5 мин — компромисс между нагрузкой и актуальностью СПП
         return product_data
 
     async def _prefetch_own_prices(self, products: list) -> None:
@@ -239,8 +239,18 @@ class RepricerEngine:
             if discounted_price > 0 and catalog_product.final_price > 0:
                 true_spp = round((1 - catalog_product.final_price / discounted_price) * 100)
                 true_spp = Decimal(str(max(0, true_spp)))
-            else:
+            elif catalog_product.total_quantity == 0:
+                # Реально OOS: stock=0 и final=0 — это нормально, дальше отфильтруется.
                 true_spp = Decimal(0)
+            else:
+                # final_price=0 при stock>0 — это баг каталога (пустой ответ WB или
+                # 429 throttle). SPP=0 + такая ситуация = неправильный target.
+                # Лучше пропустить товар чем посчитать неверно.
+                logger.warning(
+                    "nm_id=%s: catalog final_price=0 при stock=%s — PARSE_ERROR",
+                    product.nm_id, catalog_product.total_quantity,
+                )
+                return None
 
             return {
                 'seller_price': price_data.seller_price,
@@ -959,6 +969,14 @@ class RepricerEngine:
             return {"product": product, "needs_update": False, "skip_code": "SKIPPED_INACTIVE",
                     "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": None, "_t0": _t0}
 
+        # Товар в WB Price Quarantine — WB будет отвергать любые изменения цены.
+        # Не тратим время и не засоряем логи отказами; вернёмся после истечения.
+        _blocked_until = getattr(config, 'wb_blocked_until', None)
+        if _blocked_until and _blocked_until > datetime.now(timezone.utc).replace(tzinfo=None):
+            return {"product": product, "needs_update": False, "skip_code": "SKIPPED_QUARANTINE",
+                    "current_data": None, "new_price": None, "limit_reason": None,
+                    "reason_msg": f"WB Price Quarantine до {_blocked_until.isoformat()}", "_t0": _t0}
+
         if config.min_price is None:
             return {"product": product, "needs_update": False, "skip_code": "SKIPPED_INACTIVE",
                     "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": None, "_t0": _t0}
@@ -1083,8 +1101,13 @@ class RepricerEngine:
         if not dec["needs_update"]:
             reason_code = dec["skip_code"] or "SKIPPED_INACTIVE"
             if current_data:
+                # Снэпшот пишем всегда (UI и аналитика на них опираются).
                 self._save_price_snapshot(product, current_data, competitor_nm_id=snap_competitor_nm_id, competitor_price=snap_competitor_price)
-                self._save_price_change(run, product, current_data, new_price, None, reason_code, reason_msg)
+                # В price_changes пишем только реальные события — OUT_OF_STOCK и
+                # NO_CHANGE были 95% мусора (раздули таблицу до 7+ GB). Пропускаем.
+                _silent = ("OUT_OF_STOCK", "NO_CHANGE", "SKIPPED_INACTIVE", "SKIPPED_PROMO")
+                if reason_code not in _silent:
+                    self._save_price_change(run, product, current_data, new_price, None, reason_code, reason_msg)
             logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id,
                 "nm_id": product.nm_id, "sku": product.seller_sku, "reason": reason_code,
                 "duration_ms": int((time.monotonic() - _t0) * 1000)}))
@@ -1194,7 +1217,7 @@ class RepricerEngine:
                 batch_results = await catalog_parser.parse_batch_ids(cold_ids)
                 for nm_id, product_data in batch_results.items():
                     if product_data is not None:
-                        cache_set(f"wb_catalog:{nm_id}", product_data.to_dict(), ttl=1200)
+                        cache_set(f"wb_catalog:{nm_id}", product_data.to_dict(), ttl=300)
                 logger.info(f"Pre-fetch завершён: {sum(1 for v in batch_results.values() if v)} / {len(cold_ids)}")
 
         if not all_product_ids:
@@ -1292,7 +1315,7 @@ class RepricerEngine:
                         own_batch = await catalog_parser.parse_batch_ids(own_cold_ids)
                         for nm_id, data in own_batch.items():
                             if data is not None:
-                                cache_set("wb_catalog:%d" % nm_id, data.to_dict(), ttl=1200)
+                                cache_set("wb_catalog:%d" % nm_id, data.to_dict(), ttl=300)
 
                 # === ФАЗА 1: вычисляем решения параллельно (50 товаров одновременно) ===
                 pending_updates = {}  # token -> list of {nmID, price}
@@ -1327,6 +1350,9 @@ class RepricerEngine:
                 update_errors: dict = {}
 
                 if not dry_run and pending_updates:
+                    # Импортируем тут чтобы не ломать существующие импорты в начале файла.
+                    from app.services.wb_api import WBAuthError
+                    from datetime import timedelta
                     for token, updates in pending_updates.items():
                         upload_id = None
                         try:
@@ -1348,6 +1374,11 @@ class RepricerEngine:
                                 "Batch update: %d цен отправлено (uploadID=%s, статусов=%d)",
                                 len(updates), upload_id, len(statuses),
                             )
+                            # Карты nm_id → product_config для пометки quarantine.
+                            _nm_to_config = {
+                                d["product"].nm_id: d["product"].config
+                                for d in decisions if d.get("product") and d["product"].config
+                            }
                             for u in updates:
                                 nm = u["nmID"]
                                 st = statuses.get(nm)
@@ -1358,7 +1389,35 @@ class RepricerEngine:
                                     update_ok.add(nm)
                                 else:
                                     update_fail.add(nm)
-                                    update_errors[nm] = st[1] or "WB отклонил цену"
+                                    err_text = st[1] or "WB отклонил цену"
+                                    update_errors[nm] = err_text
+                                    # Price Quarantine: помечаем wb_blocked_until=+24h.
+                                    if 'quarantine' in err_text.lower() and nm in _nm_to_config:
+                                        cfg = _nm_to_config[nm]
+                                        _now = datetime.now(timezone.utc).replace(tzinfo=None)
+                                        cfg.wb_blocked_until = _now + timedelta(hours=24)
+                                        logger.warning(
+                                            "nm_id=%s: WB Price Quarantine — блокируем на 24ч (до %s)",
+                                            nm, cfg.wb_blocked_until.isoformat()
+                                        )
+                        except WBAuthError as e:
+                            # 401 от WB → токен невалиден/отозван. Деактивируем аккаунт.
+                            _acc = next(
+                                (d["product"].account for d in decisions
+                                 if d.get("product") and d["product"].account
+                                 and d["product"].account.wb_api_token == token),
+                                None,
+                            )
+                            if _acc:
+                                logger.error("Аккаунт '%s' (id=%s): WB вернул 401 — деактивируем", _acc.name, _acc.id)
+                                _acc.is_active = False
+                                try:
+                                    await telegram_notifier.notify_token_expired(_acc.name, _acc.id)
+                                except Exception:
+                                    pass
+                            for u in updates:
+                                update_fail.add(u["nmID"])
+                                update_errors[u["nmID"]] = f"401 от WB — аккаунт деактивирован: {e}"
                         except Exception as e:
                             logger.error("Ошибка batch update (uploadID=%s): %s", upload_id, e)
                             for u in updates:

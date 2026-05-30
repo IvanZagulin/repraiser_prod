@@ -13,6 +13,18 @@ class WBAPIError(Exception):
     pass
 
 
+class WBAuthError(WBAPIError):
+    """401 от WB — токен невалиден или отозван. Caller должен деактивировать аккаунт."""
+    pass
+
+
+class WBQuarantineError(WBAPIError):
+    """WB пометил товар в Price Quarantine. Caller должен заблокировать товар на 24ч."""
+    def __init__(self, message: str, nm_id: int):
+        super().__init__(message)
+        self.nm_id = nm_id
+
+
 class RateLimitError(WBAPIError):
     """Ошибка превышения лимита запросов (429)"""
     pass
@@ -146,7 +158,7 @@ class WBAPIClient:
                         continue
 
                     elif response.status_code == 401:
-                        raise WBAPIError("Unauthorized (401) - неверный или истекший токен")
+                        raise WBAuthError("Unauthorized (401) - токен невалиден или отозван WB")
 
                     elif response.status_code == 400:
                         error_msg = response.text

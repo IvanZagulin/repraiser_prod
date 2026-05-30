@@ -339,6 +339,46 @@ async def cleanup_stale_runs():
         db.close()
 
 
+async def cleanup_old_price_changes():
+    """Удаляет price_changes старше 60 дней — таблица растёт ~500k строк/день
+    и без чистки разнесёт диск (видели 7GB / 17M строк за месяц).
+
+    После правки движка OUT_OF_STOCK / NO_CHANGE больше не пишутся, поэтому
+    новые данные растут в 20× медленнее. Но старые залежи надо вычистить.
+    """
+    RETENTION_DAYS = 60
+    BATCH_SIZE = 50_000
+    logger.info(f"Очистка price_changes старше {RETENTION_DAYS} дней...")
+    db = SessionLocal()
+    total_deleted = 0
+    try:
+        while True:
+            result = db.execute(
+                text(f"""
+                    DELETE FROM price_changes
+                    WHERE id IN (
+                        SELECT id FROM price_changes
+                        WHERE changed_at < NOW() - INTERVAL '{RETENTION_DAYS} days'
+                        LIMIT {BATCH_SIZE}
+                    )
+                """)
+            )
+            deleted = result.rowcount
+            db.commit()
+            total_deleted += deleted
+            if deleted < BATCH_SIZE:
+                break
+        if total_deleted > 0:
+            logger.info(f"Удалено старых price_changes: {total_deleted}")
+        else:
+            logger.info("Старых price_changes нет")
+    except Exception as e:
+        logger.error(f"Ошибка очистки price_changes: {e}", exc_info=True)
+        db.rollback()
+    finally:
+        db.close()
+
+
 async def cleanup_old_snapshots():
     """Удаляет price_snapshots старше 180 дней.
 
@@ -455,6 +495,16 @@ def setup_scheduler() -> AsyncIOScheduler:
         max_instances=1,
     )
     logger.info("Задача 'cleanup_stale_runs' зарегистрирована (каждые 15 мин.)")
+
+    scheduler.add_job(
+        cleanup_old_price_changes,
+        trigger=IntervalTrigger(hours=24),
+        id="cleanup_old_price_changes",
+        name="Cleanup Old Price Changes (daily, 60d retention)",
+        replace_existing=True,
+        max_instances=1,
+    )
+    logger.info("Задача 'cleanup_old_price_changes' зарегистрирована (раз в сутки)")
 
     scheduler.add_job(
         cleanup_old_snapshots,
