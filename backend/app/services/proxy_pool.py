@@ -85,29 +85,39 @@ class ProxyPool:
         
         logger.info(f"Загружено {len(self.proxies)} прокси из конфигурации")
     
+    # Лёгкий публичный endpoint WB для проверки, что прокси реально проксирует HTTP.
+    _CHECK_URL = (
+        "https://card.wb.ru/cards/v4/detail"
+        "?appType=1&curr=rub&dest=-1257786&nm=181886625"
+    )
+
     async def check_proxy(self, proxy: ProxyConfig, timeout: int = 10) -> bool:
         """
-        Проверка работоспособности прокси через TCP-соединение.
+        Проверка работоспособности прокси РЕАЛЬНЫМ HTTP-запросом через него.
+
+        TCP-проверки недостаточно: прокси может принимать TCP-соединение, но не
+        проксировать HTTP/SOCKS — тогда парсинг через него молча падает и уходит
+        в direct, а пул продолжает считать прокси живым. Делаем настоящий GET.
 
         Args:
             proxy: Конфигурация прокси
             timeout: Таймаут проверки в секундах
 
         Returns:
-            True если прокси доступен (TCP-порт открыт)
+            True если через прокси успешно получен HTTP 200
         """
         try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(proxy.host, proxy.port),
-                timeout=timeout
-            )
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except Exception as e:
-                logger.debug(f"Error closing connection for proxy {proxy}: {e}")
-            logger.info(f"✓ Прокси {proxy} доступен")
-            return True
+            async with httpx.AsyncClient(
+                proxy=proxy.url,
+                timeout=timeout,
+                headers={"User-Agent": "Mozilla/5.0"},
+            ) as client:
+                resp = await client.get(self._CHECK_URL)
+            if resp.status_code == 200:
+                logger.debug(f"✓ Прокси {proxy} рабочий (HTTP 200)")
+                return True
+            logger.warning(f"✗ Прокси {proxy}: HTTP {resp.status_code}")
+            return False
         except Exception as e:
             logger.warning(f"✗ Прокси {proxy} недоступен: {type(e).__name__}")
             return False
