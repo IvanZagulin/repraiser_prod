@@ -924,6 +924,7 @@ async def get_product_detail(
             "competitor_offset_direction": product.config.competitor_offset_direction,
             "competitor_offset_value": float(product.config.competitor_offset_value) if product.config.competitor_offset_value else None,
             "competitor_select_rule": product.config.competitor_select_rule,
+            "match_competitor_basic": getattr(product.config, "match_competitor_basic", False),
             "competitors": competitors,
             # Night price boost
             "night_price_enabled": getattr(product.config, "night_price_enabled", False),

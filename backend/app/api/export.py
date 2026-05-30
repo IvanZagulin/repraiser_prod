@@ -481,10 +481,16 @@ async def import_strategy(
                 Account.user_id == current_user.id
             )
         )
-        # Если указан кабинет — фильтруем по нему
-        account_id = config_data.get('account_id')
-        if account_id:
-            q = q.filter(Account.id == account_id)
+        # Если указан кабинет — фильтруем по нему (поддерживаем имя или числовой ID)
+        account_name_or_id = config_data.get('account_name_or_id')
+        account_id = None
+        if account_name_or_id:
+            try:
+                account_id = int(account_name_or_id)
+                q = q.filter(Account.id == account_id)
+            except (ValueError, TypeError):
+                q = q.filter(Account.name == account_name_or_id)
+                account_id = account_name_or_id  # используется ниже как признак что фильтр задан
         products_found = q.all()
 
         if not products_found:
@@ -498,7 +504,10 @@ async def import_strategy(
                 )
             )
             if account_id:
-                catalog_entry = catalog_entry.filter(Account.id == account_id)
+                try:
+                    catalog_entry = catalog_entry.filter(Account.id == int(account_id))
+                except (ValueError, TypeError):
+                    catalog_entry = catalog_entry.filter(Account.name == str(account_id))
             catalog_entry = catalog_entry.first()
             if catalog_entry:
                 new_product = Product(
@@ -533,7 +542,7 @@ async def import_strategy(
                 ).first()
                 if dup_config and (dup_config.rrp_price is None or new_rrp > dup_config.rrp_price):
                     for key, value in config_data.items():
-                        if key not in ('seller_sku', 'account_id') and value is not None:
+                        if key not in ('seller_sku', 'account_id', 'account_name_or_id') and value is not None:
                             setattr(dup_config, key, value)
             continue
         processed_product_ids.add(product.id)
@@ -546,13 +555,13 @@ async def import_strategy(
 
         if existing_config:
             for key, value in config_data.items():
-                if key not in ('seller_sku', 'account_id') and value is not None:
+                if key not in ('seller_sku', 'account_id', 'account_name_or_id') and value is not None:
                     setattr(existing_config, key, value)
             results['updated'] += 1
         else:
             config = ProductConfig(
                 product_id=product.id,
-                **{k: v for k, v in config_data.items() if k not in ('seller_sku', 'account_id')}
+                **{k: v for k, v in config_data.items() if k not in ('seller_sku', 'account_id', 'account_name_or_id')}
             )
             db.add(config)
             results['created'] += 1

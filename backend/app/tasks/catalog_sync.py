@@ -23,7 +23,7 @@ def sync_wb_catalog_task(self, account_id: int):
     """
     from app.models.account import Account
     from app.models.wb_catalog import WBCatalog
-    from app.services.wb_api import create_wb_client
+    from app.services.wb_api import create_wb_client, PartialCatalogError
 
     db = SessionLocal()
     try:
@@ -39,10 +39,32 @@ def sync_wb_catalog_task(self, account_id: int):
         logger.info(f"[catalog.sync] Начало синхронизации account_id={account_id} ({account.name})")
 
         wb = create_wb_client(account.wb_api_token)
-        all_cards = asyncio.run(wb.get_all_cards())
+
+        # Получаем текущее кол-во карточек в каталоге (для защиты от частичной замены)
+        prev_count = db.query(WBCatalog).filter(WBCatalog.account_id == account_id).count()
+
+        all_cards = {}
+        catalog_complete = True
+        try:
+            all_cards = asyncio.run(wb.get_all_cards())
+        except PartialCatalogError as pce:
+            all_cards = pce.partial_cards
+            catalog_complete = False
+            logger.error(
+                "[catalog.sync] account_id=%d: каталог загружен частично — %d карточек "
+                "(было %d). Причина: %s", account_id, len(all_cards), prev_count, pce
+            )
+            # Если новых данных меньше 80% от старых — не заменяем, ждём следующего запуска
+            if prev_count > 0 and len(all_cards) < prev_count * 0.8:
+                logger.error(
+                    "[catalog.sync] account_id=%d: отказ от замены каталога — "
+                    "получено %d из %d (< 80%%). Повтор через 1 час.",
+                    account_id, len(all_cards), prev_count
+                )
+                raise self.retry(exc=pce, countdown=3600)
 
         if not all_cards:
-            logger.warning(f"[catalog.sync] account_id={account_id}: карточки не найдены")
+            logger.warning("[catalog.sync] account_id=%d: карточки не найдены", account_id)
             return {"status": "ok", "synced": 0}
 
         # Полная замена: удаляем старые записи, вставляем новые

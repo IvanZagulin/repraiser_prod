@@ -51,6 +51,11 @@ class ProductConfig(Base):
     skip_margin_check = Column(Boolean, default=False, nullable=False,
                                 comment='Отключить защиту маржи для этого товара')
 
+    # Имитация зачёркнутой цены конкурента: priceU = competitor.basic,
+    # скидка продавца подбирается под target_final с учётом нашего фактического СПП.
+    match_competitor_basic = Column(Boolean, default=False, nullable=False,
+                                     comment='Имитировать зачёркнутую цену конкурента (priceU+discount)')
+
     # Метаданные
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 

@@ -18,6 +18,13 @@ class RateLimitError(WBAPIError):
     pass
 
 
+class PartialCatalogError(WBAPIError):
+    """Каталог загружен не полностью из-за сетевой ошибки или 429"""
+    def __init__(self, message: str, partial_cards: dict):
+        super().__init__(message)
+        self.partial_cards = partial_cards
+
+
 class PriceData:
     """Данные о цене товара из WB Prices API"""
 
@@ -248,6 +255,75 @@ class WBAPIClient:
                 return {"data": {"id": None}, "_already_queued": True}
             logger.error(f"Ошибка обновления цен в WB API: {e}")
             raise
+
+    async def verify_batch_update(
+        self,
+        upload_id: int,
+        max_attempts: int = 8,
+        delay: float = 4.0,
+    ) -> Dict[int, Tuple[bool, str]]:
+        """
+        Опрашивает WB о per-nm статусе задачи batch-обновления цен.
+
+        WB обрабатывает POST /upload/task асинхронно и может отклонить
+        отдельные товары (например, при снижении цены более чем в 2 раза
+        или при price < cost). Статус каждого товара виден в
+        /history/goods/task?uploadID=<id>. Метод опрашивает несколько раз,
+        пока есть pending товары.
+
+        Returns:
+            dict {nm_id: (success, error_text)}. Пустой dict если статус
+            не получен за max_attempts опросов.
+        """
+        if not upload_id:
+            return {}
+
+        last_pending = 0
+        for attempt in range(1, max_attempts + 1):
+            if attempt > 1:
+                await asyncio.sleep(delay)
+            try:
+                data = await self._make_request(
+                    'GET',
+                    '/api/v2/history/goods/task',
+                    params={'uploadID': upload_id, 'limit': 1000, 'offset': 0},
+                )
+            except Exception as e:
+                logger.warning(f"Не удалось получить статус задачи {upload_id}: {e}")
+                continue
+
+            goods = (data.get('data') or {}).get('historyGoods') or []
+            if not goods:
+                continue
+
+            pending = [g for g in goods if g.get('status') in (None, 0, 1)]
+            if pending:
+                last_pending = len(pending)
+                logger.info(
+                    f"Задача {upload_id}: {last_pending}/{len(goods)} товаров ещё в обработке"
+                )
+                continue
+
+            result: Dict[int, Tuple[bool, str]] = {}
+            for g in goods:
+                nm_id = g.get('nmID')
+                if nm_id is None:
+                    continue
+                status = g.get('status')
+                err = g.get('errorText') or ""
+                # status==2: успешно применено
+                ok = (status == 2) and not err
+                result[int(nm_id)] = (ok, err)
+            logger.info(
+                f"Задача {upload_id}: финальные статусы получены для {len(result)} товаров"
+            )
+            return result
+
+        logger.warning(
+            f"Задача {upload_id} не завершилась за {max_attempts} опросов "
+            f"(осталось {last_pending} pending) — статусы неизвестны"
+        )
+        return {}
     
     async def verify_price_update(
         self,
@@ -545,7 +621,15 @@ class WBAPIClient:
                         break
 
                 if page_data is None:
-                    break  # не удалось получить страницу — завершаем
+                    # Прервалось из-за 429 или сетевой ошибки — каталог неполный
+                    logger.error(
+                        "get_all_cards: прервано после загрузки %d карточек "
+                        "(ошибка API или 429). Каталог неполный.", len(all_cards)
+                    )
+                    raise PartialCatalogError(
+                        "Partial catalog: loaded %d cards before API error" % len(all_cards),
+                        partial_cards=all_cards,
+                    )
 
                 cards = page_data.get("cards", [])
 

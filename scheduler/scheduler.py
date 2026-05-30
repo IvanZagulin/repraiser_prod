@@ -149,7 +149,7 @@ def _user_should_run(db, user_id: int) -> bool:
     last_run = db.execute(
         text("""
             SELECT started_at FROM repricer_runs
-            WHERE user_id = :uid
+            WHERE user_id = :uid AND run_type = 'scheduled'
             ORDER BY started_at DESC LIMIT 1
         """),
         {"uid": user_id}

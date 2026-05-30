@@ -33,6 +33,7 @@ class ProductConfigBase(BaseModel):
     competitor_offset_value: Optional[Decimal] = Field(None, ge=0, description="Величина смещения")
     competitor_select_rule: Optional[str] = Field("min_price", pattern="^(min_price|avg_price|cheapest_instock)$",
                                                    description="Правило выбора цены среди конкурентов")
+    match_competitor_basic: bool = Field(False, description="Имитировать зачёркнутую цену конкурента (priceU+discount)")
 
     @field_validator('max_price')
     @classmethod
@@ -63,6 +64,7 @@ class ProductConfigUpdate(BaseModel):
     competitor_offset_direction: Optional[str] = Field(None, pattern="^(above|below)$")
     competitor_offset_value: Optional[Decimal] = Field(None, ge=0)
     competitor_select_rule: Optional[str] = Field(None, pattern="^(min_price|avg_price|cheapest_instock)$")
+    match_competitor_basic: Optional[bool] = None
     competitors: Optional[List[CompetitorEntrySchema]] = None
 
 

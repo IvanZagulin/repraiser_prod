@@ -512,9 +512,9 @@ export default function ProductDetailPage() {
                       <div className="flex justify-between items-center">
                         <span style={{ color: 'var(--text-3)' }}>Смещение</span>
                         <span className="font-medium" style={{ color: 'var(--text)' }}>
-                          {config.competitor_offset_direction === 'below' ? '−' : '+'}
-                          {config.competitor_offset_value}
-                          {config.competitor_offset_type === 'pct' ? '%' : '₽'}
+                          {Number(config.competitor_offset_value) === 0
+                            ? 'Как у конкурента'
+                            : `${config.competitor_offset_direction === 'below' ? '−' : '+'}${config.competitor_offset_value}${config.competitor_offset_type === 'pct' ? '%' : '₽'}`}
                         </span>
                       </div>
                       <div className="flex justify-between items-center">
@@ -524,6 +524,12 @@ export default function ProductDetailPage() {
                            config.competitor_select_rule === 'avg_price' ? 'Средняя' : 'Мин. в наличии'}
                         </span>
                       </div>
+                      {config.rrp_price > 0 && (
+                        <div className="flex justify-between items-center">
+                          <span style={{ color: "var(--text-3)" }}>РРЦ (при OOS)</span>
+                          <span className="font-medium" style={{ color: "var(--text)" }}>{fmt(config.rrp_price)}₽</span>
+                        </div>
+                      )}
                     </>
                   )}
                 </div>

@@ -37,6 +37,14 @@ def cache_set(key: str, value: dict, ttl: int = 180) -> None:
         logger.warning(f"Redis cache_set({key!r}) error: {e}")
 
 
+def cache_delete(key: str) -> None:
+    """Удалить ключ из Redis-кеша. Тихо игнорирует отсутствующий ключ."""
+    try:
+        _get_client().delete(key)
+    except Exception as e:
+        logger.warning(f"Redis cache_delete({key!r}) error: {e}")
+
+
 def acquire_run_lock(user_id: int, ttl: int = 3900) -> bool:
     """
     Попытка захватить эксклюзивную блокировку прогона для пользователя.

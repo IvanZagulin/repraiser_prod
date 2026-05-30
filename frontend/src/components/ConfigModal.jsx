@@ -76,8 +76,11 @@ export default function ConfigModal({ product, onClose }) {
     } else {
       if (competitors.filter(c => c.nm_id && parseInt(c.nm_id) > 0).length === 0)
         errs.competitors = 'Добавьте хотя бы одного конкурента';
-      if (!formData.competitor_offset_value || parseFloat(formData.competitor_offset_value) <= 0)
-        errs.competitor_offset_value = 'Смещение должно быть > 0';
+      const offsetRaw = formData.competitor_offset_value;
+      const offsetNum = parseFloat(offsetRaw);
+      const offsetIsZero = offsetRaw === 0 || (typeof offsetRaw === 'string' && offsetRaw.trim() === '0');
+      if (!offsetIsZero && (offsetRaw === '' || offsetRaw === null || offsetRaw === undefined || isNaN(offsetNum) || offsetNum < 0))
+        errs.competitor_offset_value = 'Смещение должно быть ≥ 0';
     }
     setErrors(errs);
     return Object.keys(errs).length === 0;
@@ -340,31 +343,51 @@ export default function ConfigModal({ product, onClose }) {
                   <option value="avg_price">Средняя цена</option>
                 </select>
               </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-sm mb-1.5" style={{ color: 'var(--text-2)' }}>Направление</label>
-                  <select value={formData.competitor_offset_direction}
-                    onChange={(e) => setFormData({ ...formData, competitor_offset_direction: e.target.value })} className="input">
-                    <option value="below">Ниже</option>
-                    <option value="above">Выше</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm mb-1.5" style={{ color: 'var(--text-2)' }}>Смещение</label>
-                  <input type="number" step="0.01" value={formData.competitor_offset_value}
-                    onChange={(e) => { setFormData({ ...formData, competitor_offset_value: e.target.value }); setErrors(p => ({ ...p, competitor_offset_value: undefined })); }}
-                    className="input" placeholder="50" style={errors.competitor_offset_value ? { borderColor: '#ef4444' } : {}} />
-                  {errors.competitor_offset_value && <p className="text-xs mt-1 text-red-500">{errors.competitor_offset_value}</p>}
-                </div>
-                <div>
-                  <label className="block text-sm mb-1.5" style={{ color: 'var(--text-2)' }}>Тип</label>
-                  <select value={formData.competitor_offset_type}
-                    onChange={(e) => setFormData({ ...formData, competitor_offset_type: e.target.value })} className="input">
-                    <option value="rub">Рубли</option>
-                    <option value="pct">Проценты</option>
-                  </select>
-                </div>
-              </div>
+              {(() => {
+                const _v = formData.competitor_offset_value;
+                const isEqual = _v === 0 || (typeof _v === 'string' && _v.trim() === '0');
+                const directionUiValue = isEqual ? 'equal' : (formData.competitor_offset_direction || 'below');
+                const handleDirectionChange = (val) => {
+                  if (val === 'equal') {
+                    setFormData({ ...formData, competitor_offset_direction: 'above', competitor_offset_value: '0' });
+                    setErrors(p => ({ ...p, competitor_offset_value: undefined }));
+                  } else {
+                    const prevVal = formData.competitor_offset_value;
+                    const newVal = (String(prevVal ?? '') === '0' || Number(prevVal) === 0) ? '' : prevVal;
+                    setFormData({ ...formData, competitor_offset_direction: val, competitor_offset_value: newVal });
+                  }
+                };
+                return (
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-sm mb-1.5" style={{ color: 'var(--text-2)' }}>Направление</label>
+                      <select value={directionUiValue}
+                        onChange={(e) => handleDirectionChange(e.target.value)} className="input">
+                        <option value="below">Ниже</option>
+                        <option value="equal">Как у конкурента</option>
+                        <option value="above">Выше</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm mb-1.5" style={{ color: 'var(--text-2)' }}>Смещение</label>
+                      <input type="number" step="0.01" value={isEqual ? 0 : formData.competitor_offset_value}
+                        disabled={isEqual}
+                        onChange={(e) => { setFormData({ ...formData, competitor_offset_value: e.target.value }); setErrors(p => ({ ...p, competitor_offset_value: undefined })); }}
+                        className="input" placeholder="50" style={(!isEqual && errors.competitor_offset_value) ? { borderColor: '#ef4444' } : {}} />
+                      {!isEqual && errors.competitor_offset_value && <p className="text-xs mt-1 text-red-500">{errors.competitor_offset_value}</p>}
+                    </div>
+                    <div>
+                      <label className="block text-sm mb-1.5" style={{ color: 'var(--text-2)' }}>Тип</label>
+                      <select value={formData.competitor_offset_type}
+                        disabled={isEqual}
+                        onChange={(e) => setFormData({ ...formData, competitor_offset_type: e.target.value })} className="input">
+                        <option value="rub">Рубли</option>
+                        <option value="pct">Проценты</option>
+                      </select>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
 

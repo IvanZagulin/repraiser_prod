@@ -156,7 +156,7 @@ class ExcelExporter:
             "Кошелёк в РРЦ (да/нет)",
             "nmID конкурента",
             "Тип смещения (rub=руб / pct=%%)",
-            "Направление (above=выше / below=ниже)",
+            "Направление (above=выше / below=ниже / equal=как у конкурента)",
             "Значение смещения",
             "ID кабинета",
             "Ночная цена (да/нет)",
@@ -184,18 +184,20 @@ class ExcelExporter:
 
         ex_rrp        = ["ваш-арт-001", "rrp",        "да", 500, 3000, 1999, 5,  "нет", "",         "",      "",       "", "Кассандра", "да", "01:00", "07:00", 4999]
         ex_competitor = ["ваш-арт-002", "competitor",  "да", 300, "",   "",   "",  "",    987654321, "rub",  "below",  50, "Астарта",  "нет", "",      "",      ""]
+        ex_equal      = ["ваш-арт-003", "competitor",  "да", 100, "",   "",   "",  "",    987654322, "rub",  "equal",  0,  "Астарта",  "нет", "",      "",      ""]
         wi.append(ex_rrp)
         wi.append(ex_competitor)
-        for row_num in (4, 5):
+        wi.append(ex_equal)
+        for row_num in (4, 5, 6):
             for cell in wi[row_num]:
                 cell.font = Font(italic=True, color=COLOR_EXAMPLE)
 
         wi.append([])
         wi.append(["Поле", "Допустимые значения / Описание"])
-        ExcelExporter._style_header(wi, row=7, color=COLOR_HEADER)
+        ExcelExporter._style_header(wi, row=8, color=COLOR_HEADER)
         notes = [
             ("Артикул продавца *",       "vendorCode — должен уже быть в системе. Обязательно."),
-            ("ID кабинета",           "Числовой ID аккаунта из раздела Аккаунты. Обязательно если один артикул есть в нескольких кабинетах."),
+            ("ID кабинета",           "Название или числовой ID аккаунта из раздела Аккаунты. Обязательно если один артикул есть в нескольких кабинетах."),
             ("Стратегия *",              "rrp (РРЦ) — удержание рекомендованной цены; competitor (Конкурент) — привязка к цене конкурента"),
             ("Активен",                  "да / нет (по умолчанию: да)"),
             ("МРЦ — мин цена *",         "Нижняя граница цены. Репрайсер не опустит ниже. Обязательно."),
@@ -205,8 +207,8 @@ class ExcelExporter:
             ("Кошелёк в РРЦ",            "да — учитывать скидку кошелька WB при расчёте (только rrp)"),
             ("nmID конкурента",          "Артикул WB конкурента (только для competitor)"),
             ("Тип смещения",             "rub — в рублях; pct — в процентах"),
-            ("Направление",              "above — выше конкурента; below — ниже"),
-            ("Значение смещения",        "Числовое значение смещения (≥ 0)"),
+            ("Направление",              "above — выше конкурента; below — ниже; equal — как у конкурента (значение игнорируется, ставится 0)"),
+            ("Значение смещения",        "Числовое значение смещения (≥ 0). Для equal — 0 или пусто."),
             ("Ночная цена",              "да — включить ночное повышение цены для поднятия средней (перед акциями WB)"),
             ("Ночь — начало МСК",        "Начало ночного окна по Москве, формат HH:MM. Пример: 01:00"),
             ("Ночь — конец МСК",         "Конец ночного окна по Москве, формат HH:MM. Пример: 07:00"),
@@ -852,7 +854,7 @@ class ExcelImporter:
                         "competitor_offset_type":        str(row[9]).strip().lower()  if row[9]  else None,
                         "competitor_offset_direction":   str(row[10]).strip().lower() if row[10] else None,
                         "competitor_offset_value":       Decimal(str(row[11])) if row[11] is not None and str(row[11]).strip() else None,
-                        "account_id":                  int(row[12]) if len(row) > 12 and row[12] is not None and str(row[12]).strip() else None,
+                        "account_name_or_id":          str(row[12]).strip() if len(row) > 12 and row[12] is not None and str(row[12]).strip() else None,
                         "night_price_enabled":         to_bool(row[13], default=False) if len(row) > 13 and row[13] is not None else False,
                         "night_start_msk":             str(row[14]).strip() if len(row) > 14 and row[14] is not None and str(row[14]).strip() else None,
                         "night_end_msk":               str(row[15]).strip() if len(row) > 15 and row[15] is not None and str(row[15]).strip() else None,
@@ -873,7 +875,7 @@ class ExcelImporter:
                         "competitor_offset_type":        str(row[8]).strip().lower()  if row[8]  else None,
                         "competitor_offset_direction":   str(row[9]).strip().lower()  if row[9]  else None,
                         "competitor_offset_value":       Decimal(str(row[10])) if row[10] is not None and str(row[10]).strip() else None,
-                        "account_id":                  int(row[11]) if len(row) > 11 and row[11] is not None and str(row[11]).strip() else None,
+                        "account_name_or_id":          str(row[11]).strip() if len(row) > 11 and row[11] is not None and str(row[11]).strip() else None,
                         "night_price_enabled":         to_bool(row[12], default=False) if len(row) > 12 and row[12] is not None else False,
                         "night_start_msk":             str(row[13]).strip() if len(row) > 13 and row[13] is not None and str(row[13]).strip() else None,
                         "night_end_msk":               str(row[14]).strip() if len(row) > 14 and row[14] is not None and str(row[14]).strip() else None,
@@ -888,6 +890,11 @@ class ExcelImporter:
                     raise ExcelImportError(f"Строка {row_idx}: strategy должен быть 'rrp' или 'competitor'")
                 if cfg["min_price"] is None:
                     raise ExcelImportError(f"Строка {row_idx}: min_price обязателен")
+
+                # equal — синоним: «как у конкурента». БД хранит как above + 0.
+                if cfg.get("competitor_offset_direction") == "equal":
+                    cfg["competitor_offset_direction"] = "above"
+                    cfg["competitor_offset_value"] = Decimal(0)
 
                 configs.append(cfg)
 
