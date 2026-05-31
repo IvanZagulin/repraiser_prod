@@ -838,8 +838,11 @@ class RepricerEngine:
             config, final_new_price
         )
         if night_reason:
+            # Прогоняем ночную цену через margin guard: если night_seller_price
+            # ниже минимума по марже — clamp вверх, а не в убыток.
+            night_price, _night_limit = self._apply_limits(night_price, config, seller_discount=_seller_discount)
             final_new_price = night_price
-            limit_reason    = night_reason
+            limit_reason    = _night_limit if _night_limit != 'UPDATED' else night_reason
             reason_msg      = night_msg
         
         # Если после лимитов цена не изменилась
