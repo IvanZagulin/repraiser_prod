@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Согласие на обработку персональных данных — QUASAR-X</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#f7f8fc;--bg2:#ffffff;--bg3:#eef0f6;
+  --neon:#00c8ff;--neon-dim:rgba(0,200,255,.15);--neon-glow:rgba(0,200,255,.07);
+  --accent:#0066ff;
+  --text:#1a1f36;--text2:#5a6178;--text3:#9ca3bc;
+  --border:rgba(0,0,0,.06);--border2:rgba(0,0,0,.1);
+  --mono:'JetBrains Mono',monospace;--sans:'Plus Jakarta Sans',system-ui,sans-serif;
+  --max-w:860px;--radius:14px;
+}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.65;-webkit-font-smoothing:antialiased}
+.container{max-width:var(--max-w);margin:0 auto;padding:0 24px}
+
+nav{position:fixed;top:0;left:0;right:0;z-index:100;padding:14px 0;background:rgba(247,248,252,.92);backdrop-filter:blur(24px);border-bottom:1px solid var(--border)}
+nav .container{display:flex;align-items:center;justify-content:space-between}
+.logo{font-family:var(--mono);font-size:1.12rem;font-weight:700;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:10px}
+.logo-dot{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,var(--neon),var(--accent));display:grid;place-items:center;box-shadow:0 2px 12px rgba(0,200,255,.3)}
+.logo-dot::after{content:'';width:8px;height:8px;background:#fff;border-radius:50%}
+.nav-back{font-size:.85rem;font-weight:500;color:var(--text2);text-decoration:none;transition:color .2s}
+.nav-back:hover{color:var(--neon)}
+
+.doc-wrap{padding:120px 0 80px}
+.doc-meta{display:flex;align-items:center;gap:12px;margin-bottom:32px;font-size:.8rem;color:var(--text3)}
+.doc-tag{padding:4px 12px;border-radius:6px;font-size:.72rem;font-weight:700;background:var(--neon-glow);color:var(--neon);border:1px solid var(--neon-dim);font-family:var(--mono);text-transform:uppercase;letter-spacing:.06em}
+h1{font-size:clamp(1.7rem,3.5vw,2.4rem);font-weight:800;letter-spacing:-.02em;margin-bottom:8px}
+.doc-subtitle{font-size:1rem;color:var(--text2);margin-bottom:40px;max-width:620px}
+
+.consent-body{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:40px;margin-bottom:32px}
+.consent-body p{font-size:.95rem;color:var(--text2);margin-bottom:14px;line-height:1.8}
+.consent-body p:last-child{margin-bottom:0}
+.consent-body strong{color:var(--text)}
+.consent-body ul{padding-left:20px;margin:12px 0 14px;display:flex;flex-direction:column;gap:8px}
+.consent-body ul li{font-size:.93rem;color:var(--text2);line-height:1.7}
+.consent-body .indent{padding-left:20px;border-left:3px solid var(--neon-dim);margin:16px 0}
+.consent-body .indent p{font-size:.9rem}
+
+.sign-section{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:32px 40px;margin-bottom:16px}
+.sign-section h3{font-size:1rem;font-weight:700;margin-bottom:24px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;font-family:var(--mono);font-size:.8rem}
+.sign-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.sign-field{display:flex;flex-direction:column;gap:6px}
+.sign-field label{font-size:.78rem;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em}
+.sign-field .line{height:1px;background:var(--border2);margin-top:32px}
+.sign-field .hint{font-size:.75rem;color:var(--text3);text-align:center}
+.sign-full{margin-top:24px}
+.sign-full .line{height:1px;background:var(--border2);margin-top:40px;margin-bottom:6px}
+.sign-full .hint{font-size:.75rem;color:var(--text3)}
+
+.note-box{background:rgba(0,200,255,.04);border:1px solid var(--neon-dim);border-radius:10px;padding:18px 22px;margin-bottom:32px}
+.note-box p{font-size:.85rem;color:var(--text2);margin:0;line-height:1.65}
+.note-box strong{color:var(--neon)}
+
+@media print{
+  nav,footer,.note-box{display:none}
+  .doc-wrap{padding:20px 0}
+  body{background:#fff}
+  .consent-body,.sign-section{border:1px solid #ccc;box-shadow:none}
+  .doc-tag{border:1px solid #ccc;color:#333;background:#f5f5f5}
+}
+
+footer{padding:40px 0;border-top:1px solid var(--border);margin-top:64px}
+.footer-inner{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;font-size:.82rem;color:var(--text3)}
+.footer-links{display:flex;gap:20px}
+.footer-links a{color:var(--text2);text-decoration:none;font-size:.82rem;transition:color .2s}
+.footer-links a:hover{color:var(--neon)}
+
+.btn{display:inline-flex;align-items:center;gap:8px;padding:11px 24px;font-family:var(--sans);font-size:.86rem;font-weight:600;border:none;border-radius:10px;cursor:pointer;text-decoration:none;transition:all .25s}
+.btn-ghost{background:var(--bg2);color:var(--text);border:1px solid var(--border2)}
+.btn-ghost:hover{border-color:var(--neon);color:var(--neon)}
+</style>
+</head>
+<body>
+<nav>
+  <div class="container">
+    <a href="/" class="logo"><span class="logo-dot"></span>QUASAR-X</a>
+    <a href="/" class="nav-back">← На главную</a>
+  </div>
+</nav>
+
+<div class="doc-wrap">
+  <div class="container">
+    <div class="doc-meta">
+      <span class="doc-tag">Правовой документ</span>
+      <span>Актуальная версия: 06.05.2026</span>
+    </div>
+    <h1>Согласие на обработку персональных данных</h1>
+    <p class="doc-subtitle">Письменное подтверждение субъекта персональных данных о готовности передать свои данные Оператору в целях, указанных ниже.</p>
+
+    <div class="note-box">
+      <p><strong>Обратите внимание:</strong> настоящее Согласие предоставляется субъектом персональных данных добровольно, до начала обработки данных. Отказ от предоставления согласия не влечёт негативных последствий, однако может ограничить возможность использования отдельных функций сервиса, требующих такого согласия.</p>
+    </div>
+
+    <div class="consent-body">
+      <p>Я, <strong>[Фамилия Имя Отчество]</strong>, в соответствии с требованиями Федерального закона от 27.07.2006 № 152-ФЗ «О персональных данных», свободно, своей волей и в своём интересе даю настоящее согласие на обработку моих персональных данных Оператору:</p>
+
+      <div class="indent">
+        <p><strong>Наименование оператора:</strong> ООО «КВАЗАР-ИКС» (QUASAR-X)<br>
+        <strong>ИНН:</strong> [указать ИНН]<br>
+        <strong>Адрес:</strong> [указать юридический адрес]<br>
+        <strong>Контакт:</strong> privacy@quasar-x.ru</p>
+      </div>
+
+      <p><strong>1. Перечень персональных данных, в отношении которых даётся согласие:</strong></p>
+      <ul>
+        <li>фамилия, имя, отчество;</li>
+        <li>адрес электронной почты;</li>
+        <li>номер мобильного телефона;</li>
+        <li>наименование компании / торговой марки;</li>
+        <li>ИНН (при регистрации юридического лица или ИП);</li>
+        <li>данные о поведении на сайте, IP-адрес, данные cookies, сведения о браузере и устройстве.</li>
+      </ul>
+
+      <p><strong>2. Цели обработки персональных данных:</strong></p>
+      <ul>
+        <li>регистрация учётной записи и предоставление доступа к сервису QUASAR-X;</li>
+        <li>исполнение договора о предоставлении услуг репрайсинга;</li>
+        <li>направление информационных сообщений о работе сервиса, изменениях в тарифах, технических обновлениях;</li>
+        <li>направление маркетинговых и рекламных материалов (новости, акции, специальные предложения) — <em>только при явном согласии на маркетинговые коммуникации</em>;</li>
+        <li>улучшение качества сервиса на основе анализа использования функционала;</li>
+        <li>обработка обращений в службу поддержки.</li>
+      </ul>
+
+      <p><strong>3. Перечень действий с персональными данными:</strong></p>
+      <p>сбор, запись, систематизация, накопление, хранение, уточнение (обновление, изменение), извлечение, использование, передача (предоставление, доступ), обезличивание, блокирование, удаление, уничтожение.</p>
+
+      <p><strong>4. Способы обработки:</strong> автоматизированная обработка с использованием средств вычислительной техники, а также без использования средств автоматизации в случаях, предусмотренных законодательством.</p>
+
+      <p><strong>5. Передача третьим лицам.</strong> Я осознаю и соглашаюсь с тем, что мои данные могут быть переданы следующим категориям третьих лиц в целях, указанных выше:</p>
+      <ul>
+        <li>платёжным системам и банкам — для проведения расчётов;</li>
+        <li>облачным провайдерам — для хранения данных в защищённой инфраструктуре;</li>
+        <li>сервису веб-аналитики Яндекс Метрика — в обезличенном виде;</li>
+        <li>государственным органам — по основаниям, предусмотренным законодательством.</li>
+      </ul>
+
+      <p><strong>6. Срок действия согласия.</strong> Настоящее согласие действует с момента его предоставления до момента достижения целей обработки или до момента его отзыва, в зависимости от того, что наступит раньше. Для данных, обрабатываемых в целях исполнения договора, — до истечения сроков хранения, предусмотренных применимым законодательством.</p>
+
+      <p><strong>7. Порядок отзыва согласия.</strong> Настоящее согласие может быть отозвано мной в любой момент путём направления письменного заявления на адрес электронной почты privacy@quasar-x.ru. Отзыв согласия не влечёт незаконности обработки, осуществлённой на основании согласия до его отзыва. После получения отзыва Оператор прекращает обработку данных в течение 30 дней, за исключением случаев, когда обработка предусмотрена иными законными основаниями.</p>
+
+      <p><strong>8. Права субъекта.</strong> Я осведомлён о своих правах, предусмотренных статьями 14–21 ФЗ-152, в том числе о праве на доступ к своим данным, их уточнение, блокирование, удаление, а также о праве на обжалование действий Оператора в Роскомнадзоре или суде.</p>
+
+      <p>Настоящее согласие выражено свободно, осознанно и соответствует моей воле.</p>
+    </div>
+
+    <div class="sign-section">
+      <h3>Реквизиты и подпись субъекта</h3>
+      <div class="sign-grid">
+        <div class="sign-field">
+          <label>Фамилия, имя, отчество</label>
+          <div class="line"></div>
+          <div class="hint">(полностью)</div>
+        </div>
+        <div class="sign-field">
+          <label>Дата рождения</label>
+          <div class="line"></div>
+          <div class="hint">дд.мм.гггг</div>
+        </div>
+        <div class="sign-field">
+          <label>Серия и номер паспорта</label>
+          <div class="line"></div>
+          <div class="hint">(при необходимости)</div>
+        </div>
+        <div class="sign-field">
+          <label>Адрес электронной почты</label>
+          <div class="line"></div>
+          <div class="hint">(связанный с аккаунтом)</div>
+        </div>
+      </div>
+      <div class="sign-full">
+        <label style="font-size:.78rem;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">Дата подписания и подпись</label>
+        <div class="line"></div>
+        <div class="hint">«____» ______________ 20___ г. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; __________________ &nbsp; /____________________________/</div>
+        <div class="hint" style="margin-top:4px;padding-left:50%">(подпись) &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; (расшифровка подписи)</div>
+      </div>
+    </div>
+
+    <p style="font-size:.82rem;color:var(--text3);text-align:center">
+      <a href="/privacy-policy.html" style="color:var(--neon);text-decoration:none">Политика обработки персональных данных</a>
+      &nbsp;·&nbsp;
+      <a href="javascript:window.print()" class="btn btn-ghost" style="display:inline-flex;padding:8px 18px;font-size:.8rem;margin-top:12px">Распечатать</a>
+    </p>
+  </div>
+</div>
+
+<footer>
+  <div class="container">
+    <div class="footer-inner">
+      <span>© 2026 QUASAR-X. Все права защищены.</span>
+      <div class="footer-links">
+        <a href="/">Главная</a>
+        <a href="/privacy-policy.html">Политика конфиденциальности</a>
+        <a href="/consent.html">Согласие на обработку ПДн</a>
+      </div>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

@@ -1,0 +1,935 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QUASAR-X — Автоматический репрайсер для Wildberries</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#f7f8fc;--bg2:#ffffff;--bg3:#eef0f6;
+  --neon:#00c8ff;--neon2:#00e5ff;--neon-dim:rgba(0,200,255,.15);--neon-glow:rgba(0,200,255,.07);--neon-strong:rgba(0,200,255,.22);
+  --electric:#6c5ce7;--electric-dim:rgba(108,92,231,.08);
+  --accent:#0066ff;--green:#22c55e;--red:#ef4444;--amber:#f59e0b;
+  --text:#1a1f36;--text2:#5a6178;--text3:#9ca3bc;
+  --border:rgba(0,0,0,.06);--border2:rgba(0,0,0,.1);
+  --mono:'JetBrains Mono',monospace;--sans:'Plus Jakarta Sans',system-ui,sans-serif;
+  --max-w:1140px;--radius:14px;
+}
+html{scroll-behavior:smooth;overflow-x:hidden}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.65;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+::selection{background:var(--neon);color:#fff}
+#bg-canvas{position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.4}
+.container{max-width:var(--max-w);margin:0 auto;padding:0 24px;position:relative;z-index:2}
+section{position:relative;z-index:1}
+.shape{position:absolute;border-radius:50%;pointer-events:none;filter:blur(70px);opacity:.3;z-index:0}
+.shape-1{width:320px;height:320px;background:var(--neon);top:8%;right:-100px}
+.shape-2{width:260px;height:260px;background:var(--electric);top:55%;left:-120px}
+
+/* ── NAV ── */
+nav{position:fixed;top:0;left:0;right:0;z-index:100;padding:14px 0;background:rgba(247,248,252,.72);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-bottom:1px solid var(--border);transition:all .3s}
+nav.scrolled{box-shadow:0 4px 30px rgba(0,0,0,.05)}
+nav .container{display:flex;align-items:center;justify-content:space-between}
+.logo{font-family:var(--mono);font-size:1.12rem;font-weight:700;letter-spacing:.06em;color:var(--text);text-decoration:none;display:flex;align-items:center;gap:10px}
+.logo-dot{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,var(--neon),var(--accent));display:grid;place-items:center;box-shadow:0 2px 12px rgba(0,200,255,.3)}
+.logo-dot::after{content:'';width:8px;height:8px;background:#fff;border-radius:50%}
+.nav-links{display:flex;gap:26px;align-items:center}
+.nav-links a{color:var(--text2);text-decoration:none;font-size:.85rem;font-weight:500;transition:color .2s}
+.nav-links a:hover{color:var(--neon)}
+.nav-cta{padding:8px 20px!important;border-radius:8px;background:linear-gradient(135deg,var(--neon),var(--accent))!important;color:#fff!important;font-weight:600!important;font-size:.82rem!important;box-shadow:0 2px 12px rgba(0,200,255,.25);transition:all .25s!important}
+.nav-cta:hover{transform:translateY(-1px);box-shadow:0 4px 20px rgba(0,200,255,.4)!important}
+
+/* ── BTN ── */
+.btn{display:inline-flex;align-items:center;gap:8px;padding:14px 32px;font-family:var(--sans);font-size:.9rem;font-weight:600;border:none;border-radius:10px;cursor:pointer;text-decoration:none;transition:all .25s cubic-bezier(.22,1,.36,1)}
+.btn-primary{background:linear-gradient(135deg,var(--neon),var(--accent));color:#fff;box-shadow:0 4px 20px rgba(0,200,255,.25)}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 8px 32px rgba(0,200,255,.35)}
+.btn-ghost{background:var(--bg2);color:var(--text);border:1px solid var(--border2);box-shadow:0 1px 4px rgba(0,0,0,.04)}
+.btn-ghost:hover{border-color:var(--neon);color:var(--neon);transform:translateY(-2px)}
+.btn-sm{padding:10px 22px;font-size:.82rem}
+
+/* ── HERO ── */
+.hero{min-height:100vh;display:flex;align-items:center;padding:120px 0 80px}
+.hero-grid{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center}
+.hero-tag{display:inline-flex;align-items:center;gap:8px;padding:5px 14px 5px 6px;border-radius:100px;font-size:.76rem;font-weight:600;color:var(--neon);letter-spacing:.02em;background:var(--neon-glow);border:1px solid var(--neon-dim);margin-bottom:20px}
+.hero-tag .pulse{width:22px;height:22px;border-radius:50%;background:var(--neon-dim);display:grid;place-items:center}
+.hero-tag .pulse::after{content:'';width:8px;height:8px;border-radius:50%;background:var(--neon);animation:blink 2s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.hero h1{font-size:clamp(2.2rem,4.5vw,3.4rem);font-weight:800;line-height:1.08;letter-spacing:-.03em;margin-bottom:18px}
+.hero h1 .grad{background:linear-gradient(135deg,var(--neon),var(--accent),var(--electric));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.hero-sub{font-size:1.05rem;color:var(--text2);max-width:460px;margin-bottom:32px;line-height:1.75}
+.hero-actions{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:36px}
+.hero-proof{display:flex;gap:24px;font-size:.8rem;color:var(--text3);flex-wrap:wrap}
+.hero-proof span{display:flex;align-items:center;gap:6px}
+.hero-proof .ck{color:var(--neon);font-weight:700;font-size:1rem}
+
+/* ── HERO VISUAL ── */
+.hero-visual{display:flex;justify-content:center;perspective:1000px}
+.mock-card{width:100%;max-width:480px;background:var(--bg2);border:1px solid var(--border);border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.06);overflow:hidden;transform-style:preserve-3d;transition:transform .15s ease-out}
+.mock-top{display:flex;align-items:center;gap:8px;padding:12px 16px;background:var(--bg3);border-bottom:1px solid var(--border);font-family:var(--mono);font-size:.7rem;color:var(--text3)}
+.mdots{display:flex;gap:5px}.mdots i{width:9px;height:9px;border-radius:50%}.mdots i:nth-child(1){background:#ff6259}.mdots i:nth-child(2){background:#ffbf2e}.mdots i:nth-child(3){background:#29ce42}
+.mock-body{padding:20px;min-height:260px}
+.mrow{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);font-size:.78rem;align-items:center;opacity:0;transform:translateY(8px);animation:fadeUp .4s ease forwards}
+.mrow:nth-child(2){animation-delay:.4s}.mrow:nth-child(3){animation-delay:.6s}.mrow:nth-child(4){animation-delay:.8s}.mrow:nth-child(5){animation-delay:1s}
+@keyframes fadeUp{to{opacity:1;transform:translateY(0)}}
+.mrow.hd{font-weight:600;color:var(--text3);font-size:.7rem;letter-spacing:.04em;text-transform:uppercase;border-bottom:2px solid var(--border);opacity:1;transform:none;animation:none}
+.mn{font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp{font-family:var(--mono);color:var(--text)}
+.mc{font-family:var(--mono);font-weight:600}.mc.up{color:var(--green)}.mc.dn{color:var(--neon)}
+.ms{padding:3px 8px;border-radius:6px;font-size:.68rem;font-weight:600;text-align:center;white-space:nowrap}
+.ms.ok{background:rgba(34,197,94,.1);color:var(--green)}.ms.go{background:var(--neon-glow);color:var(--neon)}.ms.wt{background:var(--electric-dim);color:var(--electric)}
+
+/* ── MARQUEE ── */
+.marquee-wrap{padding:32px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);overflow:hidden;background:var(--bg2)}
+.marquee{display:flex;gap:48px;animation:scroll 30s linear infinite;width:max-content}
+.marquee span{font-family:var(--mono);font-size:.82rem;font-weight:600;color:var(--text3);white-space:nowrap;display:flex;align-items:center;gap:10px;letter-spacing:.02em}
+.marquee span::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--neon);flex-shrink:0}
+@keyframes scroll{to{transform:translateX(-50%)}}
+
+/* ── STATS ── */
+.stats{padding:72px 0}
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
+.reveal.visible{opacity:1;transform:translateY(0) !important}
+.stat-box{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:28px;text-align:center;transition:all .3s}
+.stat-box:hover{border-color:var(--neon-dim);box-shadow:0 8px 32px rgba(0,200,255,.06);transform:translateY(-2px)}
+.stat-num{font-size:2rem;font-weight:800;font-family:var(--mono);background:linear-gradient(135deg,var(--neon),var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.stat-label{font-size:.8rem;color:var(--text2);margin-top:4px}
+
+/* ── SECTION COMMON ── */
+.stag{font-family:var(--mono);font-size:.72rem;font-weight:700;color:var(--neon);letter-spacing:.14em;text-transform:uppercase;margin-bottom:10px}
+.stitle{font-size:clamp(1.6rem,3vw,2.3rem);font-weight:800;letter-spacing:-.02em;margin-bottom:14px}
+.sdesc{color:var(--text2);font-size:1rem;max-width:520px;margin-bottom:48px;line-height:1.7}
+
+/* ── BENTO GRID ── */
+.bento{padding:100px 0}
+.bento-grid{display:grid;grid-template-columns:repeat(12,1fr);grid-auto-rows:minmax(180px,auto);gap:16px}
+.b-cell{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:28px;overflow:hidden;position:relative;transition:all .35s cubic-bezier(.22,1,.36,1);display:flex;flex-direction:column;justify-content:flex-end}
+.b-cell:hover{border-color:var(--neon-strong);box-shadow:0 12px 44px rgba(0,200,255,.08);transform:translateY(-4px)}
+.b-cell h3{font-size:1.05rem;font-weight:700;margin-bottom:6px;position:relative;z-index:2}
+.b-cell p{font-size:.84rem;color:var(--text2);line-height:1.6;position:relative;z-index:2}
+
+.b1{grid-column:span 7;grid-row:span 2;padding:36px}
+.b2{grid-column:span 5;grid-row:span 1}
+.b3{grid-column:span 5;grid-row:span 1}
+.b4{grid-column:span 4;grid-row:span 2;padding:32px}
+.b5{grid-column:span 8;grid-row:span 1}
+.b6{grid-column:span 8;grid-row:span 1}
+.b7{grid-column:span 8;grid-row:span 1}
+
+/* Bento mini-chart */
+.b-chart{position:absolute;top:20px;right:20px;width:140px;height:70px;opacity:.7}
+.b-chart svg{width:100%;height:100%}
+/* Bento live ticker */
+.b-ticker{margin-top:16px;display:flex;flex-direction:column;gap:6px;position:relative;z-index:2}
+.b-tick{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--bg3);border-radius:8px;font-size:.76rem;font-family:var(--mono)}
+.b-tick .nm{font-weight:600;color:var(--text)}.b-tick .pr{color:var(--text2)}.b-tick .ch{font-weight:600}
+.b-tick .ch.g{color:var(--green)}.b-tick .ch.r{color:var(--red)}
+/* Bento big number */
+.b-big{font-size:3.2rem;font-weight:800;font-family:var(--mono);background:linear-gradient(135deg,var(--neon),var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:8px;line-height:1}
+/* Bento strategy pills */
+.b-pills{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px;position:relative;z-index:2}
+.b-pill{padding:6px 14px;border-radius:8px;font-size:.74rem;font-weight:600;border:1px solid var(--border)}
+.b-pill.a{background:var(--neon-glow);border-color:var(--neon-dim);color:var(--neon)}
+.b-pill.b{background:var(--electric-dim);border-color:rgba(108,92,231,.15);color:var(--electric)}
+.b-pill.c{background:rgba(34,197,94,.08);border-color:rgba(34,197,94,.15);color:var(--green)}
+.b-pill.d{background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.15);color:var(--amber)}
+/* Bento notification */
+.b-notif{margin-top:12px;display:flex;flex-direction:column;gap:8px;position:relative;z-index:2}
+.b-msg{display:flex;align-items:flex-start;gap:10px;padding:10px 14px;background:var(--bg3);border-radius:10px;font-size:.78rem;line-height:1.5}
+.b-msg .ava{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,var(--neon),var(--accent));flex-shrink:0;display:grid;place-items:center;font-size:.7rem;color:#fff;font-weight:700}
+.b-msg .txt{color:var(--text2)}.b-msg .txt b{color:var(--text)}
+.b-msg .time{font-size:.68rem;color:var(--text3);margin-top:2px;display:block}
+
+/* ── BEFORE / AFTER ── */
+.compare{padding:100px 0;background:var(--bg3)}
+.compare-grid{display:grid;grid-template-columns:1fr auto 1fr;gap:32px;align-items:stretch}
+.compare-col{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:36px;position:relative}
+.compare-col.bad{border-color:rgba(239,68,68,.15)}
+.compare-col.good{border-color:var(--neon-dim)}
+.compare-badge{display:inline-block;padding:4px 12px;border-radius:6px;font-size:.72rem;font-weight:700;letter-spacing:.04em;margin-bottom:20px}
+.compare-col.bad .compare-badge{background:rgba(239,68,68,.08);color:var(--red)}
+.compare-col.good .compare-badge{background:var(--neon-glow);color:var(--neon)}
+.compare-col h3{font-size:1.15rem;font-weight:700;margin-bottom:16px}
+.compare-list{list-style:none;display:flex;flex-direction:column;gap:12px}
+.compare-list li{display:flex;align-items:flex-start;gap:10px;font-size:.88rem;color:var(--text2);line-height:1.5}
+.compare-list .ic{flex-shrink:0;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:.7rem;font-weight:700;margin-top:2px}
+.compare-col.bad .ic{background:rgba(239,68,68,.1);color:var(--red)}
+.compare-col.good .ic{background:rgba(0,200,255,.1);color:var(--neon)}
+.compare-vs{display:flex;align-items:center;justify-content:center}
+.compare-vs span{width:56px;height:56px;border-radius:50%;background:var(--bg2);border:2px solid var(--border);display:grid;place-items:center;font-weight:800;font-size:1rem;color:var(--text3);box-shadow:0 4px 16px rgba(0,0,0,.06)}
+
+/* ── HOW ── */
+.how{padding:100px 0}
+.timeline{margin-top:48px;position:relative;display:flex;flex-direction:column;gap:0}
+.timeline::before{content:'';position:absolute;left:31px;top:0;bottom:0;width:2px;background:linear-gradient(180deg,var(--neon-dim),var(--electric-dim))}
+.t-step{display:flex;gap:24px;padding:28px 0;position:relative}
+.t-num{width:64px;height:64px;border-radius:50%;background:var(--bg2);border:2px solid var(--neon-dim);display:grid;place-items:center;font-family:var(--mono);font-weight:700;font-size:1.2rem;color:var(--neon);flex-shrink:0;position:relative;z-index:2;box-shadow:0 4px 16px rgba(0,200,255,.1)}
+.t-body{padding-top:14px;max-width:540px}
+.t-body h3{font-size:1.1rem;font-weight:700;margin-bottom:6px}
+.t-body p{font-size:.88rem;color:var(--text2);line-height:1.7}
+.t-body .t-tag{display:inline-block;margin-top:10px;padding:4px 12px;border-radius:6px;font-size:.72rem;font-weight:600;background:var(--neon-glow);color:var(--neon);border:1px solid var(--neon-dim)}
+
+/* ── PRICING ── */
+.pricing{padding:100px 0;background:var(--bg3)}
+.pricing-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;max-width:960px;margin:48px auto 0}
+.pr-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:32px;text-align:center;transition:all .3s;position:relative}
+.pr-card.feat{border-color:var(--neon);box-shadow:0 8px 40px rgba(0,200,255,.1)}
+.pr-card.feat::before{content:'Популярный';position:absolute;top:-12px;left:50%;transform:translateX(-50%);padding:4px 14px;border-radius:100px;font-size:.7rem;font-weight:700;background:linear-gradient(135deg,var(--neon),var(--accent));color:#fff}
+.pr-card:hover{transform:translateY(-4px)}
+.pr-name{font-size:1rem;font-weight:700;margin-bottom:4px}
+.pr-desc{font-size:.8rem;color:var(--text3);margin-bottom:18px}
+.pr-price{font-size:2.2rem;font-weight:800;font-family:var(--mono);margin-bottom:2px}
+.pr-price .c{font-size:.9rem;font-weight:500;color:var(--text2);vertical-align:top;margin-right:2px}
+.pr-per{font-size:.76rem;color:var(--text3);margin-bottom:22px}
+.pr-feat{list-style:none;text-align:left;margin-bottom:24px}
+.pr-feat li{padding:7px 0;font-size:.84rem;color:var(--text2);display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
+.pr-feat li:last-child{border:none}
+.pr-feat .ico{color:var(--neon);font-weight:700;font-size:.85rem;flex-shrink:0}
+.pr-card .btn{width:100%;justify-content:center}
+
+/* ── FAQ ── */
+.faq{padding:100px 0}
+.faq-list{max-width:700px;margin:48px auto 0;display:flex;flex-direction:column;gap:10px}
+.faq-item{background:var(--bg2);border:1px solid var(--border);border-radius:12px;overflow:hidden;transition:border-color .3s}
+.faq-item.open{border-color:var(--neon-dim)}
+.faq-q{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;cursor:pointer;font-weight:600;font-size:.94rem;gap:12px;user-select:none;transition:color .2s}
+.faq-q:hover{color:var(--neon)}
+.faq-q .arr{font-size:1.1rem;color:var(--text3);transition:transform .3s;flex-shrink:0}
+.faq-item.open .arr{transform:rotate(45deg);color:var(--neon)}
+.faq-a{max-height:0;overflow:hidden;transition:max-height .35s ease,padding .35s ease}
+.faq-a-inner{padding:0 22px 18px;font-size:.88rem;color:var(--text2);line-height:1.7}
+
+/* ── CTA ── */
+.cta{padding:100px 0;text-align:center}
+.cta-box{background:var(--bg2);border:1px solid var(--neon-dim);border-radius:20px;padding:64px 40px;position:relative;overflow:hidden;box-shadow:0 8px 40px rgba(0,200,255,.05)}
+.cta-box::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 50% 0%,var(--neon-glow),transparent 70%);pointer-events:none}
+.cta-box h2{font-size:clamp(1.5rem,3vw,2.2rem);font-weight:800;margin-bottom:12px;position:relative}
+.cta-box p{color:var(--text2);max-width:480px;margin:0 auto 32px;position:relative;font-size:1rem}
+.cta-box .btn{position:relative}
+.cta-features{display:flex;justify-content:center;gap:32px;margin-top:28px;position:relative;flex-wrap:wrap}
+.cta-features span{font-size:.82rem;color:var(--text3);display:flex;align-items:center;gap:6px}
+.cta-features .ck{color:var(--neon);font-weight:700}
+
+/* ── FOOTER ── */
+footer{padding:48px 0;border-top:1px solid var(--border)}
+.footer-grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:32px}
+.footer-brand{display:flex;flex-direction:column;gap:10px}
+.footer-brand .logo{margin-bottom:4px}
+.footer-brand p{font-size:.82rem;color:var(--text3);max-width:220px;line-height:1.6}
+.footer-col h4{font-size:.78rem;font-weight:700;color:var(--text3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:14px}
+.footer-col a{display:block;font-size:.86rem;color:var(--text2);text-decoration:none;margin-bottom:8px;transition:color .2s}
+.footer-col a:hover{color:var(--neon)}
+.footer-bottom{display:flex;justify-content:space-between;align-items:center;margin-top:36px;padding-top:24px;border-top:1px solid var(--border);font-size:.78rem;color:var(--text3);flex-wrap:wrap;gap:12px}
+
+/* ── REVEAL ── */
+.reveal{transition:all .6s cubic-bezier(.22,1,.36,1)}
+.reveal.visible{opacity:1;transform:none}
+
+/* ── LEAD FORM ── */
+.lead-form-section{padding:100px 0;background:var(--bg3)}
+.lead-form-inner{max-width:560px;margin:0 auto;text-align:center}
+.lead-form-box{background:var(--bg2);border:1px solid var(--neon-dim);border-radius:20px;padding:44px 40px;position:relative;overflow:hidden;box-shadow:0 8px 40px rgba(0,200,255,.06);margin-top:40px}
+.lead-form-box::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 50% 0%,var(--neon-glow),transparent 65%);pointer-events:none}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;position:relative;z-index:2}
+.form-row.full{grid-template-columns:1fr}
+.form-field{display:flex;flex-direction:column;gap:6px;text-align:left}
+.form-field label{font-size:.76rem;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em}
+.form-field input{padding:11px 16px;background:var(--bg3);border:1px solid var(--border2);border-radius:10px;font-family:var(--sans);font-size:.9rem;color:var(--text);outline:none;transition:border-color .2s,box-shadow .2s}
+.form-field input:focus{border-color:var(--neon);box-shadow:0 0 0 3px rgba(0,200,255,.1)}
+.form-field input::placeholder{color:var(--text3)}
+.form-consent{display:flex;align-items:flex-start;gap:12px;margin:16px 0 20px;text-align:left;position:relative;z-index:2}
+.form-consent input[type=checkbox]{width:18px;height:18px;flex-shrink:0;margin-top:2px;accent-color:var(--neon);cursor:pointer}
+.form-consent label{font-size:.82rem;color:var(--text2);line-height:1.6;cursor:pointer}
+.form-consent label a{color:var(--neon);text-decoration:none}
+.form-consent label a:hover{text-decoration:underline}
+.form-submit{width:100%;padding:14px;background:linear-gradient(135deg,var(--neon),var(--accent));color:#fff;border:none;border-radius:10px;font-family:var(--sans);font-size:.95rem;font-weight:600;cursor:pointer;transition:all .25s;position:relative;z-index:2}
+.form-submit:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 28px rgba(0,200,255,.35)}
+.form-submit:disabled{opacity:.45;cursor:not-allowed;transform:none;box-shadow:none}
+.form-success{display:none;flex-direction:column;align-items:center;gap:12px;padding:24px 0;position:relative;z-index:2}
+.form-success .check-icon{width:56px;height:56px;border-radius:50%;background:rgba(34,197,94,.1);border:2px solid rgba(34,197,94,.3);display:grid;place-items:center;font-size:1.6rem}
+.form-success h4{font-size:1.1rem;font-weight:700}
+.form-success p{font-size:.88rem;color:var(--text2)}
+@media(max-width:600px){.form-row{grid-template-columns:1fr}.lead-form-box{padding:32px 24px}}
+
+/* ── COOKIE BANNER ── */
+#cookie-banner{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9999;width:calc(100% - 48px);max-width:780px;background:var(--bg2);border:1px solid var(--border2);border-radius:16px;box-shadow:0 8px 40px rgba(0,0,0,.12);padding:20px 24px;display:flex;align-items:center;gap:20px;flex-wrap:wrap;transition:opacity .4s,transform .4s}
+#cookie-banner.hidden{opacity:0;transform:translateX(-50%) translateY(20px);pointer-events:none}
+.cookie-text{flex:1;min-width:240px;font-size:.84rem;color:var(--text2);line-height:1.6}
+.cookie-text strong{color:var(--text)}
+.cookie-text a{color:var(--neon);text-decoration:none}
+.cookie-text a:hover{text-decoration:underline}
+.cookie-actions{display:flex;gap:10px;flex-shrink:0;flex-wrap:wrap}
+.btn-cookie-accept{padding:9px 22px;background:linear-gradient(135deg,var(--neon),var(--accent));color:#fff;border:none;border-radius:8px;font-family:var(--sans);font-size:.84rem;font-weight:600;cursor:pointer;transition:all .2s}
+.btn-cookie-accept:hover{opacity:.9;transform:translateY(-1px)}
+.btn-cookie-decline{padding:9px 18px;background:transparent;color:var(--text3);border:1px solid var(--border2);border-radius:8px;font-family:var(--sans);font-size:.84rem;font-weight:500;cursor:pointer;transition:all .2s}
+.btn-cookie-decline:hover{border-color:var(--text3);color:var(--text2)}
+@media(max-width:600px){#cookie-banner{bottom:0;left:0;transform:none;width:100%;border-radius:16px 16px 0 0;max-width:100%}#cookie-banner.hidden{transform:translateY(20px)}}
+
+/* ── RESPONSIVE ── */
+@media(max-width:900px){
+  .hero-grid{grid-template-columns:1fr;text-align:center}
+  .hero-sub{margin:0 auto 32px}.hero-actions{justify-content:center}.hero-proof{justify-content:center}
+  .hero-visual{margin-top:40px}
+  .bento-grid{grid-template-columns:1fr}
+  .b1,.b2,.b3,.b4,.b5,.b6,.b7{grid-column:span 1;grid-row:span 1}
+  .stats-grid{grid-template-columns:repeat(2,1fr)}
+  .compare-grid{grid-template-columns:1fr;gap:16px}
+  .compare-vs{transform:rotate(90deg);padding:8px 0}
+  .pricing-grid{grid-template-columns:1fr;max-width:380px}
+  .footer-grid{grid-template-columns:1fr 1fr;gap:24px}
+  .nav-links a:not(.nav-cta){display:none}
+}
+@media(max-width:480px){.stats-grid{grid-template-columns:1fr}.hero h1{font-size:2rem}}
+</style>
+</head>
+<body>
+<canvas id="bg-canvas"></canvas>
+<div class="shape shape-1"></div>
+<div class="shape shape-2"></div>
+
+<!-- NAV -->
+<nav id="nav">
+  <div class="container">
+    <a href="#" class="logo"><span class="logo-dot"></span>QUASAR-X</a>
+    <div class="nav-links">
+      <a href="#features">Возможности</a>
+      <a href="#how">Как работает</a>
+      <a href="#pricing">Тарифы</a>
+      <a href="#faq">FAQ</a>
+      <a href="https://qvaz.quasar-x.ru/register" class="nav-cta">Попробовать</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-grid">
+      <div>
+        <div class="hero-tag"><span class="pulse"></span> Репрайсер для продавцов WB</div>
+        <h1>Цены обновляются<br><span class="grad">сами. Без вас.</span></h1>
+        <p class="hero-sub">Мониторите конкурентов вручную? Каждый день обновляете цены в таблицах? QUASAR-X делает это каждые 15 минут — сам, без вашего участия.</p>
+        <div class="hero-actions">
+          <a href="https://qvaz.quasar-x.ru/register" class="btn btn-primary">Начать бесплатно →</a>
+          <a href="#how" class="btn btn-ghost">Как это работает</a>
+        </div>
+        <div class="hero-proof">
+          <span><span class="ck">✓</span> Без комиссий с продаж</span>
+          <span><span class="ck">✓</span> 5 минут на настройку</span>
+          <span><span class="ck">✓</span> 7 дней бесплатно</span>
+        </div>
+      </div>
+      <div class="hero-visual">
+        <div class="mock-card" id="mock3d">
+          <div class="mock-top"><div class="mdots"><i></i><i></i><i></i></div><span style="margin-left:auto">quasar-x / мониторинг</span></div>
+          <div class="mock-body">
+            <div class="mrow hd"><span>Товар</span><span>Цена</span><span>Δ</span><span>Статус</span></div>
+            <div class="mrow"><span class="mn">Кепка с вышивкой</span><span class="mp">890 ₽</span><span class="mc dn">−55 ₽</span><span class="ms ok">Готово</span></div>
+            <div class="mrow"><span class="mn">Кроссовки беговые</span><span class="mp">3 490 ₽</span><span class="mc up">+120 ₽</span><span class="ms go">В работе</span></div>
+            <div class="mrow"><span class="mn">Шланг поливочный</span><span class="mp">640 ₽</span><span class="mc dn">−30 ₽</span><span class="ms ok">Готово</span></div>
+            <div class="mrow"><span class="mn">Термокружка 500мл</span><span class="mp">1 190 ₽</span><span class="mc up">+75 ₽</span><span class="ms wt">Очередь</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- MARQUEE -->
+<div class="marquee-wrap">
+  <div class="marquee" id="marquee">
+    <span>Мониторинг 24/7</span><span>Автоматический репрайсинг</span><span>РРЦ-стратегии</span><span>Мульти-аккаунт</span><span>Аналитика конкурентов</span><span>Защита маржи</span><span>API Wildberries</span><span>История изменений</span><span>Гибкие правила</span>
+    <span>Мониторинг 24/7</span><span>Автоматический репрайсинг</span><span>РРЦ-стратегии</span><span>Мульти-аккаунт</span><span>Аналитика конкурентов</span><span>Защита маржи</span><span>API Wildberries</span><span>История изменений</span><span>Гибкие правила</span>
+  </div>
+</div>
+
+<!-- STATS -->
+<section class="stats">
+  <div class="container">
+    <div class="stats-grid" style="--stagger:1">
+      <div class="stat-box reveal"><div class="stat-num" data-count="12000">12 000+</div><div class="stat-label">SKU под управлением</div></div>
+      <div class="stat-box reveal"><div class="stat-num" data-count="98">98%</div><div class="stat-label">% аптайм системы</div></div>
+      <div class="stat-box reveal"><div class="stat-num" data-count="15">15+</div><div class="stat-label">мин интервал обновления</div></div>
+      <div class="stat-box reveal"><div class="stat-num" data-count="300">300+</div><div class="stat-label">активных продавцов</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- BENTO FEATURES -->
+<section class="bento" id="features">
+  <div class="container">
+    <div class="stag reveal">Возможности</div>
+    <div class="stitle reveal">Что умеет система</div>
+    <div class="sdesc reveal">Без маркетинговой воды — только то, что реально работает.</div>
+
+    <div class="bento-grid">
+      <!-- B1: Live price ticker (big) -->
+      <div class="b-cell b1 reveal">
+        <h3>Следим за конкурентами вместо вас</h3>
+        <p>Каждые 15 минут система проверяет цены конкурентов и обновляет ваши — пока вы занимаетесь чем угодно другим.</p>
+        <div class="b-ticker">
+          <div class="b-tick"><span class="nm">Конк. А</span><span class="pr">689 ₽</span><span class="ch r">−42 ₽</span></div>
+          <div class="b-tick"><span class="nm">Конк. Б</span><span class="pr">712 ₽</span><span class="ch g">+15 ₽</span></div>
+          <div class="b-tick"><span class="nm">Ваша цена</span><span class="pr">695 ₽</span><span class="ch g" style="color:var(--neon)">оптимум ✓</span></div>
+        </div>
+      </div>
+
+      <!-- B2: Strategies -->
+      <div class="b-cell b2 reveal">
+        <h3>Стратегии под любую задачу</h3>
+        <p>Держать РРЦ, быть дешевле конкурента, защищать маржу — или всё сразу по своим правилам.</p>
+        <div class="b-pills">
+          <span class="b-pill a">РРЦ</span>
+          <span class="b-pill b">Ниже конкурента</span>
+          <span class="b-pill c">Мин. маржа</span>
+          <span class="b-pill d">Кастомная</span>
+        </div>
+      </div>
+
+      <!-- B3: Speed stat -->
+      <div class="b-cell b3 reveal" style="align-items:center;text-align:center;justify-content:center">
+        <div class="b-big">15 мин</div>
+        <h3>Интервал обновления</h3>
+        <p style="max-width:220px;margin:0 auto;font-size:.82rem">От 15 минут до 2 часов — настраивается. Можно указать дни и часы работы, когда система активна, а когда нет.</p>
+      </div>
+
+      <!-- B4: Multi-account -->
+      <div class="b-cell b4 reveal">
+        <h3>Несколько кабинетов — одно окно</h3>
+        <p>Управляйте всеми магазинами из одного места. Массовые правила, единая аналитика.</p>
+        <div style="margin-top:16px;display:flex;flex-direction:column;gap:6px;position:relative;z-index:2">
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--neon-glow);border:1px solid var(--neon-dim);border-radius:8px;font-size:.78rem;font-weight:600;color:var(--neon)">
+            <span style="width:8px;height:8px;border-radius:50%;background:var(--neon)"></span> Кабинет 1 — 1 840 SKU
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg3);border-radius:8px;font-size:.78rem;color:var(--text2)">
+            <span style="width:8px;height:8px;border-radius:50%;background:var(--text3)"></span> Кабинет 2 — 960 SKU
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg3);border-radius:8px;font-size:.78rem;color:var(--text2)">
+            <span style="width:8px;height:8px;border-radius:50%;background:var(--text3)"></span> Кабинет 3 — 430 SKU
+          </div>
+        </div>
+      </div>
+
+
+
+      <!-- B6: Analytics -->
+      <div class="b-cell b6 reveal" style="position:relative">
+        <div class="b-chart">
+          <svg viewBox="0 0 140 70" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <polyline points="0,60 20,52 40,55 60,35 80,38 100,20 120,25 140,10" stroke="url(#cg)" stroke-width="2" fill="none"/>
+            <path d="M0,60 20,52 40,55 60,35 80,38 100,20 120,25 140,10 140,70 0,70Z" fill="url(#cf)" opacity=".15"/>
+            <defs><linearGradient id="cg" x1="0" y1="0" x2="140" y2="0"><stop stop-color="#00c8ff"/><stop offset="1" stop-color="#0066ff"/></linearGradient>
+            <linearGradient id="cf" x1="70" y1="10" x2="70" y2="70"><stop stop-color="#00c8ff"/><stop offset="1" stop-color="#00c8ff" stop-opacity="0"/></linearGradient></defs>
+          </svg>
+        </div>
+        <h3>Видите всё что происходит</h3>
+        <p>История изменений цен, динамика маржи, поведение конкурентов — всё в одном месте и понятно с первого взгляда.</p>
+      </div>
+
+      <!-- B7: API -->
+      <div class="b-cell b7 reveal" style="background:var(--text);color:#fff">
+        <div style="font-family:var(--mono);font-size:.72rem;opacity:.6;margin-bottom:10px;position:relative;z-index:2">// Подключение через WB Content API</div>
+        <div style="font-family:var(--mono);font-size:.74rem;line-height:1.8;position:relative;z-index:2;color:rgba(255,255,255,.85)">
+          <span style="color:var(--neon)">const</span> api = <span style="color:var(--neon)">new</span> <span style="color:#c792ea">QuasarX</span>({<br>
+          &nbsp;&nbsp;token: <span style="color:var(--green)">'wb_api_***'</span>,<br>
+          &nbsp;&nbsp;strategy: <span style="color:var(--green)">'rrp_protect'</span><br>
+          });
+        </div>
+        <div style="margin-top:auto;padding-top:16px;position:relative;z-index:2">
+          <h3 style="color:#fff">Настройка за 2 минуты</h3>
+          <p style="color:rgba(255,255,255,.55)">Берёте API-токен из личного кабинета WB, вставляете сюда — готово. Без программистов и интеграций.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- BEFORE / AFTER -->
+<section class="compare" id="compare">
+  <div class="container">
+    <div style="text-align:center">
+      <div class="stag reveal">Сравнение</div>
+      <div class="stitle reveal">Как было vs. как стало</div>
+      <div class="sdesc reveal" style="margin-left:auto;margin-right:auto">Два способа управлять ценами. Разница — очевидна.</div>
+    </div>
+    <div class="compare-grid reveal">
+      <div class="compare-col bad">
+        <span class="compare-badge">Без репрайсера</span>
+        <h3>Ручное управление ценами</h3>
+        <ul class="compare-list">
+          <li><span class="ic">✕</span> 2–4 часа в день на ручной мониторинг</li>
+          <li><span class="ic">✕</span> Опечатки и ошибки при обновлении цен</li>
+          <li><span class="ic">✕</span> Конкурент снизил цену ночью — вы узнали утром</li>
+          <li><span class="ic">✕</span> 500 SKU уже не осилить вручную</li>
+          <li><span class="ic">✕</span> Каждый кабинет — отдельная таблица и боль</li>
+          <li><span class="ic">✕</span> Пока думаете — продажи уже у конкурента</li>
+        </ul>
+      </div>
+      <div class="compare-vs"><span>VS</span></div>
+      <div class="compare-col good">
+        <span class="compare-badge">С QUASAR-X</span>
+        <h3>Автоматический репрайсинг</h3>
+        <ul class="compare-list">
+          <li><span class="ic">✓</span> 0 минут в день — система всё делает сама</li>
+          <li><span class="ic">✓</span> Никаких опечаток и человеческих ошибок</li>
+          <li><span class="ic">✓</span> Ночью, в выходные, в отпуске — работает всегда</li>
+          <li><span class="ic">✓</span> Хоть 5 000 SKU — справится без тормозов</li>
+          <li><span class="ic">✓</span> Все кабинеты в одном месте, одна аналитика</li>
+          <li><span class="ic">✓</span> Реакция на изменение цены конкурента — 15 минут</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section class="how" id="how">
+  <div class="container">
+    <div class="stag reveal">Как это работает</div>
+    <div class="stitle reveal">Запустить проще,<br>чем кажется</div>
+    <div class="sdesc reveal">Не нужно быть технарём. Сделали так, чтобы разобрался любой продавец.</div>
+    <div class="timeline">
+      <div class="t-step reveal">
+        <div class="t-num">1</div>
+        <div class="t-body">
+          <h3>Вставьте API-токен WB</h3>
+          <p>Заходите в личный кабинет Wildberries → Настройки → API-токен. Копируете, вставляете. Все товары и цены загружаются автоматически.</p>
+          <span class="t-tag">~2 минуты</span>
+        </div>
+      </div>
+      <div class="t-step reveal">
+        <div class="t-num">2</div>
+        <div class="t-body">
+          <h3>Настройте правила</h3>
+          <p>Выбираете стратегию из готовых — РРЦ, конкурентная, по марже. Ставите минимальную и максимальную цену чтобы система не вышла за границы.</p>
+          <span class="t-tag">~3 минуты</span>
+        </div>
+      </div>
+      <div class="t-step reveal">
+        <div class="t-num">3</div>
+        <div class="t-body">
+          <h3>Включите и забудьте</h3>
+          <p>Жмёте запуск — система уходит в фоновый режим. Через 15 минут первые цены уже обновлены. Через час — всё под контролем.</p>
+          <span class="t-tag">1 клик</span>
+        </div>
+      </div>
+      <div class="t-step reveal">
+        <div class="t-num">4</div>
+        <div class="t-body">
+          <h3>Смотрите что происходит</h3>
+          <p>В дашборде видно каждое изменение цены: почему изменилась, с какой на какую, как отреагировал рынок. Всё прозрачно.</p>
+          <span class="t-tag">24/7 мониторинг</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PRICING -->
+<section class="pricing" id="pricing">
+  <div class="container" style="text-align:center">
+    <div class="stag reveal">Тарифы</div>
+    <div class="stitle reveal">Фиксированная подписка.<br>Никаких процентов с продаж.</div>
+    <div class="sdesc reveal" style="margin-left:auto;margin-right:auto">Платите одну сумму в месяц — и всё. Никаких сюрпризов в конце месяца.</div>
+    <div class="pricing-grid">
+      <div class="pr-card reveal">
+        <div class="pr-name">Старт</div>
+        <div class="pr-desc">Один кабинет, базовый набор</div>
+        <div class="pr-price"><span class="c">₽</span>5 990</div>
+        <div class="pr-per">в месяц</div>
+        <ul class="pr-feat">
+          <li><span class="ico">✓</span> До 100 SKU</li>
+          <li><span class="ico">✓</span> 1 кабинет WB</li>
+          <li><span class="ico">✓</span> Все стратегии</li>
+          <li><span class="ico">✓</span> Аналитика и история</li>
+          <li><span class="ico">✓</span> Мониторинг конкурентов</li>
+        </ul>
+        <a href="https://qvaz.quasar-x.ru/register" class="btn btn-ghost btn-sm">Выбрать</a>
+      </div>
+      <div class="pr-card feat reveal">
+        <div class="pr-name">Бизнес</div>
+        <div class="pr-desc">Для растущего бизнеса</div>
+        <div class="pr-price"><span class="c">₽</span>15 990</div>
+        <div class="pr-per">в месяц</div>
+        <ul class="pr-feat">
+          <li><span class="ico">✓</span> До 1 000 SKU</li>
+          <li><span class="ico">✓</span> 5 кабинетов WB</li>
+          <li><span class="ico">✓</span> Все стратегии</li>
+          <li><span class="ico">✓</span> Приоритетная поддержка</li>
+          <li><span class="ico">✓</span> Расширенная аналитика</li>
+        </ul>
+        <a href="https://qvaz.quasar-x.ru/register" class="btn btn-primary btn-sm">Выбрать</a>
+      </div>
+      <div class="pr-card reveal">
+        <div class="pr-name">Энтерпрайз</div>
+        <div class="pr-desc">Крупный ассортимент</div>
+        <div class="pr-price"><span class="c">₽</span>29 990</div>
+        <div class="pr-per">в месяц</div>
+        <ul class="pr-feat">
+          <li><span class="ico">✓</span> До 3 000 SKU</li>
+          <li><span class="ico">✓</span> Безлимит кабинетов</li>
+          <li><span class="ico">✓</span> Все стратегии</li>
+          <li><span class="ico">✓</span> Приоритетная поддержка</li>
+          <li><span class="ico">✓</span> Расширенная аналитика</li>
+        </ul>
+        <a href="https://qvaz.quasar-x.ru/register" class="btn btn-ghost btn-sm">Выбрать</a>
+      </div>
+      <div class="pr-card reveal">
+        <div class="pr-name">Ультима</div>
+        <div class="pr-desc">Индивидуальные условия</div>
+        <div class="pr-price" style="font-size:1.6rem;padding-top:8px">Договорная</div>
+        <div class="pr-per">по запросу</div>
+        <ul class="pr-feat">
+          <li><span class="ico">✓</span> Без лимита SKU</li>
+          <li><span class="ico">✓</span> Безлимит кабинетов</li>
+          <li><span class="ico">✓</span> Кастомные интеграции</li>
+          <li><span class="ico">✓</span> Выделенный менеджер</li>
+          <li><span class="ico">✓</span> SLA 99.9%</li>
+        </ul>
+        <a href="https://qvaz.quasar-x.ru/register" class="btn btn-ghost btn-sm">Связаться</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section class="faq" id="faq">
+  <div class="container" style="text-align:center">
+    <div class="stag reveal">Частые вопросы</div>
+    <div class="stitle reveal">Ответы на главное</div>
+    <div class="faq-list">
+      <div class="faq-item reveal">
+        <div class="faq-q">Нужно ли давать доступ к личному кабинету WB?<span class="arr">+</span></div>
+        <div class="faq-a"><div class="faq-a-inner">Нет. Мы работаем через официальный API Wildberries. Вам достаточно сгенерировать API-токен в настройках кабинета — это занимает пару минут и абсолютно безопасно. Доступ к логину и паролю не нужен.</div></div>
+      </div>
+      <div class="faq-item reveal">
+        <div class="faq-q">Как быстро система начнёт менять цены?<span class="arr">+</span></div>
+        <div class="faq-a"><div class="faq-a-inner">После подключения токена и выбора стратегии — первый цикл репрайсинга пройдёт в течение 15 минут. Полная синхронизация всех товаров зависит от объёма ассортимента, обычно от 5 минут до часа.</div></div>
+      </div>
+      <div class="faq-item reveal">
+        <div class="faq-q">Что если система поставит невыгодную цену?<span class="arr">+</span></div>
+        <div class="faq-a"><div class="faq-a-inner">Вы задаёте границы: минимальную маржу, пол и потолок цены. Система никогда не выйдет за эти рамки. Плюс все изменения логируются — вы видите, что и почему изменилось, и можете откатить в один клик.</div></div>
+      </div>
+      <div class="faq-item reveal">
+        <div class="faq-q">Работает ли QUASAR-X с Ozon?<span class="arr">+</span></div>
+        <div class="faq-a"><div class="faq-a-inner">На данный момент мы полностью поддерживаем Wildberries. Поддержка Ozon находится в разработке и будет доступна в ближайших обновлениях.</div></div>
+      </div>
+      <div class="faq-item reveal">
+        <div class="faq-q">Можно ли подключить несколько кабинетов WB?<span class="arr">+</span></div>
+        <div class="faq-a"><div class="faq-a-inner">Да, это одна из ключевых функций. На тарифе «Бизнес» — до 5 кабинетов, на «Энтерпрайз» — без ограничений. Все кабинеты управляются из единого интерфейса.</div></div>
+      </div>
+      <div class="faq-item reveal">
+        <div class="faq-q">Берёте ли вы процент с продаж?<span class="arr">+</span></div>
+        <div class="faq-a"><div class="faq-a-inner">Нет. Мы принципиально не берём комиссию с ваших продаж, оборота или прибыли. Вы платите только фиксированную подписку — и всё. Никаких скрытых платежей.</div></div>
+      </div>
+      <div class="faq-item reveal">
+        <div class="faq-q">Есть ли пробный период?<span class="arr">+</span></div>
+        <div class="faq-a"><div class="faq-a-inner">Да, 7 дней бесплатного доступа ко всем функциям тарифа «Бизнес». Без привязки карты — просто зарегистрируйтесь и подключите токен.</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- LEAD FORM -->
+<section class="lead-form-section" id="contact">
+  <div class="container">
+    <div class="lead-form-inner">
+      <div class="stag reveal">Оставить заявку</div>
+      <div class="stitle reveal">Начните прямо сейчас</div>
+      <div class="sdesc reveal" style="margin:0 auto 0">7 дней бесплатно, без привязки карты. Оставьте контакты — мы поможем с настройкой.</div>
+      <div class="lead-form-box reveal">
+        <form id="lead-form" novalidate>
+          <div class="form-row">
+            <div class="form-field">
+              <label for="lf-name">Ваше имя</label>
+              <input type="text" id="lf-name" name="name" placeholder="Иван" autocomplete="given-name" required>
+            </div>
+            <div class="form-field">
+              <label for="lf-phone">Телефон</label>
+              <input type="tel" id="lf-phone" name="phone" placeholder="+7 999 000-00-00" autocomplete="tel">
+            </div>
+          </div>
+          <div class="form-row full">
+            <div class="form-field">
+              <label for="lf-email">Email</label>
+              <input type="email" id="lf-email" name="email" placeholder="ivan@example.com" autocomplete="email" required>
+            </div>
+          </div>
+          <div class="form-consent">
+            <input type="checkbox" id="lf-consent" name="consent" required>
+            <label for="lf-consent">Я ознакомился с <a href="/privacy-policy.html" target="_blank">Политикой обработки персональных данных</a> и даю <a href="/consent.html" target="_blank">согласие на обработку моих персональных данных</a> в целях обработки заявки.</label>
+          </div>
+          <button type="submit" class="form-submit" id="lf-submit" disabled>Отправить заявку →</button>
+        </form>
+        <div class="form-success" id="lead-form-success">
+          <div class="check-icon">✓</div>
+          <h4>Заявка принята!</h4>
+          <p>Мы свяжемся с вами в ближайшее время и поможем начать.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta" id="cta">
+  <div class="container">
+    <div class="cta-box reveal">
+      <h2>Попробуйте 7 дней бесплатно</h2>
+      <p>Подключите один магазин, настройте стратегию и посмотрите как работает. Карта не нужна — просто зарегистрируйтесь.</p>
+      <a href="https://qvaz.quasar-x.ru/register" class="btn btn-primary">Начать бесплатный период →</a>
+      <div class="cta-features">
+        <span><span class="ck">✓</span> 7 дней бесплатно</span>
+        <span><span class="ck">✓</span> Без привязки карты</span>
+        <span><span class="ck">✓</span> Полный функционал</span>
+        <span><span class="ck">✓</span> Отмена в любой момент</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a href="#" class="logo"><span class="logo-dot"></span>QUASAR-X</a>
+        <p>Репрайсер для продавцов WB. Цены обновляются сами — вы занимаетесь продажами.</p>
+      </div>
+      <div class="footer-col">
+        <h4>Продукт</h4>
+        <a href="#features">Возможности</a>
+        <a href="#pricing">Тарифы</a>
+        <a href="#how">Как работает</a>
+        <a href="#faq">FAQ</a>
+      </div>
+      <div class="footer-col">
+        <h4>Компания</h4>
+        <a href="#">О нас</a>
+        <a href="#">Блог</a>
+        <a href="#">Обновления</a>
+        <a href="#">Контакты</a>
+      </div>
+      <div class="footer-col">
+        <h4>Поддержка</h4>
+        <a href="#">Документация</a>
+        <a href="#">API</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© 2026 QUASAR-X. Все права защищены.</span>
+      <div style="display:flex;gap:20px;flex-wrap:wrap">
+        <a href="/privacy-policy.html">Политика конфиденциальности</a>
+        <a href="/consent.html">Согласие на обработку ПДн</a>
+        <a href="#">Оферта</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<!-- COOKIE BANNER -->
+<div id="cookie-banner">
+  <div class="cookie-text">
+    <strong>Мы используем cookies и Яндекс Метрику.</strong> Это помогает анализировать посещаемость и улучшать сервис. Нажимая «Принять», вы соглашаетесь с использованием аналитических cookies.
+    Подробнее: <a href="/privacy-policy.html#s8">Политика конфиденциальности</a>.
+  </div>
+  <div class="cookie-actions">
+    <button class="btn-cookie-accept" onclick="cookieConsent(true)">Принять</button>
+    <button class="btn-cookie-decline" onclick="cookieConsent(false)">Отказаться</button>
+  </div>
+</div>
+
+<script>
+// ── Scroll reveal ─────────────────────────────────────────────────────────────
+const revealObserver = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      e.target.classList.remove('hidden');
+      e.target.classList.add('visible');
+      revealObserver.unobserve(e.target);
+    }
+  });
+}, { threshold: 0.08, rootMargin: '0px 0px -20px 0px' });
+
+document.querySelectorAll('.reveal').forEach(el => revealObserver.observe(el));
+
+
+
+// ── 3D card tilt ─────────────────────────────────────────────────────────────
+const card = document.getElementById('mock3d');
+if (card) {
+  card.addEventListener('mousemove', e => {
+    const r = card.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width - 0.5;
+    const y = (e.clientY - r.top) / r.height - 0.5;
+    card.style.transform = `perspective(600px) rotateY(${x * 10}deg) rotateX(${-y * 8}deg) scale(1.02)`;
+  });
+  card.addEventListener('mouseleave', () => {
+    card.style.transform = 'perspective(600px) rotateY(0) rotateX(0) scale(1)';
+    card.style.transition = 'transform 0.5s ease';
+  });
+  card.addEventListener('mouseenter', () => { card.style.transition = 'none'; });
+}
+
+// ── Nav scroll effect ─────────────────────────────────────────────────────────
+window.addEventListener('scroll', () => {
+  document.getElementById('nav').classList.toggle('scrolled', window.scrollY > 20);
+}, { passive: true });
+
+// ── FAQ ───────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.faq-q').forEach(q => {
+  q.addEventListener('click', () => {
+    const item = q.parentElement;
+    const isOpen = item.classList.contains('open');
+    document.querySelectorAll('.faq-item.open').forEach(i => i.classList.remove('open'));
+    if (!isOpen) item.classList.add('open');
+  });
+});
+
+// ── Parallax shapes ───────────────────────────────────────────────────────────
+window.addEventListener('scroll', () => {
+  const y = window.scrollY;
+  const s1 = document.querySelector('.shape-1');
+  const s2 = document.querySelector('.shape-2');
+  if (s1) s1.style.transform = `translateY(${y * 0.15}px)`;
+  if (s2) s2.style.transform = `translateY(${-y * 0.1}px)`;
+}, { passive: true });
+
+// ── Ticker live animation ─────────────────────────────────────────────────────
+const ticks = document.querySelectorAll('.b-tick');
+if (ticks.length) {
+  let idx = 0;
+  ticks.forEach(t => t.style.opacity = '0.5');
+  ticks[0].style.opacity = '1';
+  setInterval(() => {
+    ticks[idx].style.opacity = '0.5';
+    idx = (idx + 1) % ticks.length;
+    ticks[idx].style.opacity = '1';
+  }, 2000);
+}
+
+/* NAV */
+const nav=document.getElementById('nav');
+window.addEventListener('scroll',()=>nav.classList.toggle('scrolled',scrollY>40),{passive:true});
+
+/* REVEAL */
+const obs=new IntersectionObserver(entries=>{
+  entries.forEach(e=>{if(e.isIntersecting){e.target.classList.add('visible');obs.unobserve(e.target)}});
+},{threshold:.1,rootMargin:'0px 0px -40px 0px'});
+document.querySelectorAll('.reveal').forEach(el=>obs.observe(el));
+
+/* COUNTERS */
+function runCounters() {
+  document.querySelectorAll('[data-count]').forEach(function(el) {
+    var target = parseInt(el.dataset.count, 10);
+    if (isNaN(target)) return;
+    var label = (el.parentElement.querySelector('.stat-label') || {}).textContent || '';
+    var suffix = label.indexOf('%') >= 0 ? '%' : '+';
+    var startTime = null;
+    function step(ts) {
+      if (!startTime) startTime = ts;
+      var p = Math.min((ts - startTime) / 1500, 1);
+      var ease = 1 - Math.pow(1 - p, 3);
+      var v = Math.round(ease * target);
+      el.textContent = (target >= 1000 ? v.toLocaleString('ru-RU') : v) + suffix;
+      if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  });
+}
+window.addEventListener('load', function() { setTimeout(runCounters, 300); });
+
+
+/* CANVAS */
+const cvs=document.getElementById('bg-canvas'),ctx=cvs.getContext('2d');
+let W,H,pts=[];
+function resize(){W=cvs.width=innerWidth;H=cvs.height=innerHeight}
+resize();window.addEventListener('resize',resize,{passive:true});
+class P{
+  constructor(){this.x=Math.random()*W;this.y=Math.random()*H;this.r=Math.random()*1.6+.4;this.vx=(Math.random()-.5)*.2;this.vy=(Math.random()-.5)*.2;this.a=Math.random()*.2+.03}
+  update(){this.x+=this.vx;this.y+=this.vy;if(this.x<-10||this.x>W+10||this.y<-10||this.y>H+10){this.x=Math.random()*W;this.y=Math.random()*H}}
+  draw(){ctx.beginPath();ctx.arc(this.x,this.y,this.r,0,6.283);ctx.fillStyle=`rgba(0,200,255,${this.a})`;ctx.fill()}
+}
+for(let i=0;i<30;i++)pts.push(new P);
+(function loop(){
+  ctx.clearRect(0,0,W,H);
+  for(let i=0;i<pts.length;i++){pts[i].update();pts[i].draw();
+    for(let j=i+1;j<pts.length;j++){const dx=pts[i].x-pts[j].x,dy=pts[i].y-pts[j].y,d=Math.sqrt(dx*dx+dy*dy);
+      if(d<130){ctx.beginPath();ctx.moveTo(pts[i].x,pts[i].y);ctx.lineTo(pts[j].x,pts[j].y);ctx.strokeStyle=`rgba(0,200,255,${.04*(1-d/130)})`;ctx.lineWidth=.5;ctx.stroke()}
+    }
+  }
+  requestAnimationFrame(loop);
+})();
+
+/* FAQ */
+document.querySelectorAll('.faq-q').forEach(q=>{
+  q.addEventListener('click',()=>{
+    const item=q.parentElement,a=q.nextElementSibling;
+    const wasOpen=item.classList.contains('open');
+    document.querySelectorAll('.faq-item.open').forEach(i=>{i.classList.remove('open');i.querySelector('.faq-a').style.maxHeight=null});
+    if(!wasOpen){item.classList.add('open');a.style.maxHeight=a.scrollHeight+'px'}
+  });
+});
+
+/* SMOOTH SCROLL */
+document.querySelectorAll('a[href^="#"]').forEach(a=>a.addEventListener('click',e=>{
+  e.preventDefault();document.querySelector(a.getAttribute('href'))?.scrollIntoView({behavior:'smooth'});
+}));
+
+/* LEAD FORM */
+(function(){
+  const consent=document.getElementById('lf-consent');
+  const submit=document.getElementById('lf-submit');
+  const form=document.getElementById('lead-form');
+  const success=document.getElementById('lead-form-success');
+  if(!consent) return;
+  consent.addEventListener('change',()=>{submit.disabled=!consent.checked});
+  form.addEventListener('submit',async function(e){
+    e.preventDefault();
+    if(!consent.checked) return;
+    const name=document.getElementById('lf-name').value.trim();
+    const email=document.getElementById('lf-email').value.trim();
+    const phone=document.getElementById('lf-phone').value.trim();
+    if(!name||!email) return;
+    submit.disabled=true;
+    submit.textContent='Отправляем...';
+    try{
+      const r=await fetch('https://qvaz.quasar-x.ru/api/leads',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({name,email,phone})
+      });
+      if(r.ok){
+        form.style.display='none';
+        success.style.display='flex';
+      } else {
+        submit.disabled=false;
+        submit.textContent='Отправить заявку →';
+        alert('Ошибка отправки. Попробуйте ещё раз.');
+      }
+    }catch{
+      submit.disabled=false;
+      submit.textContent='Отправить заявку →';
+      alert('Нет соединения. Попробуйте ещё раз.');
+    }
+  });
+})();
+
+/* COOKIE BANNER */
+function cookieConsent(accepted){
+  localStorage.setItem('cookie_consent', accepted ? 'accepted' : 'declined');
+  const b=document.getElementById('cookie-banner');
+  b.classList.add('hidden');
+  setTimeout(()=>b.style.display='none',450);
+}
+(function(){
+  if(localStorage.getItem('cookie_consent')){
+    const b=document.getElementById('cookie-banner');
+    b.classList.add('hidden');
+    b.style.display='none';
+  }
+})();
+</script>
+</body>
+</html>
