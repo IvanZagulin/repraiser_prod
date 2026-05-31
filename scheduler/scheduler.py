@@ -436,15 +436,11 @@ def setup_scheduler() -> AsyncIOScheduler:
     logger.info("Задача 'catalog_sync_job' зарегистрирована (ежедневно в 02:00 UTC)")
 
 
-    scheduler.add_job(
-        competitor_monitor_job,
-        trigger=IntervalTrigger(minutes=30),
-        id="competitor_monitor_job",
-        name="Competitor Price Monitor (30 min)",
-        replace_existing=True,
-        max_instances=1,
-    )
-    logger.info("Задача 'competitor_monitor_job' зарегистрирована (каждые 30 мин.)")
+    # Competitor monitor ОТКЛЮЧЁН — catalog.sync_account забивает все воркеры
+    # и блокирует репрайсер. Когда нужен — раскомментировать.
+    # scheduler.add_job(competitor_monitor_job, trigger=IntervalTrigger(minutes=30),
+    #     id="competitor_monitor_job", replace_existing=True, max_instances=1)
+    logger.info("competitor_monitor_job ОТКЛЮЧЁН (конфликт с репрайсером)")
 
     scheduler.add_job(
         cleanup_stale_runs,
