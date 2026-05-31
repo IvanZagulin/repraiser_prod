@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh WB repricer card catalog egress route
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30min
+AccuracySec=1min
+Unit=wb-repricer-card-egress.service
+
+[Install]
+WantedBy=timers.target
