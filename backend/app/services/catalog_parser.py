@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from typing import Optional, Dict, Any
 from decimal import Decimal
 import httpx
@@ -90,6 +91,8 @@ class CatalogParser:
 
     def __init__(self):
         self.max_retries = settings.RETRY_ATTEMPTS
+        self._blocked_until = 0.0
+        self._last_block_status: Optional[int] = None
 
     def _build_url(self, nm_id: int) -> str:
         """
@@ -152,6 +155,14 @@ class CatalogParser:
     async def _request_direct(self, url: str) -> Optional[dict]:
         """Прямой запрос без прокси"""
         import random
+        now = time.monotonic()
+        if now < self._blocked_until:
+            logger.debug(
+                "WB catalog direct blocked by circuit breaker (%ss left, last_status=%s)",
+                int(self._blocked_until - now),
+                self._last_block_status,
+            )
+            return None
         await asyncio.sleep(random.uniform(0.05, 0.15))  # антибот WB
         try:
             async with httpx.AsyncClient(
@@ -162,6 +173,15 @@ class CatalogParser:
                 response = await client.get(url)
                 if response.status_code == 200:
                     return response.json()
+                if response.status_code in (403, 429):
+                    self._blocked_until = time.monotonic() + 30 * 60
+                    self._last_block_status = response.status_code
+                    logger.warning(
+                        "Прямой запрос: код %s для %s; включён circuit breaker на 30 минут",
+                        response.status_code,
+                        url,
+                    )
+                    return None
                 logger.warning(f"Прямой запрос: код {response.status_code} для {url}")
                 return None
         except Exception as e:

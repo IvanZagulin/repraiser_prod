@@ -474,11 +474,7 @@ async def startup():
     logger.info("WB Repricer Scheduler запускается...")
     logger.info("=" * 70)
 
-    logger.info("Инициализация proxy pool...")
-    await proxy_pool.initialize()
-
-    stats = proxy_pool.get_stats()
-    logger.info(f"Proxy pool готов: {stats}")
+    logger.info("Proxy pool не инициализируется: прокси отключены для каталога")
 
     try:
         db = SessionLocal()

@@ -138,6 +138,7 @@ class RepricerEngine:
                 is_in_promo=cached['is_in_promo'],
                 total_quantity=cached['total_quantity'],
                 in_stock=cached['in_stock'],
+                catalog_stale=False,
             )
 
         product_data = await catalog_parser.parse_product(nm_id)
@@ -157,6 +158,7 @@ class RepricerEngine:
                     is_in_promo=stale['is_in_promo'],
                     total_quantity=stale['total_quantity'],
                     in_stock=stale['in_stock'],
+                    catalog_stale=True,
                 )
         return product_data
 
@@ -246,34 +248,16 @@ class RepricerEngine:
             # Парсим текущую цену через catalog для получения СПП (с Redis-кешем)
             catalog_product = await self._cached_parse_product(product.nm_id)
 
-            if not catalog_product:
-                # Каталог недоступен (403/timeout) — fallback на последний snapshot.
-                # СПП из снэпшота может быть на час-два старым, но это лучше чем
-                # пропустить товар целиком (0 переоценок при бане WB).
-                last_snap = (
-                    self.db.query(PriceSnapshot)
-                    .filter(PriceSnapshot.product_id == product.id)
-                    .order_by(PriceSnapshot.snapshot_at.desc())
-                    .first()
+            if catalog_product and getattr(catalog_product, "catalog_stale", False):
+                logger.warning(
+                    "nm_id=%s: каталог недоступен, stale-кеш не используем для переоценки",
+                    product.nm_id,
                 )
-                if last_snap and last_snap.spp is not None:
-                    logger.info(
-                        "nm_id=%s: каталог недоступен, fallback на SPP=%s%% из снэпшота %s",
-                        product.nm_id, last_snap.spp, last_snap.snapshot_at,
-                    )
-                    return {
-                        'seller_price': price_data.seller_price,
-                        'discounted_price': price_data.discounted_price,
-                        'discount': price_data.discount,
-                        'final_price': price_data.discounted_price * (1 - last_snap.spp / 100),
-                        'spp': last_snap.spp,
-                        'is_in_promo': False,  # не знаем без каталога
-                        'total_quantity': last_snap.total_quantity if last_snap.total_quantity else 1,
-                        'name': None,
-                    }
-                else:
-                    logger.warning("nm_id=%s: каталог недоступен и нет предыдущего снэпшота — пропускаем", product.nm_id)
-                    return None
+                return {"catalog_stale": True}
+
+            if not catalog_product:
+                logger.warning("nm_id=%s: каталог недоступен — пропускаем переоценку", product.nm_id)
+                return {"catalog_stale": True}
 
             # Истинный СПП WB = скидка от цены после скидки продавца до финальной цены
             discounted_price = price_data.discounted_price
@@ -466,32 +450,14 @@ class RepricerEngine:
         for nm_id in nm_ids:
             try:
                 p = await self._cached_parse_product(nm_id)
-                if p:
+                if p and not getattr(p, "catalog_stale", False):
                     basic = getattr(p, 'seller_price', None) or Decimal(0)
                     prices.append((nm_id, p.final_price, p.in_stock, basic))
             except Exception as e:
                 logger.warning(f"Не удалось получить цену конкурента nm_id={nm_id}: {e}")
 
         if not prices:
-            # Каталог недоступен для всех конкурентов (403/бан).
-            # Fallback: competitor_price из последнего снэпшота нашего товара.
-            last_snap = (
-                self.db.query(PriceSnapshot.competitor_price, PriceSnapshot.competitor_nm_id)
-                .filter(
-                    PriceSnapshot.product_id == config.product_id,
-                    PriceSnapshot.competitor_price != None,
-                    PriceSnapshot.competitor_price > 0,
-                )
-                .order_by(PriceSnapshot.snapshot_at.desc())
-                .first()
-            )
-            if last_snap:
-                logger.info(
-                    "Конкурент для config_id=%s: каталог недоступен, fallback на snapshot "
-                    "competitor_price=%s (nm_id=%s)",
-                    config.id, last_snap.competitor_price, last_snap.competitor_nm_id,
-                )
-                return last_snap.competitor_price, last_snap.competitor_nm_id, None
+            logger.warning("Конкурент для config_id=%s: каталог недоступен — stale snapshot не используем", config.id)
             return None, None, None
 
         if rule == "cheapest_instock":
@@ -839,6 +805,10 @@ class RepricerEngine:
                 _reason = "PARSE_ERROR"
                 logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": _reason, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
                 return _reason
+            if current_data.get("catalog_stale"):
+                _reason = "CATALOG_UNAVAILABLE"
+                logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": _reason, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
+                return _reason
         
         # Загружаем скидку кошелька из кеша (загружается один раз на прогон)
         wallet_pct = Decimal((self._user_settings or {}).get("wb_wallet_discount_pct", "0"))
@@ -995,6 +965,9 @@ class RepricerEngine:
                 if not current_data:
                     results['errors'] += 1
                     continue
+                if current_data.get("catalog_stale"):
+                    results['errors'] += 1
+                    continue
 
                 self._save_price_snapshot(product, current_data)
                 # Обновляем название товара если оно ещё не подтянулось (fallback Товар {nm_id})
@@ -1073,6 +1046,10 @@ class RepricerEngine:
             if not current_data:
                 return {"product": product, "needs_update": False, "skip_code": "PARSE_ERROR",
                         "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": None, "_t0": _t0}
+            if current_data.get("catalog_stale"):
+                return {"product": product, "needs_update": False, "skip_code": "CATALOG_UNAVAILABLE",
+                        "current_data": None, "new_price": None, "limit_reason": None,
+                        "reason_msg": "Каталог WB недоступен; stale СПП не используем", "_t0": _t0}
 
             # Товар закончился на складе — WB не возвращает итоговую цену, пропускаем
             if current_data.get("total_quantity", 1) == 0 and current_data.get("final_price", 1) == 0:
