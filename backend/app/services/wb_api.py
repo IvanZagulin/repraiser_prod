@@ -271,8 +271,8 @@ class WBAPIClient:
     async def verify_batch_update(
         self,
         upload_id: int,
-        max_attempts: int = 8,
-        delay: float = 4.0,
+        max_attempts: int = 5,
+        delay: float = 5.0,
     ) -> Dict[int, Tuple[bool, str]]:
         """
         Опрашивает WB о per-nm статусе задачи batch-обновления цен.
@@ -294,6 +294,8 @@ class WBAPIClient:
         for attempt in range(1, max_attempts + 1):
             if attempt > 1:
                 await asyncio.sleep(delay)
+            else:
+                await asyncio.sleep(8)  # первый опрос: WB нужно время применить цену
             try:
                 data = await self._make_request(
                     'GET',

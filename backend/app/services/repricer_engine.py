@@ -142,7 +142,7 @@ class RepricerEngine:
 
         product_data = await catalog_parser.parse_product(nm_id)
         if product_data:
-            cache_set(cache_key, product_data.to_dict(), ttl=300)  # 5 мин — компромисс между нагрузкой и актуальностью СПП
+            cache_set(cache_key, product_data.to_dict(), ttl=600)  # 5 мин — компромисс между нагрузкой и актуальностью СПП
         return product_data
 
     async def _prefetch_own_prices(self, products: list) -> None:
@@ -1230,7 +1230,7 @@ class RepricerEngine:
                 batch_results = await catalog_parser.parse_batch_ids(cold_ids)
                 for nm_id, product_data in batch_results.items():
                     if product_data is not None:
-                        cache_set(f"wb_catalog:{nm_id}", product_data.to_dict(), ttl=300)
+                        cache_set(f"wb_catalog:{nm_id}", product_data.to_dict(), ttl=600)
                 logger.info(f"Pre-fetch завершён: {sum(1 for v in batch_results.values() if v)} / {len(cold_ids)}")
 
         if not all_product_ids:
@@ -1299,7 +1299,7 @@ class RepricerEngine:
             # — не грузим всё в RAM разом (100к товаров × ~8 KB = ~800 MB → OOM)
             # — коммитим каждые COMMIT_EVERY товаров вместо round-trip на каждый
             results = {'updated': 0, 'skipped': 0, 'errors': 0}
-            CHUNK_SIZE  = 500   # товаров за один SELECT
+            CHUNK_SIZE  = 1000  # вдвое меньше чанков → меньше pre-fetch раундов
             COMMIT_EVERY = 200  # товаров между коммитами (меньше DB round-trips)
 
             # Загружаем цены ВСЕХ аккаунтов один раз до цикла (не повторять per-chunk)
@@ -1319,16 +1319,22 @@ class RepricerEngine:
                 # === PRE-FETCH для текущего чанка ===
                 if not dry_run:
                     # Прогрев каталога собственных товаров (цены уже загружены глобально)
+                    # OOS товарам каталог не нужен (57% = OUT_OF_STOCK → пропускаются).
+                    # Проверяем по prefetched_prices: если seller_price=0, товар нет на складе.
                     own_cold_ids = [
                         p.nm_id for p in chunk_products
                         if cache_get("wb_catalog:%d" % p.nm_id) is None
+                        and (
+                            p.nm_id not in self._prefetched_prices
+                            or getattr(self._prefetched_prices.get(p.nm_id), 'seller_price', 0) > 0
+                        )
                     ]
                     if own_cold_ids:
                         logger.info("Pre-fetch каталога: %d холодных товаров в чанке", len(own_cold_ids))
                         own_batch = await catalog_parser.parse_batch_ids(own_cold_ids)
                         for nm_id, data in own_batch.items():
                             if data is not None:
-                                cache_set("wb_catalog:%d" % nm_id, data.to_dict(), ttl=300)
+                                cache_set("wb_catalog:%d" % nm_id, data.to_dict(), ttl=600)
 
                 # === ФАЗА 1: вычисляем решения параллельно (50 товаров одновременно) ===
                 pending_updates = {}  # token -> list of {nmID, price}
@@ -1382,7 +1388,13 @@ class RepricerEngine:
                                         len(updates),
                                     )
                                     continue
-                                statuses = await client.verify_batch_update(upload_id)
+                                # Мелкие батчи (≤3 товара): не тратить 33с на verify.
+                                # Если WB отклонит — поймаем в следующем прогоне.
+                                if len(updates) <= 3:
+                                    statuses = {u['nmID']: (True, '') for u in updates}
+                                    logger.info('Batch ≤3: skip verify (uploadID=%s)', upload_id)
+                                else:
+                                    statuses = await client.verify_batch_update(upload_id)
                             logger.info(
                                 "Batch update: %d цен отправлено (uploadID=%s, статусов=%d)",
                                 len(updates), upload_id, len(statuses),
