@@ -142,7 +142,22 @@ class RepricerEngine:
 
         product_data = await catalog_parser.parse_product(nm_id)
         if product_data:
-            cache_set(cache_key, product_data.to_dict(), ttl=600)  # 5 мин — компромисс между нагрузкой и актуальностью СПП
+            cache_set(cache_key, product_data.to_dict(), ttl=600)
+            # Долгосрочный бэкап: при 403 используем стейл-данные (лучше чем ничего)
+            cache_set(f"wb_catalog_last:{nm_id}", product_data.to_dict(), ttl=86400)  # 24ч
+        else:
+            # Каталог недоступен — пробуем стейл-бэкап (последний успешный парсинг)
+            stale = cache_get(f"wb_catalog_last:{nm_id}")
+            if stale is not None:
+                logger.debug("nm_id=%s: каталог недоступен, используем стейл-кеш (24ч)", nm_id)
+                return SimpleNamespace(
+                    final_price=Decimal(str(stale['final_price'])),
+                    seller_price=Decimal(str(stale.get('seller_price', 0))),
+                    spp=Decimal(str(stale['spp'])) if stale['spp'] is not None else None,
+                    is_in_promo=stale['is_in_promo'],
+                    total_quantity=stale['total_quantity'],
+                    in_stock=stale['in_stock'],
+                )
         return product_data
 
     async def _prefetch_own_prices(self, products: list) -> None:
@@ -232,8 +247,33 @@ class RepricerEngine:
             catalog_product = await self._cached_parse_product(product.nm_id)
 
             if not catalog_product:
-                logger.warning("Не удалось спарсить nm_id=%s из каталога", product.nm_id)
-                return None
+                # Каталог недоступен (403/timeout) — fallback на последний snapshot.
+                # СПП из снэпшота может быть на час-два старым, но это лучше чем
+                # пропустить товар целиком (0 переоценок при бане WB).
+                last_snap = (
+                    self.db.query(PriceSnapshot)
+                    .filter(PriceSnapshot.product_id == product.id)
+                    .order_by(PriceSnapshot.snapshot_at.desc())
+                    .first()
+                )
+                if last_snap and last_snap.spp is not None:
+                    logger.info(
+                        "nm_id=%s: каталог недоступен, fallback на SPP=%s%% из снэпшота %s",
+                        product.nm_id, last_snap.spp, last_snap.snapshot_at,
+                    )
+                    return {
+                        'seller_price': price_data.seller_price,
+                        'discounted_price': price_data.discounted_price,
+                        'discount': price_data.discount,
+                        'final_price': price_data.discounted_price * (1 - last_snap.spp / 100),
+                        'spp': last_snap.spp,
+                        'is_in_promo': False,  # не знаем без каталога
+                        'total_quantity': last_snap.total_quantity if last_snap.total_quantity else 1,
+                        'name': None,
+                    }
+                else:
+                    logger.warning("nm_id=%s: каталог недоступен и нет предыдущего снэпшота — пропускаем", product.nm_id)
+                    return None
 
             # Истинный СПП WB = скидка от цены после скидки продавца до финальной цены
             discounted_price = price_data.discounted_price
