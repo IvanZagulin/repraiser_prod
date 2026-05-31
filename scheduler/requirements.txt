@@ -9,3 +9,5 @@ pydantic-settings==2.1.0
 python-jose[cryptography]==3.3.0
 python-telegram-bot==20.7
 PyJWT==2.8.0
+
+curl_cffi==0.7.4
