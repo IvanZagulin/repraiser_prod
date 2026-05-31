@@ -419,14 +419,11 @@ def setup_scheduler() -> AsyncIOScheduler:
     )
     logger.info("Задача 'repricer_job' зарегистрирована (каждый час ровно в :00)")
 
-    scheduler.add_job(
-        health_check_proxies,
-        trigger=IntervalTrigger(minutes=30),
-        id="proxy_health_check",
-        name="Proxy Health Check",
-        replace_existing=True
-    )
-    logger.info("Задача 'proxy_health_check' зарегистрирована (каждые 30 мин.)")
+    # Proxy health-check отключён — прокси не используются для каталога
+    # (вызывали массовый бан WB). При необходимости раскомментировать.
+    # scheduler.add_job(health_check_proxies, trigger=IntervalTrigger(minutes=30),
+    #     id="proxy_health_check", name="Proxy Health Check", replace_existing=True)
+    logger.info("Proxy health-check ОТКЛЮЧЁН (прокси не используются)")
 
     scheduler.add_job(
         catalog_sync_job,

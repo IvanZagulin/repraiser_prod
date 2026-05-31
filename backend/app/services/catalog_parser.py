@@ -176,20 +176,7 @@ class CatalogParser:
         url = self._build_url(nm_id)
         logger.info(f"Парсинг товара nm_id={nm_id}")
 
-        # Сначала пытаемся через прокси (get_next_proxy сам инициализирует пул
-        # при первом вызове). Если прокси не загружены или все мёртвые — fallback
-        # на direct запрос.
-        for attempt in range(1, self.max_retries + 1):
-            proxy = await proxy_pool.get_next_proxy()
-            if not proxy:
-                break  # пул пустой или все мёртвые — выходим на direct
-            logger.debug(f"Попытка {attempt}/{self.max_retries} через {proxy}")
-            data = await self._request_with_proxy(url, proxy)
-            if data is not None:
-                return self._parse_response(nm_id, data)
-            await asyncio.sleep(0.5)
-
-        # Прямой запрос (когда нет прокси или они все упали)
+        # Direct-only: прокси отключены для каталога (вызывали массовый бан WB)
         data = await self._request_direct(url)
         if data is None:
             logger.error(f"nm_id={nm_id}: не удалось получить данные ни через прокси, ни напрямую")
