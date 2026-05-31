@@ -1461,7 +1461,10 @@ class RepricerEngine:
                 pending = 0
                 for dec in decisions:
                     if "skip_code" in dec and dec["current_data"] is None:
-                        continue  # уже посчитан как ошибка
+                        # Товар не обработан (PARSE_ERROR, WB_API_ERROR, etc.)
+                        # без current_data → нечего сохранять, но СЧИТАЕМ в errors.
+                        results["errors"] += 1
+                        continue
                     try:
                         product = dec["product"]
                         reason_code = self._finalize_decision(
