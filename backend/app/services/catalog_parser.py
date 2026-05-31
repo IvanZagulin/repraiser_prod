@@ -151,6 +151,8 @@ class CatalogParser:
 
     async def _request_direct(self, url: str) -> Optional[dict]:
         """Прямой запрос без прокси"""
+        import random
+        await asyncio.sleep(random.uniform(0.05, 0.15))  # антибот WB
         try:
             async with httpx.AsyncClient(
                 timeout=15,
@@ -232,19 +234,8 @@ class CatalogParser:
                 url = self._build_batch_url(chunk)
                 data = None
 
-                # Всегда пробуем прокси (get_next_proxy auto-init); если None —
-                # сразу direct. Раньше проверяли _initialized, но он False до
-                # первого вызова → прокси не использовались в celery вообще.
-                for attempt in range(1, self.max_retries + 1):
-                    proxy = await proxy_pool.get_next_proxy()
-                    if not proxy:
-                        break
-                    data = await self._request_with_proxy(url, proxy)
-                    if data is not None:
-                        break
-
-                if data is None:
-                    data = await self._request_direct(url)
+                # Direct-only (прокси отключены для каталога)
+                data = await self._request_direct(url)
 
                 chunk_result: Dict[int, Optional[ProductData]] = {}
                 if data is None:
