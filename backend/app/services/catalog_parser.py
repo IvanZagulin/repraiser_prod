@@ -4,6 +4,7 @@ import time
 from typing import Optional, Dict, Any
 from decimal import Decimal
 import httpx
+from curl_cffi.requests import AsyncSession
 from app.config import settings
 from app.services.proxy_pool import proxy_pool, ProxyConfig
 
@@ -165,10 +166,10 @@ class CatalogParser:
             return None
         await asyncio.sleep(random.uniform(0.05, 0.15))  # антибот WB
         try:
-            async with httpx.AsyncClient(
+            async with AsyncSession(
                 timeout=15,
-                follow_redirects=True,
                 headers=_HEADERS,
+                impersonate="chrome124",
             ) as client:
                 response = await client.get(url)
                 if response.status_code == 200:
