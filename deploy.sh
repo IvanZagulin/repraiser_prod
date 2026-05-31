@@ -7,6 +7,27 @@ cd ~/repraiser_prod/repraiser_prod
 # НЕ трогаем → нет downtime БД и потери метрик при каждом деплое.
 APP_SERVICES="backend celery_worker scheduler flower frontend"
 
+# === Guard: не деплоить если celery занят ===
+# Рестарт celery при активных задачах (acks_late=True) вызывает redelivery
+# и может привести к 429-шторму WB API. Ждём до 5 мин.
+echo "[deploy] Проверяем что celery свободен..."
+MAX_WAIT=300
+WAITED=0
+while true; do
+    ACTIVE=$(docker exec wb_repricer_celery celery -A app.celery_app inspect active 2>/dev/null | grep -c "'id':" || echo "0")
+    if [ "$ACTIVE" = "0" ] || [ "$ACTIVE" = "" ]; then
+        echo "[deploy] Celery свободен ✓"
+        break
+    fi
+    if [ "$WAITED" -ge "$MAX_WAIT" ]; then
+        echo "[deploy] WARNING: celery занят ($ACTIVE задач) уже ${MAX_WAIT}с — продолжаем деплой принудительно"
+        break
+    fi
+    echo "[deploy] Celery занят ($ACTIVE задач), ждём... (${WAITED}/${MAX_WAIT}с)"
+    sleep 15
+    WAITED=$((WAITED + 15))
+done
+
 echo "[deploy] Pulling from GitHub..."
 git pull origin main
 
@@ -18,12 +39,10 @@ echo "[deploy] Building app images..."
 docker-compose build $APP_SERVICES
 
 # Применяем миграции на свежесобранном образе ДО пересоздания контейнеров.
-# Раньше этого шага не было вовсе — миграции приходилось гонять руками.
 echo "[deploy] Running DB migrations (alembic upgrade head)..."
 docker-compose run --rm --no-deps backend alembic upgrade head
 
-# --no-deps: не перезапускаем db/redis (они в depends_on). Пересоздаются только
-# изменившиеся app-сервисы; БД и мониторинг продолжают работать без перерыва.
+# --no-deps: не перезапускаем db/redis. Пересоздаются только app-сервисы.
 echo "[deploy] Recreating app services (DB/Redis/monitoring untouched)..."
 docker-compose up -d --no-deps $APP_SERVICES
 
