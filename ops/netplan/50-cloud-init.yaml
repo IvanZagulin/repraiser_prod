@@ -1,0 +1,31 @@
+network:
+  version: 2
+  ethernets:
+    eth0:
+      match:
+        macaddress: "d0:0d:10:2a:67:04"
+      dhcp4: true
+      dhcp4-overrides:
+        use-routes: false
+        route-metric: 300
+      dhcp6: false
+      set-name: "eth0"
+    eth1:
+      match:
+        macaddress: "d0:1d:10:2a:67:04"
+      dhcp4: true
+      dhcp4-overrides:
+        use-routes: true
+        route-metric: 100
+      dhcp6: false
+      set-name: "eth1"
+      routes:
+      - table: 101
+        to: "0.0.0.0/0"
+        via: "10.129.0.1"
+      - scope: "link"
+        table: 101
+        to: "10.129.0.0/24"
+      routing-policy:
+      - table: 101
+        from: "10.129.0.6"

@@ -15,3 +15,9 @@ sudo systemctl enable --now wb-repricer-card-egress.service wb-repricer-card-egr
 ```
 
 The timer refreshes the resolved `card.wb.ru` IPs every 30 minutes. Keep `SRC_NET` in the script aligned with the Docker network subnet.
+
+## Network routing after reboot
+
+Production keeps the normal server default route on `eth1` / `10.129.0.6` (`51.250.23.69`). `eth0` / `10.129.0.32` maps to the dedicated WB egress address `89.169.175.194` and does not install a normal default route.
+
+The persisted netplan/cloud-init files are archived under `ops/netplan/` and `ops/cloud-init/`. Apply them only on this server/network layout.
