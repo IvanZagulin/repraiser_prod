@@ -473,6 +473,25 @@ class RepricerEngine:
                 logger.warning(f"Не удалось получить цену конкурента nm_id={nm_id}: {e}")
 
         if not prices:
+            # Каталог недоступен для всех конкурентов (403/бан).
+            # Fallback: competitor_price из последнего снэпшота нашего товара.
+            last_snap = (
+                self.db.query(PriceSnapshot.competitor_price, PriceSnapshot.competitor_nm_id)
+                .filter(
+                    PriceSnapshot.product_id == config.product_id,
+                    PriceSnapshot.competitor_price != None,
+                    PriceSnapshot.competitor_price > 0,
+                )
+                .order_by(PriceSnapshot.snapshot_at.desc())
+                .first()
+            )
+            if last_snap:
+                logger.info(
+                    "Конкурент для config_id=%s: каталог недоступен, fallback на snapshot "
+                    "competitor_price=%s (nm_id=%s)",
+                    config.id, last_snap.competitor_price, last_snap.competitor_nm_id,
+                )
+                return last_snap.competitor_price, last_snap.competitor_nm_id, None
             return None, None, None
 
         if rule == "cheapest_instock":
