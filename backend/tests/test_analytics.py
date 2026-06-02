@@ -81,7 +81,6 @@ class TestAnalyticsPriceDynamics:
         from app.models.price_snapshot import PriceSnapshot
         snap = PriceSnapshot(
             product_id=test_product.id,
-            user_id=test_user.id,
             seller_price=Decimal("1000"),
             final_price=Decimal("900"),
             discount=Decimal("10"),

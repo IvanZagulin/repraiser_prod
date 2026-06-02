@@ -20,7 +20,7 @@ class TestSettingsGet:
 
 class TestSettingsUpdate:
     def test_update_returns_ok(self, client):
-        r = client.put("/api/settings", json={})
+        r = client.put("/api/settings", json={"wb_wallet_discount_pct": 2.0})
         assert r.status_code == 200
 
     def test_update_single_setting(self, client):

@@ -153,7 +153,11 @@ class TestProductHistory:
     def test_history_empty(self, client, test_product):
         r = client.get(f"/api/products/{test_product.id}/history")
         assert r.status_code == 200
-        assert isinstance(r.json(), list)
+        data = r.json()
+        assert isinstance(data, dict)
+        assert data["product_id"] == test_product.id
+        assert isinstance(data["snapshots"], list)
+        assert data["snapshots"] == []
 
     def test_history_idor(self, client, db_session):
         from app.models.user import User

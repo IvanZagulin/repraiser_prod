@@ -115,7 +115,7 @@ class TestAccountUpdate:
         db_session.add(acc); db_session.commit()
 
         r = client.put(f"/api/accounts/{acc.id}", json={
-            "name": "Hacked", "wb_api_token": "stolen"})
+            "name": "Hacked", "wb_api_token": "stolen-token-1234567890"})
         assert r.status_code == 404
 
         db_session.delete(acc); db_session.delete(other); db_session.commit()
