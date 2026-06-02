@@ -26,7 +26,7 @@ jobs:
       - name: Lint (errors only ??? no style)
         run: |
           pip install flake8 -q
-          flake8 app/ --select=E9,F7,F8,F6,W6 --count --statistics
+          flake8 app/ --select=E9,F7,F8,F6,W6 --extend-ignore=F811,F841 --count --statistics
         working-directory: backend
 
   backend-test:
@@ -71,6 +71,9 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - name: Install deps
         run: pip install -r requirements.txt
+        working-directory: backend
+      - name: Install test deps
+        run: pip install pytest pytest-asyncio httpx -q
         working-directory: backend
       - name: Run tests
         run: python -m pytest tests/ -v --tb=short

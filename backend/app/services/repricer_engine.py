@@ -19,6 +19,7 @@ from app.services import (
 )
 from app.utils.jwt import is_token_expired
 from app.redis_client import cache_get, cache_set
+from app.services.activity_logger import log_activity
 
 logger = logging.getLogger(__name__)
 
