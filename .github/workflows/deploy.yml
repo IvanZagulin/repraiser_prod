@@ -23,23 +23,12 @@ jobs:
       - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/id_ed25519
+          printf '%s' "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
-          chmod 644 ~/.ssh/known_hosts
+          ssh-keyscan -H "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Deploy via SSH
-        run: |
-          ssh -i ~/.ssh/id_ed25519 \
-              -o StrictHostKeyChecking=yes \
-              -o BatchMode=yes \
-              ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
-              'cd ~/repraiser_prod/repraiser_prod && bash deploy.sh'
+        run: ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes -o BatchMode=yes ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} 'cd ~/repraiser_prod/repraiser_prod && bash deploy.sh'
 
       - name: Verify deployment
-        run: |
-          ssh -i ~/.ssh/id_ed25519 \
-              -o StrictHostKeyChecking=yes \
-              -o BatchMode=yes \
-              ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
-              'STATUS=$(docker inspect --format="{{.State.Health.Status}}" wb_repricer_backend_prod 2>/dev/null); echo "Backend status: $STATUS"; [ "$STATUS" = "healthy" ] && echo "Deploy successful!" || (echo "ERROR: backend is $STATUS"; exit 1)'
+        run: ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes -o BatchMode=yes ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} 'STATUS=$(docker inspect --format="{{.State.Health.Status}}" wb_repricer_backend_prod 2>/dev/null); echo "Backend: $STATUS"; [ "$STATUS" = "healthy" ] && echo "OK" || exit 1'
