@@ -1,0 +1,375 @@
+name: wb-repricer-prod
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: wb_repricer_db_prod
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-wb_repricer}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    command: >
+      postgres
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c work_mem=2MB
+      -c maintenance_work_mem=128MB
+      -c max_connections=200
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.5"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - wb_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: wb_repricer_redis
+    restart: unless-stopped
+    networks:
+      - wb_network
+    volumes:
+      - redis_data:/data
+    command: redis-server --requirepass ${REDIS_PASSWORD} --maxmemory 512mb --maxmemory-policy volatile-lru
+    deploy:
+      resources:
+        limits:
+          memory: 576m
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: wb_repricer_backend_prod
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-wb_repricer}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: HS256
+      JWT_EXPIRE_HOURS: 24
+      CORS_ORIGINS: https://admin.quasar-x.ru
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      SOCKS5_PROXIES: ${SOCKS5_PROXIES}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
+      APP_URL: ${APP_URL:-https://qvaz.quasar-x.ru}
+      FERNET_KEY: ${FERNET_KEY}
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --timeout 120 --graceful-timeout 30
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "2.0"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/api/health\")'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - wb_network
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: wb_repricer_celery
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-wb_repricer}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: HS256
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      SOCKS5_PROXIES: ${SOCKS5_PROXIES}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
+      APP_URL: ${APP_URL:-https://qvaz.quasar-x.ru}
+      FERNET_KEY: ${FERNET_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # autoscale=4,2: макс 4 воркера × 15 коннектов = 60 к Postgres (не перегружаем пул)
+    command: celery -A app.celery_app worker --loglevel=info --autoscale=4,2
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "3.0"
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - wb_network
+
+  scheduler:
+    build:
+      context: ./scheduler
+      dockerfile: Dockerfile
+    container_name: wb_repricer_scheduler_prod
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-wb_repricer}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      BACKEND_URL: http://backend:8000
+      JWT_SECRET: ${JWT_SECRET}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      SOCKS5_PROXIES: ${SOCKS5_PROXIES}
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/backend
+    command: python scheduler.py
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+          cpus: "0.5"
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - wb_network
+
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: wb_repricer_flower
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-wb_repricer}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: HS256
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+    ports:
+      - "127.0.0.1:5555:5555"
+    depends_on:
+      - redis
+    user: "0"
+    command: celery -A app.celery_app flower --port=5555 --basic_auth=${ADMIN_EMAIL}:${ADMIN_PASSWORD} --persistent=True --db=/data/flower.db --max_tasks=5000
+    volumes:
+      - flower_data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.25"
+    restart: unless-stopped
+    networks:
+      - wb_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: https://qvaz.quasar-x.ru
+    container_name: wb_repricer_frontend_prod
+    ports:
+      - "127.0.0.1:5173:80"
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+          cpus: "0.25"
+    restart: unless-stopped
+    networks:
+      - wb_network
+
+  loki:
+    image: grafana/loki:2.9.8
+    container_name: wb_repricer_loki
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - ./monitoring/loki-config.yml:/etc/loki/local-config.yaml
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
+    restart: unless-stopped
+    networks:
+      - wb_network
+
+  promtail:
+    image: grafana/promtail:2.9.8
+    container_name: wb_repricer_promtail
+    volumes:
+      - ./monitoring/promtail-config.yml:/etc/promtail/config.yml
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/config.yml
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.25"
+    restart: unless-stopped
+    networks:
+      - wb_network
+    depends_on:
+      - loki
+
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: wb_repricer_prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.25"
+    restart: unless-stopped
+    networks:
+      - wb_network
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: wb_repricer_cadvisor
+    ports:
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    devices:
+      - /dev/kmsg
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.25"
+    restart: unless-stopped
+    networks:
+      - wb_network
+
+  node_exporter:
+    image: prom/node-exporter:v1.7.0
+    container_name: wb_repricer_node_exporter
+    ports:
+      - "127.0.0.1:9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+          cpus: "0.1"
+    restart: unless-stopped
+    networks:
+      - wb_network
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: wb_repricer_grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${ADMIN_EMAIL}
+      GF_SECURITY_ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+      - ./monitoring/grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml
+      - ./monitoring/dashboards:/etc/grafana/dashboards
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.25"
+    restart: unless-stopped
+    networks:
+      - wb_network
+    depends_on:
+      - loki
+      - prometheus
+
+volumes:
+  postgres_data:
+  redis_data:
+  loki_data:
+  grafana_data:
+  prometheus_data:
+  flower_data:
+
+networks:
+  wb_network:
+    driver: bridge

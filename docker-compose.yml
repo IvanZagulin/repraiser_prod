@@ -251,7 +251,7 @@ services:
       - wb_network
 
   promtail:
-    image: grafana/promtail:2.9.8
+    image: grafana/promtail:3.4.2
     container_name: wb_repricer_promtail
     volumes:
       - ./monitoring/promtail-config.yml:/etc/promtail/config.yml
@@ -290,7 +290,7 @@ services:
       - wb_network
 
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    image: gcr.io/cadvisor/cadvisor:v0.52.1
     container_name: wb_repricer_cadvisor
     ports:
       - "127.0.0.1:8081:8080"
