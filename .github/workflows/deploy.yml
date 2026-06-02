@@ -25,15 +25,41 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
 
+      - name: Debug secrets format
+        env:
+          H: ${{ secrets.SERVER_HOST }}
+          U: ${{ secrets.SERVER_USER }}
+        run: |
+          echo "HOST bytes: $(printf '%s' "$H" | wc -c)"
+          echo "USER bytes: $(printf '%s' "$U" | wc -c)"
+          echo "HOST hex: $(printf '%s' "$H" | xxd -p)"
+          echo "USER hex: $(printf '%s' "$U" | xxd -p)"
+
       - name: Add server to known hosts
-        run: ssh-keyscan -H "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts
+        env:
+          H: ${{ secrets.SERVER_HOST }}
+        run: |
+          CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
+          echo "Clean host: $CLEAN_H"
+          ssh-keyscan -H "$CLEAN_H" >> ~/.ssh/known_hosts
 
       - name: Deploy
-        run: ssh "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" 'cd ~/repraiser_prod/repraiser_prod && bash deploy.sh'
+        env:
+          H: ${{ secrets.SERVER_HOST }}
+          U: ${{ secrets.SERVER_USER }}
+        run: |
+          CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
+          CLEAN_U=$(printf '%s' "$U" | tr -d '[:space:]"'"'"'')
+          echo "ssh ${CLEAN_U}@${CLEAN_H} ..."
+          ssh "${CLEAN_U}@${CLEAN_H}" 'cd ~/repraiser_prod/repraiser_prod && bash deploy.sh'
 
       - name: Verify
+        env:
+          H: ${{ secrets.SERVER_HOST }}
+          U: ${{ secrets.SERVER_USER }}
         run: |
-          STATUS=$(ssh "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
-            'docker inspect --format="{{.State.Health.Status}}" wb_repricer_backend_prod 2>/dev/null')
-          echo "Backend status: $STATUS"
+          CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
+          CLEAN_U=$(printf '%s' "$U" | tr -d '[:space:]"'"'"'')
+          STATUS=$(ssh "${CLEAN_U}@${CLEAN_H}" 'docker inspect --format="{{.State.Health.Status}}" wb_repricer_backend_prod 2>/dev/null')
+          echo "Backend: $STATUS"
           [ "$STATUS" = "healthy" ] && echo "Deploy successful!" || exit 1
