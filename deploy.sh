@@ -14,8 +14,14 @@ echo "[deploy] Проверяем что celery свободен..."
 MAX_WAIT=300
 WAITED=0
 while true; do
-    ACTIVE=$(docker exec wb_repricer_celery celery -A app.celery_app inspect active 2>/dev/null | grep -c "'id':" || echo "0")
-    if [ "$ACTIVE" = "0" ] || [ "$ACTIVE" = "" ]; then
+    # grep -c returns "0" with exit code 1 on no matches, causing "0\n0" via ||
+    # Use grep -q to detect any active tasks
+    if docker exec wb_repricer_celery celery -A app.celery_app inspect active 2>/dev/null | grep -q "'id':"; then
+        ACTIVE="busy"
+    else
+        ACTIVE="0"
+    fi
+    if [ "$ACTIVE" = "0" ]; then
         echo "[deploy] Celery свободен ✓"
         break
     fi
