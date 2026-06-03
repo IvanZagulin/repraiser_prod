@@ -102,3 +102,61 @@ class TestLockLifecycle:
         # SET звался дважды, DELETE один раз
         assert mock_client.set.call_count == 2
         mock_client.delete.assert_called_once_with("repricer:run_lock:1")
+
+
+# ─── Catalog sync lock ────────────────────────────────────────────────────────
+
+
+class TestAcquireCatalogSyncLock:
+    """Per-account дедупликация catalog.sync_account — антишторм после деплоя."""
+
+    def test_returns_true_on_first_acquire(self):
+        mock_client = MagicMock()
+        mock_client.set.return_value = True
+        with patch.object(redis_client, "_get_client", return_value=mock_client):
+            assert redis_client.acquire_catalog_sync_lock(account_id=9) is True
+
+        args, kwargs = mock_client.set.call_args
+        assert args[0] == "catalog:sync_lock:9"
+        assert kwargs.get("nx") is True
+        assert kwargs.get("ex") == 3600  # default TTL = 1 час
+
+    def test_returns_false_when_already_locked(self):
+        """Главный тест: повторная постановка sync для того же аккаунта → False."""
+        mock_client = MagicMock()
+        mock_client.set.return_value = None
+        with patch.object(redis_client, "_get_client", return_value=mock_client):
+            assert redis_client.acquire_catalog_sync_lock(account_id=9) is False
+
+    def test_locks_are_independent_per_account(self):
+        """Lock на account=9 не влияет на account=10."""
+        mock_client = MagicMock()
+        mock_client.set.return_value = True
+        with patch.object(redis_client, "_get_client", return_value=mock_client):
+            redis_client.acquire_catalog_sync_lock(account_id=9)
+            redis_client.acquire_catalog_sync_lock(account_id=10)
+
+        keys = [c.args[0] for c in mock_client.set.call_args_list]
+        assert keys == ["catalog:sync_lock:9", "catalog:sync_lock:10"]
+
+    def test_returns_false_on_redis_failure(self):
+        """Redis недоступен → fail closed (safer default)."""
+        mock_client = MagicMock()
+        mock_client.set.side_effect = redis_lib.ConnectionError("boom")
+        with patch.object(redis_client, "_get_client", return_value=mock_client):
+            assert redis_client.acquire_catalog_sync_lock(account_id=9) is False
+
+
+class TestReleaseCatalogSyncLock:
+    def test_deletes_correct_key(self):
+        mock_client = MagicMock()
+        with patch.object(redis_client, "_get_client", return_value=mock_client):
+            redis_client.release_catalog_sync_lock(account_id=42)
+
+        mock_client.delete.assert_called_once_with("catalog:sync_lock:42")
+
+    def test_does_not_raise_on_redis_error(self):
+        mock_client = MagicMock()
+        mock_client.delete.side_effect = redis_lib.ConnectionError("boom")
+        with patch.object(redis_client, "_get_client", return_value=mock_client):
+            redis_client.release_catalog_sync_lock(account_id=1)  # не падает

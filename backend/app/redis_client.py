@@ -65,3 +65,33 @@ def release_run_lock(user_id: int) -> None:
         _get_client().delete(f"repricer:run_lock:{user_id}")
     except Exception as e:
         logger.warning(f"Redis release_run_lock(user={user_id}) error: {e}")
+
+
+# ─── Catalog sync per-account lock ────────────────────────────────────────────
+# Чтобы каталог-синк не дублировался при шторме (рестарт backend / повторный
+# /accounts PUT и т.п.), захватываем эксклюзивный lock на account_id.
+
+def acquire_catalog_sync_lock(account_id: int, ttl: int = 3600) -> bool:
+    """Получить эксклюзивный lock на catalog sync для конкретного аккаунта.
+
+    TTL = 1 час: больше типичного времени sync'а, страховка от deadlock'а
+    при креше воркера. Если Redis недоступен — отказываем (safer default),
+    лучше пропустить синк, чем устроить дубликат-шторм.
+    """
+    try:
+        key = f"catalog:sync_lock:{account_id}"
+        return bool(_get_client().set(key, "1", nx=True, ex=ttl))
+    except Exception as e:
+        logger.error(
+            f"Redis acquire_catalog_sync_lock(account={account_id}) error: {e} — "
+            "блокируем запуск во избежание дублирования"
+        )
+        return False
+
+
+def release_catalog_sync_lock(account_id: int) -> None:
+    """Освободить lock catalog-sync."""
+    try:
+        _get_client().delete(f"catalog:sync_lock:{account_id}")
+    except Exception as e:
+        logger.warning(f"Redis release_catalog_sync_lock(account={account_id}) error: {e}")

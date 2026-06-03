@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from app.celery_app import celery_app
 from app.database import SessionLocal
+from app.redis_client import acquire_catalog_sync_lock, release_catalog_sync_lock
 
 logger = logging.getLogger(__name__)
 
@@ -13,14 +14,28 @@ logger = logging.getLogger(__name__)
     name="catalog.sync_account",
     max_retries=3,
     default_retry_delay=60,
-    time_limit=600,   # 10 минут максимум на один аккаунт
+    # На 30k+ карточек × WB throttle (8с ожидания на 429) реальный sync легко
+    # занимает 30+ минут. Прежний 600 (10 мин) бил TimeLimitExceeded → задача
+    # не успевала освободить lock → реtrigger → шторм. 3600 = 1 час.
+    time_limit=3600,
 )
 def sync_wb_catalog_task(self, account_id: int):
     """
     Скачивает ВСЕ карточки WB для аккаунта через cursor-пагинацию
     и сохраняет только nmID + vendorCode в таблицу wb_catalog.
-    Вызывается при создании/обновлении аккаунта и раз в неделю.
+
+    Защищён per-account Redis-lock: если sync для этого account_id уже идёт,
+    дубликат сразу выходит ({"status": "skipped"}). Это устраняет шторм после
+    рестарта backend'а — повторные постановки в очередь становятся no-op.
     """
+    # ─── Дедупликация по account_id ───────────────────────────────────────
+    if not acquire_catalog_sync_lock(account_id):
+        logger.info(
+            f"[catalog.sync] account_id={account_id}: sync уже идёт, "
+            "пропускаем дублирующийся запуск"
+        )
+        return {"status": "skipped", "reason": "already running"}
+
     from app.models.account import Account
     from app.models.wb_catalog import WBCatalog
     from app.services.wb_api import create_wb_client, PartialCatalogError
@@ -180,7 +195,14 @@ def sync_wb_catalog_task(self, account_id: int):
         logger.error(f"[catalog.sync] account_id={account_id}: ошибка — {exc}", exc_info=True)
         raise self.retry(exc=exc)
     finally:
-        db.close()
+        try:
+            db.close()
+        except Exception as e:
+            logger.error(f"[catalog.sync] account_id={account_id}: db.close() failed: {e}")
+        try:
+            release_catalog_sync_lock(account_id)
+        except Exception as e:
+            logger.error(f"[catalog.sync] account_id={account_id}: release_lock failed: {e}")
 
 
 @celery_app.task(

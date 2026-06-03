@@ -295,25 +295,22 @@ async def startup_db_migration():
                     log.warning(f"[startup] Token encryption migration failed: {e}")
                     conn.rollback()
 
-            # 5. Ставим в очередь синхронизацию фото для аккаунтов без image_url
-            try:
-                missing_img_accounts = conn.execute(text("""
-                    SELECT DISTINCT p.account_id
-                    FROM products p
-                    JOIN accounts a ON a.id = p.account_id
-                    WHERE p.image_url IS NULL
-                      AND a.is_active = TRUE
-                """)).fetchall()
-                if missing_img_accounts:
-                    from app.tasks.catalog_sync import sync_wb_catalog_task
-                    for row in missing_img_accounts:
-                        sync_wb_catalog_task.delay(row.account_id)
-                    log.info(
-                        f"[startup] Queued catalog sync for "
-                        f"{len(missing_img_accounts)} account(s) with missing product images"
-                    )
-            except Exception as e:
-                log.warning(f"[startup] Failed to queue catalog sync for images: {e}")
+            # 5. (Удалено) Автозапуск catalog sync при каждом старте backend'а.
+            #
+            # Прежняя логика: при найденном хоть одном товаре без image_url
+            # ставила в очередь sync_wb_catalog_task для всего аккаунта.
+            # На больших каталогах (30к+ карточек) это:
+            #   - запускалось на КАЖДЫЙ деплой/рестарт backend'а
+            #   - дублировалось до 8× за пару деплоев подряд
+            #   - забивало все 4 celery-воркера на 30+ минут
+            #   - блокировало scheduled-репрайс (ждал в очереди и не запускался)
+            #   - почти никогда не успевало добежать до конца за time_limit=600s
+            #     → возвращалось в очередь → повторение
+            #
+            # Catalog sync теперь идёт только по явным триггерам:
+            #   - PUT /api/accounts/{id} с новым WB-токеном (app/api/accounts.py)
+            #   - Beat-задача catalog.sync_all (раз в неделю)
+            # Плюс per-account Redis-lock в самом таске защищает от дублирования.
 
         finally:
             conn.execute(text("SELECT pg_advisory_unlock(42)"))
