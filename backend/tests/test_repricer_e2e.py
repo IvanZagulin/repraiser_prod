@@ -40,6 +40,29 @@ class TestRunRepricerDryRun:
         assert run.run_type == "manual"
         assert run.completed_at is not None
 
+    def test_dry_run_does_not_error_on_clean_path(
+        self, db_session, test_user, test_account, test_product, test_product_config
+    ):
+        """Регрессия: dry_run-блок в _decide_product должен использовать Decimal.
+
+        Если кто-то снова заменит Decimal на int в фиктивных current_data,
+        арифметика `float / Decimal` в _calculate_seller_price_from_final
+        упадёт TypeError и весь товар улетит в error_count. Этот тест ловит
+        такую регрессию до прода.
+        """
+        engine = RepricerEngine(db_session, user_id=test_user.id)
+        run = asyncio.run(
+            engine.run_repricer(
+                product_ids=[test_product.id],
+                run_type="manual",
+                dry_run=True,
+            )
+        )
+        assert run.error_count == 0, (
+            f"dry_run упал {run.error_count} раз — проверь типы в current_data "
+            "(должны быть Decimal, не int/float)"
+        )
+
     def test_total_products_at_least_one(
         self, db_session, test_user, test_account, test_product, test_product_config
     ):

@@ -1029,10 +1029,13 @@ class RepricerEngine:
                     "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": None, "_t0": _t0}
 
         if dry_run:
+            # Все числовые поля должны быть Decimal — их умножает/делит дальше
+            # _calculate_seller_price_from_final, а int/int в Python 3 даёт float,
+            # что несовместимо с Decimal-арифметикой (TypeError на float * Decimal).
             current_data = {
-                "seller_price": (config.min_price or 1000) + 50,
-                "final_price": config.min_price or 1000,
-                "spp": 10,
+                "seller_price": Decimal(str(config.min_price or 1000)) + Decimal("50"),
+                "final_price": Decimal(str(config.min_price or 1000)),
+                "spp": Decimal("10"),
                 "is_in_promo": False,
                 "total_quantity": 5,
             }
