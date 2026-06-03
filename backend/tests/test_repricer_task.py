@@ -136,3 +136,98 @@ class TestLockLifecycle:
                 result.get()
 
         mock_release.assert_called_once_with(test_user.id)
+
+
+# ─── Graceful SIGTERM handling ────────────────────────────────────────────────
+
+
+class TestAbortCurrentRun:
+    """`_abort_current_run` — финализатор для сигнал-хендлера."""
+
+    def test_noop_when_no_active_run(self):
+        """Если _run_state.user_id не установлен — ничего не делаем (no exception)."""
+        from app.tasks.repricer_task import _abort_current_run, _run_state
+        assert _run_state.user_id is None
+        _abort_current_run("test reason")
+
+    def test_marks_run_as_failed_and_releases_lock(
+        self, patched_session, test_user, test_account, db_session
+    ):
+        """При SIGTERM-сценарии: running прогон → failed, lock отпущен."""
+        from app.models.repricer_run import RepricerRun
+        from app.tasks.repricer_task import _abort_current_run, _run_state
+
+        # Воссоздаём ситуацию зомби-прогона: запись в running без owner-кода
+        run = RepricerRun(
+            user_id=test_user.id,
+            run_type="scheduled",
+            status="running",
+            total_products=1000,
+        )
+        db_session.add(run)
+        db_session.commit()
+
+        _run_state.user_id = test_user.id
+        try:
+            with patch("app.tasks.repricer_task.release_run_lock") as mock_release:
+                _abort_current_run("test: simulated SIGTERM")
+            mock_release.assert_called_once_with(test_user.id)
+        finally:
+            _run_state.user_id = None
+
+        db_session.refresh(run)
+        assert run.status == "failed"
+        assert run.completed_at is not None
+        assert "SIGTERM" in (run.error_message or "")
+
+    def test_safe_when_no_running_run_for_user(self, patched_session, test_user):
+        """Если в БД нет running-прогона — просто отпускаем lock и выходим."""
+        from app.tasks.repricer_task import _abort_current_run, _run_state
+
+        _run_state.user_id = test_user.id
+        try:
+            with patch("app.tasks.repricer_task.release_run_lock") as mock_release:
+                _abort_current_run("test: no run")
+            # Даже без прогона lock всё равно отпускаем (защита от висящего ключа)
+            mock_release.assert_called_once_with(test_user.id)
+        finally:
+            _run_state.user_id = None
+
+
+class TestGracefulShutdownGuard:
+    """`_graceful_shutdown_guard` — контекстный менеджер сигнал-хендлеров."""
+
+    def test_sets_and_clears_run_state(self):
+        from app.tasks.repricer_task import _graceful_shutdown_guard, _run_state
+
+        assert _run_state.user_id is None
+        with _graceful_shutdown_guard(user_id=42):
+            assert _run_state.user_id == 42
+        assert _run_state.user_id is None
+
+    def test_clears_state_on_exception(self):
+        """Даже если внутри контекста выброшено исключение — state очищается."""
+        from app.tasks.repricer_task import _graceful_shutdown_guard, _run_state
+
+        try:
+            with _graceful_shutdown_guard(user_id=42):
+                raise RuntimeError("oops")
+        except RuntimeError:
+            pass
+        assert _run_state.user_id is None
+
+    def test_restores_previous_handlers(self):
+        """Прежние SIGTERM/SIGINT хендлеры восстанавливаются на выходе."""
+        import signal
+        from app.tasks.repricer_task import _graceful_shutdown_guard
+
+        prev_term = signal.getsignal(signal.SIGTERM)
+        prev_int = signal.getsignal(signal.SIGINT)
+
+        with _graceful_shutdown_guard(user_id=1):
+            # Внутри — наш хендлер
+            assert signal.getsignal(signal.SIGTERM) is not prev_term
+            assert signal.getsignal(signal.SIGINT) is not prev_int
+
+        assert signal.getsignal(signal.SIGTERM) == prev_term
+        assert signal.getsignal(signal.SIGINT) == prev_int

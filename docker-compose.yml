@@ -136,6 +136,10 @@ services:
         condition: service_healthy
     # autoscale=4,2: макс 4 воркера × 15 коннектов = 60 к Postgres (не перегружаем пул)
     command: celery -A app.celery_app worker --loglevel=info --autoscale=4,2
+    # Долгий graceful-период: SIGTERM-хендлер в repricer_task должен успеть
+    # пометить in-flight RepricerRun как failed и отпустить Redis-lock до того,
+    # как Docker пришлёт SIGKILL. 180s покрывает paranoia-сценарий.
+    stop_grace_period: 180s
     deploy:
       resources:
         limits:
