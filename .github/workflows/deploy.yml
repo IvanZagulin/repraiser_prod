@@ -33,23 +33,15 @@ jobs:
           CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
           ssh-keyscan -H "$CLEAN_H" >> ~/.ssh/known_hosts
 
-      - name: Deploy
+      - name: Wait for Celery
         env:
           H: ${{ secrets.SERVER_HOST }}
           U: ${{ secrets.SERVER_USER }}
-          GH_REPO: ${{ github.repository }}
         run: |
           CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
           CLEAN_U=$(printf '%s' "$U" | tr -d '[:space:]"'"'"'')
-          ssh "${CLEAN_U}@${CLEAN_H}" bash -s "$GH_REPO" <<'DEPLOY_EOF'
-          set -e
-          REPO="$1"
-          PROJECT_DIR=~/repraiser_prod/repraiser_prod
-          cd "$PROJECT_DIR"
-
-          APP_SERVICES="backend celery_worker scheduler flower frontend"
-
-          # --- Wait for Celery to finish active tasks (max 5 min) ---
+          ssh "${CLEAN_U}@${CLEAN_H}" 'bash -s' <<'EOF'
+          cd ~/repraiser_prod/repraiser_prod
           echo "[deploy] Checking celery..."
           MAX_WAIT=300; WAITED=0
           while true; do
@@ -67,27 +59,46 @@ jobs:
             sleep 15
             WAITED=$((WAITED + 15))
           done
+          EOF
 
-          # --- Update source code ---
-          echo "[deploy] Updating source code..."
-          # Try git pull first; if .git permissions are broken, fall back to archive
-          if sudo -n chown -R "$(whoami):$(id -gn)" .git/ 2>/dev/null; then
-            echo "[deploy] Fixed .git ownership via sudo"
-          fi
-          if git pull origin main 2>&1; then
-            echo "[deploy] git pull OK ✓"
+      - name: Update source code
+        env:
+          H: ${{ secrets.SERVER_HOST }}
+          U: ${{ secrets.SERVER_USER }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
+          CLEAN_U=$(printf '%s' "$U" | tr -d '[:space:]"'"'"'')
+          REMOTE="${CLEAN_U}@${CLEAN_H}"
+          DIR="~/repraiser_prod/repraiser_prod"
+
+          # Try git pull first
+          if ssh "$REMOTE" "cd $DIR && sudo -n chown -R \$(whoami):\$(id -gn) .git/ 2>/dev/null; git pull origin main" 2>&1; then
+            echo "git pull OK ✓"
           else
-            echo "[deploy] git pull failed — downloading archive from GitHub..."
-            curl -sL "https://github.com/${REPO}/archive/refs/heads/main.tar.gz" \
-              | tar xz --strip-components=1
-            echo "[deploy] Archive extracted ✓"
+            echo "git pull failed — streaming archive from GitHub via runner..."
+            curl -sL -H "Authorization: token ${GH_TOKEN}" \
+              "https://api.github.com/repos/${GH_REPO}/tarball/main" \
+              | ssh "$REMOTE" "cd $DIR && tar xz --strip-components=1"
+            echo "Archive extracted ✓"
           fi
 
-          # --- Clean bytecache ---
+      - name: Build and deploy
+        env:
+          H: ${{ secrets.SERVER_HOST }}
+          U: ${{ secrets.SERVER_USER }}
+        run: |
+          CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
+          CLEAN_U=$(printf '%s' "$U" | tr -d '[:space:]"'"'"'')
+          ssh "${CLEAN_U}@${CLEAN_H}" 'bash -s' <<'EOF'
+          set -e
+          cd ~/repraiser_prod/repraiser_prod
+          APP_SERVICES="backend celery_worker scheduler flower frontend"
+
           find ./backend -name '*.pyc' -delete 2>/dev/null || true
           find ./backend -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
-          # --- Build & deploy ---
           echo "[deploy] Building app images..."
           docker compose build $APP_SERVICES
 
@@ -104,7 +115,7 @@ jobs:
 
           echo "[deploy] Done. Running containers:"
           docker compose ps --format 'table {{.Name}}\t{{.Status}}'
-          DEPLOY_EOF
+          EOF
 
       - name: Verify
         env:
