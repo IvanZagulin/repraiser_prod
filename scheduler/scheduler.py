@@ -303,9 +303,11 @@ async def cleanup_stale_runs():
 
     Если Celery-воркер упал или был убит по time_limit, запись RepricerRun
     остаётся в статусе 'running' навсегда. Это портит UI и блокирует логику
-    'последний прогон'. TTL = 70 мин (чуть больше Celery time_limit=3900s).
+    'последний прогон'. TTL = 185 мин (чуть больше Celery time_limit=10800s).
+    Меньший TTL помечает failed ещё живые медленные прогоны и снимает их
+    run-лок (инцидент 2026-06-10).
     """
-    STALE_MINUTES = 70
+    STALE_MINUTES = 185
     logger.info("Очистка зависших прогонов...")
     db = SessionLocal()
     try:

@@ -28,6 +28,10 @@ celery_app.conf.update(
     # Автореконнект к Redis-брокеру при разрыве
     broker_connection_retry_on_startup=True,
     broker_connection_max_retries=10,
+    # Visibility timeout должен превышать самую длинную задачу (time_limit=10800s),
+    # иначе Redis-брокер повторно доставляет ещё выполняющуюся задачу другому
+    # воркеру (инцидент 2026-06-10: дубль прогона через час после старта).
+    broker_transport_options={"visibility_timeout": 10860},
 )
 
 

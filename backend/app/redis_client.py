@@ -45,11 +45,13 @@ def cache_delete(key: str) -> None:
         logger.warning(f"Redis cache_delete({key!r}) error: {e}")
 
 
-def acquire_run_lock(user_id: int, ttl: int = 3900) -> bool:
+def acquire_run_lock(user_id: int, ttl: int = 10860) -> bool:
     """
     Попытка захватить эксклюзивную блокировку прогона для пользователя.
     Возвращает True если блокировка получена, False если прогон уже идёт.
-    TTL = 65 мин (чуть больше жёсткого лимита Celery-задачи).
+    TTL = 181 мин (чуть больше time_limit=10800s Celery-задачи repricer.run_for_user).
+    Иначе лок истекает раньше задачи и планировщик запускает параллельный прогон
+    (инцидент 2026-06-10: медленный прогон из-за шторма 429 WB пережил свой лок).
     """
     try:
         key = f"repricer:run_lock:{user_id}"

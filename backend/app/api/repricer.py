@@ -127,12 +127,21 @@ async def manual_run_sync(
     if not product_ids:
         raise HTTPException(status_code=404, detail="No products found")
 
-    engine = RepricerEngine(db, user_id=current_user.id)
-    run = await engine.run_repricer(
-        product_ids=product_ids,
-        run_type="manual",
-        dry_run=body.dry_run,
-    )
+    # Тот же run-лок, что и у Celery-задачи: без него синхронный запуск идёт
+    # параллельно с автоматическим прогоном (инцидент 2026-06-10).
+    from app.redis_client import acquire_run_lock, release_run_lock
+    if not acquire_run_lock(current_user.id):
+        raise HTTPException(status_code=409, detail="Прогон репрайсера уже идёт — дождитесь завершения")
+
+    try:
+        engine = RepricerEngine(db, user_id=current_user.id)
+        run = await engine.run_repricer(
+            product_ids=product_ids,
+            run_type="manual",
+            dry_run=body.dry_run,
+        )
+    finally:
+        release_run_lock(current_user.id)
 
     try:
         log_activity(db, current_user.id, "repricer_run", details={"run_id": run.id, "run_type": "manual", "dry_run": body.dry_run, "status": run.status})
