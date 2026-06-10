@@ -36,7 +36,7 @@ export default function ConfigModal({ product, onClose }) {
     rrp_consider_wallet: product.config?.rrp_consider_wallet ?? false,
     competitor_offset_type: product.config?.competitor_offset_type || 'rub',
     competitor_offset_direction: product.config?.competitor_offset_direction || 'below',
-    competitor_offset_value: product.config?.competitor_offset_value || '',
+    competitor_offset_value: product.config?.competitor_offset_value ?? '',
     competitor_select_rule: product.config?.competitor_select_rule || 'min_price',
   });
   const [competitors, setCompetitors] = useState(() => initCompetitors(product.config));

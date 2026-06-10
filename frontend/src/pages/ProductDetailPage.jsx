@@ -11,7 +11,7 @@ import {
   ResponsiveContainer, AreaChart, Area,
 } from 'recharts';
 import toast from 'react-hot-toast';
-import { getProductDetail, getProductsBySku, runRepricer, updateProductConfig, createProductConfig, getSettings, getProductAuditLog, updateProductCost, deleteProduct } from '../api/client';
+import { getProductDetail, getProductsBySku, runRepricer, updateProductConfig, createProductConfig, getSettings, getProductAuditLog, updateProductCost, deleteProduct, toggleStrategyBySku } from '../api/client';
 import { formatMsk } from '../utils/date';
 import ConfigModal from '../components/ConfigModal';
 
@@ -87,6 +87,7 @@ export default function ProductDetailPage() {
   const [related, setRelated] = useState([]);
   const [auditLog, setAuditLog] = useState([]);
   const [editingCost, setEditingCost] = useState(false);
+  const [toggling, setToggling] = useState(false);
   const [costInput, setCostInput] = useState('');
   const [savingCost, setSavingCost] = useState(false);
 
@@ -512,7 +513,7 @@ export default function ProductDetailPage() {
                       <div className="flex justify-between items-center">
                         <span style={{ color: 'var(--text-3)' }}>Смещение</span>
                         <span className="font-medium" style={{ color: 'var(--text)' }}>
-                          {Number(config.competitor_offset_value) === 0
+                          {config.competitor_offset_value == null || Number(config.competitor_offset_value) === 0
                             ? 'Как у конкурента'
                             : `${config.competitor_offset_direction === 'below' ? '−' : '+'}${config.competitor_offset_value}${config.competitor_offset_type === 'pct' ? '%' : '₽'}`}
                         </span>
@@ -609,14 +610,37 @@ export default function ProductDetailPage() {
       {/* Related accounts block — same SKU across different accounts */}
       {related.length > 1 && (
         <div className="card mb-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Store className="w-4 h-4" style={{ color: 'var(--text-3)' }} />
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-              Магазины
-              <span className="font-normal ml-2 text-xs" style={{ color: 'var(--text-3)' }}>
-                {related.length} аккаунта с артикулом {product.seller_sku}
-              </span>
-            </h3>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Store className="w-4 h-4" style={{ color: 'var(--text-3)' }} />
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                Магазины
+                <span className="font-normal ml-2 text-xs" style={{ color: 'var(--text-3)' }}>
+                  {related.length} аккаунта с артикулом {product.seller_sku}
+                </span>
+              </h3>
+            </div>
+            {(() => {
+              const allActive = related.every(r => r.is_active !== false);
+              return (
+                <button
+                  disabled={toggling}
+                  onClick={async () => {
+                    setToggling(true);
+                    try {
+                      await toggleStrategyBySku(product.seller_sku, !allActive);
+                      toast.success(allActive ? 'Стратегия отключена на всех ЛК' : 'Стратегия включена на всех ЛК');
+                      await load();
+                    } catch { toast.error('Ошибка переключения'); }
+                    finally { setToggling(false); }
+                  }}
+                  className={`btn btn-xs gap-1.5 ${allActive ? 'btn-secondary' : 'btn-primary'}`}
+                >
+                  {allActive ? <XCircle className="w-3 h-3" /> : <CheckCircle className="w-3 h-3" />}
+                  {toggling ? '...' : allActive ? 'Отключить все' : 'Включить все'}
+                </button>
+              );
+            })()}
           </div>
           <div className="flex flex-wrap gap-3">
             {related.map((r) => (
