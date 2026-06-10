@@ -580,6 +580,32 @@ async def get_products_by_sku(
     return {"products": result, "total": len(result)}
 
 
+@router.patch("/by-sku/{seller_sku}/toggle-strategy")
+@limiter.limit("10/minute")
+async def toggle_strategy_by_sku(
+    request: Request,
+    seller_sku: str,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    is_active: bool = Body(..., embed=True),
+):
+    """Включить/отключить стратегию на всех товарах с этим seller_sku (все ЛК)."""
+    products = (
+        db.query(Product)
+        .join(Account, Product.account_id == Account.id)
+        .filter(Account.user_id == current_user.id, Product.seller_sku == seller_sku)
+        .options(joinedload(Product.config))
+        .all()
+    )
+    updated = 0
+    for p in products:
+        if p.config:
+            p.config.is_active = is_active
+            updated += 1
+    db.commit()
+    return {"updated": updated, "total": len(products), "is_active": is_active}
+
+
 @router.get("/{product_id}", response_model=ProductResponse)
 @limiter.limit("60/minute")
 async def get_product(
@@ -922,7 +948,7 @@ async def get_product_detail(
             "competitor_nm_id": product.config.competitor_nm_id,
             "competitor_offset_type": product.config.competitor_offset_type,
             "competitor_offset_direction": product.config.competitor_offset_direction,
-            "competitor_offset_value": float(product.config.competitor_offset_value) if product.config.competitor_offset_value else None,
+            "competitor_offset_value": float(product.config.competitor_offset_value) if product.config.competitor_offset_value is not None else None,
             "competitor_select_rule": product.config.competitor_select_rule,
             "match_competitor_basic": getattr(product.config, "match_competitor_basic", False),
             "competitors": competitors,

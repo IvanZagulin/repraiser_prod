@@ -106,6 +106,9 @@ export const getProductHistory = (productId, limit = 100) =>
 export const getProductsBySku = (sellerSku) =>
   api.get(`/api/products/by-sku/${encodeURIComponent(sellerSku)}`);
 
+export const toggleStrategyBySku = (sellerSku, isActive) =>
+  api.patch(`/api/products/by-sku/${encodeURIComponent(sellerSku)}/toggle-strategy`, { is_active: isActive });
+
 export const getProductDetail = (productId) =>
   api.get(`/api/products/${productId}/detail`);
 
