@@ -225,10 +225,11 @@ def _run_strategy(engine, config, current_data, competitor_final):
 
 
 class TestStrategyCompetitorCorridor:
-    """Коридор пол/потолок + эффективный СПП (регрессия артикулов 3891012/3874932).
+    """Пол + мягкий потолок + эффективный СПП (регрессия артикулов 3891012/3874932).
 
-    Пол = конкурент + max(0.5%, 1₽), потолок = конкурент + 5%. Ниже конкурента —
-    нельзя; в коридоре — не трогаем; выше потолка — снижаемся демпфированно.
+    Пол = конкурент + max(0.5%, 1₽). Ниже пола — поднимаем. Выше пола (включая
+    выше потолка) — НЕ трогаем: мягкий потолок, т.к. снижение может провалить
+    цену в "мёртвую зону" СПП ниже конкурента.
     """
 
     def test_raises_from_under_floor(self):
@@ -277,12 +278,14 @@ class TestStrategyCompetitorCorridor:
         assert reason_code == "NO_CHANGE"
         assert new_seller is None
 
-    def test_lowers_with_damping_above_ceiling(self):
-        """Финальная выше потолка → снижаемся демпфированно (k=0.3), не ниже пола."""
+    def test_no_change_above_floor_soft_ceiling(self):
+        """Финальная выше потолка → НЕ снижаем (мягкий потолок).
+
+        Из-за ступенчатого СПП снижение может провалить цену в "мёртвую зону"
+        ниже конкурента. Безопаснее оставить как есть.
+        """
         engine = _make_engine_with_settings()
         config = _make_config(offset_type="rub", offset_direction="above", offset_value="0")
-        # конкурент 1593 → потолок 1672.65; берём final 1800 (выше). discount=0,
-        # eff_spp = (1-1800/2800)*100 = 35.714%.
         current_data = {
             "seller_price": Decimal("2800"),
             "discounted_price": Decimal("2800"),
@@ -295,12 +298,8 @@ class TestStrategyCompetitorCorridor:
             engine, config, current_data, competitor_final=1593
         )
 
-        assert reason_code == "CALCULATED"
-        # Демпфированная цель: 1800 - 0.3*(1800-1600.965) = 1740.31 (> пола).
-        # round_up(1740.31 / (1800/2800)) = round_up(2707.15) = 2708.
-        assert new_seller == Decimal("2708")
-        # Снижаемся, но не ниже текущей до пола за один шаг.
-        assert new_seller < Decimal("2800")
+        assert reason_code == "NO_CHANGE"
+        assert new_seller is None
 
     def test_falls_back_to_stored_spp_without_discounted(self):
         """Если discounted_price отсутствует (напр. dry_run) — берём хранимый СПП."""
@@ -372,7 +371,7 @@ class TestCorrectUnstableProducts:
         }]
 
         # Факт после первого шага: 1588 — всё ещё под полом 1600.965 → коррекция.
-        fresh = {test_product.nm_id: SimpleNamespace(final_price=Decimal("1588"))}
+        fresh = {test_product.nm_id: SimpleNamespace(final_price=Decimal("1588"), spp=Decimal("34"))}
         fake_client = _FakeClient()
 
         async def fake_parse_batch(nm_ids, **kw):
@@ -411,8 +410,8 @@ class TestCorrectUnstableProducts:
                              "discount": Decimal("0"), "spp": Decimal("34")},
             "competitor_price": Decimal("1593"), "competitor_nm_id": 1,
         }]
-        # Факт 1620 внутри коридора [1600.965; 1672.65] → коррекция не нужна.
-        fresh = {test_product.nm_id: SimpleNamespace(final_price=Decimal("1620"))}
+        # Факт 1620 >= пол 1600.965 → коррекция не нужна (мягкий потолок).
+        fresh = {test_product.nm_id: SimpleNamespace(final_price=Decimal("1620"), spp=Decimal("34"))}
         fake_client = _FakeClient()
 
         async def fake_parse_batch(nm_ids, **kw):

@@ -86,16 +86,18 @@ class RepricerEngine:
     _SPP_MIN = Decimal("-10")
     _SPP_MAX = Decimal("95")
 
-    # Коридор стратегии competitor (см. [[repricer-business-rules]]):
-    # финальная (с СПП) НИКОГДА не должна быть ниже конкурента — иначе санкции
-    # поставщика; и не слишком высоко — иначе теряем позицию. Пол = конкурент +
-    # max(FLOOR_PCT%, FLOOR_MIN_RUB), потолок = конкурент + CEIL_PCT%.
+    # Коридор стратегии competitor: финальная (с СПП) НИКОГДА не должна быть
+    # ниже конкурента — иначе санкции поставщика. Если выше конкурента — ОК,
+    # не снижаем (потолок мягкий): из-за ступенчатого СПП снижение может
+    # провалить цену ниже конкурента ("мёртвая зона"), а частые перепады цен
+    # портят индекс привлекательности и могут привести к обнулению СПП.
     _COMPETITOR_FLOOR_PCT = Decimal("0.5")
     _COMPETITOR_FLOOR_MIN_RUB = Decimal("1")
     _COMPETITOR_CEIL_PCT = Decimal("5")
-    # Демпфирование шага ВНИЗ (если оказались выше потолка). Вверх из-под пола —
-    # без демпфирования: приоритет немедленно выйти из нарушения.
-    _COMPETITOR_DOWN_DAMPING = Decimal("0.3")
+
+    # Cooldown для competitor-товаров: не переоценивать чаще чем раз в 12 часов
+    # (2 раза в сутки). Защита от осцилляции и от отключения СПП Wildberries'ом.
+    _COMPETITOR_COOLDOWN_HOURS = 12
 
     # Closed-loop verify+correct: после заливки СПП у WB готов за 3-7с (замер
     # 2026-06-10). Перепарсиваем факт у ВСЕХ обновлённых competitor-товаров и
@@ -581,23 +583,20 @@ class RepricerEngine:
             if current_final <= 0:
                 # Нет факта (OOS/parse) — целимся в пол.
                 pass
-            elif floor_final <= current_final <= ceil_final:
-                # В разрешённом коридоре — не трогаем (устойчивая точка).
-                return None, "NO_CHANGE", (
-                    f"Competitor ({rule}): финальная {current_final}₽ в коридоре "
-                    f"[{floor_final:.2f}; {ceil_final:.2f}]₽ (конкурент {competitor_price}₽)"
-                ), competitor_price, winning_nm_id
             elif current_final < floor_final:
                 # Под полом (дешевле конкурента или без запаса) — НАРУШЕНИЕ.
                 # Поднимаем решительно сразу к цели, без демпфирования.
                 target_final = max(target_final, floor_final)
                 move = "raise"
             else:
-                # Выше потолка — снижаемся ОСТОРОЖНО (демпфирование): из-за
-                # ступенчатого СПП резкий спуск может пробить пол.
-                goal = current_final - self._COMPETITOR_DOWN_DAMPING * (current_final - target_final)
-                target_final = max(goal, floor_final)
-                move = "lower"
+                # Выше конкурента (>= floor) — НЕ ТРОГАЕМ. Потолок мягкий:
+                # из-за ступенчатого СПП снижение может провалить в "мёртвую
+                # зону" ниже конкурента, а частые перепады цен портят индекс
+                # привлекательности WB.
+                return None, "NO_CHANGE", (
+                    f"Competitor ({rule}): финальная {current_final}₽ >= пола "
+                    f"{floor_final:.2f}₽ (конкурент {competitor_price}₽), не снижаем"
+                ), competitor_price, winning_nm_id
 
             # Обратный расчет цены продавца через эффективный СПП.
             try:
@@ -1094,6 +1093,21 @@ class RepricerEngine:
             return {"product": product, "needs_update": False, "skip_code": "SKIPPED_INACTIVE",
                     "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": None, "_t0": _t0}
 
+        # Cooldown для competitor: не переоценивать чаще раза в 12ч (2 р/сутки).
+        from datetime import timedelta
+        if config.strategy == "competitor" and self._COMPETITOR_COOLDOWN_HOURS > 0:
+            cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=self._COMPETITOR_COOLDOWN_HOURS)
+            recent = self.db.query(PriceChange).filter(
+                PriceChange.product_id == product.id,
+                PriceChange.reason_code.in_(["UPDATED", "CORRECTED", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX", "CLAMPED_TO_MARGIN"]),
+                PriceChange.changed_at >= cutoff,
+            ).first()
+            if recent:
+                return {"product": product, "needs_update": False, "skip_code": "COOLDOWN",
+                        "current_data": None, "new_price": None, "limit_reason": None,
+                        "reason_msg": f"Competitor cooldown: последнее изменение {recent.changed_at.isoformat()}, "
+                                      f"следующее через {self._COMPETITOR_COOLDOWN_HOURS}ч", "_t0": _t0}
+
         account = product.account
         if not account or not account.is_active:
             return {"product": product, "needs_update": False, "skip_code": "SKIPPED_INACTIVE",
@@ -1225,7 +1239,7 @@ class RepricerEngine:
                 self._save_price_snapshot(product, current_data, competitor_nm_id=snap_competitor_nm_id, competitor_price=snap_competitor_price)
                 # В price_changes пишем только реальные события — OUT_OF_STOCK и
                 # NO_CHANGE были 95% мусора (раздули таблицу до 7+ GB). Пропускаем.
-                _silent = ("OUT_OF_STOCK", "NO_CHANGE", "SKIPPED_INACTIVE", "SKIPPED_PROMO")
+                _silent = ("OUT_OF_STOCK", "NO_CHANGE", "SKIPPED_INACTIVE", "SKIPPED_PROMO", "COOLDOWN")
                 if reason_code not in _silent:
                     self._save_price_change(run, product, current_data, new_price, None, reason_code, reason_msg)
             logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id,
@@ -1274,12 +1288,14 @@ class RepricerEngine:
         return reason_code
 
     async def _verify_and_correct_competitor(self, run, items: list) -> int:
-        """Closed-loop: перепарсивает факт у обновлённых competitor-товаров и
-        доправляет тех, у кого финальная вышла за коридор (промах через порог СПП).
+        """Closed-loop PHASE 4: перепарсивает факт у ВСЕХ обновлённых competitor-
+        товаров.
 
-        Один проход (первый шаг в основном цикле + эта коррекция = ≤2 шага).
-        Возвращает число доправленных товаров. Любая ошибка не должна ронять
-        прогон — вызывается под общим try в run_repricer.
+        Две задачи:
+        1. ВСЕГДА обновляет snapshot РЕАЛЬНОЙ final_price (а не предсказанной) —
+           иначе UI показывает фантомную цену СПП.
+        2. Если факт НИЖЕ пола (конкурента) — поднимает. Если ВЫШЕ — не трогает
+           (мягкий потолок: лучше быть дороже, чем осциллировать).
         """
         if not items or not self._CLOSED_LOOP_ENABLED:
             return 0
@@ -1294,24 +1310,45 @@ class RepricerEngine:
             logger.error("Closed-loop: батч-парсинг факта упал: %s", e)
             return 0
 
-        corrective: dict = {}   # token -> [{nmID, price}]
-        plan: dict = {}         # nm_id -> (item, corrected_seller, target_final, actual_final, ratio)
+        corrective: dict = {}
+        plan: dict = {}
+        snapshots_updated = 0
+
         for nm, it in by_nm.items():
             pd = fresh.get(nm)
-            comp = it.get("competitor_price")
             new_seller = it.get("new_price")
-            if pd is None or not comp or not new_seller:
+            if pd is None or not new_seller:
                 continue
             actual_final = Decimal(str(getattr(pd, "final_price", 0) or 0))
+            actual_spp = getattr(pd, "spp", None)
             new_seller = Decimal(str(new_seller))
             if actual_final <= 0 or new_seller <= 0:
                 continue
+
+            # Обновляем snapshot РЕАЛЬНОЙ финальной ценой и СПП.
+            snap = dict(it["current_data"])
+            snap["seller_price"] = new_seller
+            snap["final_price"] = actual_final
+            if actual_spp is not None:
+                snap["spp"] = Decimal(str(actual_spp))
+            try:
+                self._save_price_snapshot(it["product"], snap,
+                                          competitor_nm_id=it.get("competitor_nm_id"),
+                                          competitor_price=it.get("competitor_price"))
+                snapshots_updated += 1
+            except Exception as e:
+                logger.error("Closed-loop: ошибка обновления snapshot для nm=%s: %s", nm, e)
+
+            comp = it.get("competitor_price")
+            if not comp:
+                continue
             comp = Decimal(str(comp))
-            floor_final, ceil_final = self._competitor_corridor(comp)
-            if floor_final <= actual_final <= ceil_final:
-                continue  # стабилизировался в коридоре — ничего не делаем
-            # Второй шаг от ФАКТИЧЕСКОЙ точки: реальный фактор СПП при текущей цене
-            # (не предсказываем формулой, а измеряем по факту — обходит ступеньку).
+            floor_final, _ceil_final = self._competitor_corridor(comp)
+
+            if actual_final >= floor_final:
+                continue
+
+            # Ниже пола — поднимаем.
             ratio = actual_final / new_seller
             if ratio <= 0:
                 continue
@@ -1329,7 +1366,12 @@ class RepricerEngine:
             plan[nm] = (it, corrected, floor_final, actual_final, ratio)
 
         if not corrective:
-            logger.info("Closed-loop: все нестабильные в коридоре, коррекция не нужна")
+            logger.info("Closed-loop: snapshots обновлено=%d, коррекция не нужна (все >= пола)", snapshots_updated)
+            try:
+                self.db.commit()
+            except Exception as e:
+                logger.error("Closed-loop: commit упал: %s", e)
+                self.db.rollback()
             return 0
 
         applied = set()
@@ -1360,8 +1402,8 @@ class RepricerEngine:
                                           competitor_price=it.get("competitor_price"))
                 self._save_price_change(
                     run, product, base, corrected, new_final_est, "CORRECTED",
-                    f"Closed-loop: факт {actual_final}₽ вне коридора → "
-                    f"seller {it['new_price']}→{corrected} (цель {target_final:.2f}₽)",
+                    f"Closed-loop: факт {actual_final}₽ < пола {target_final:.2f}₽ → "
+                    f"seller {it['new_price']}→{corrected}",
                 )
                 n += 1
             except Exception as e:
@@ -1371,7 +1413,7 @@ class RepricerEngine:
         except Exception as e:
             logger.error("Closed-loop: commit упал: %s", e)
             self.db.rollback()
-        logger.info("Closed-loop: доправлено %d товаров", n)
+        logger.info("Closed-loop: snapshots обновлено=%d, доправлено (ниже пола)=%d", snapshots_updated, n)
         return n
 
     async def run_repricer(
@@ -1676,9 +1718,10 @@ class RepricerEngine:
                 pending = 0
                 for dec in decisions:
                     if "skip_code" in dec and dec["current_data"] is None:
-                        # Товар не обработан (PARSE_ERROR, WB_API_ERROR, etc.)
-                        # без current_data → нечего сохранять, но СЧИТАЕМ в errors.
-                        results["errors"] += 1
+                        if dec["skip_code"] in ("COOLDOWN", "SKIPPED_INACTIVE", "SKIPPED_QUARANTINE"):
+                            results["skipped"] += 1
+                        else:
+                            results["errors"] += 1
                         continue
                     try:
                         product = dec["product"]
@@ -1704,7 +1747,7 @@ class RepricerEngine:
                                     "competitor_price": dec.get("snap_competitor_price"),
                                     "competitor_nm_id": dec.get("snap_competitor_nm_id"),
                                 })
-                        elif reason_code in ["SKIPPED_PROMO", "SKIPPED_INACTIVE", "NO_CHANGE", "COMPETITOR_OOS", "OUT_OF_STOCK"]:
+                        elif reason_code in ["SKIPPED_PROMO", "SKIPPED_INACTIVE", "NO_CHANGE", "COMPETITOR_OOS", "OUT_OF_STOCK", "COOLDOWN"]:
                             results["skipped"] += 1
                         else:
                             results["errors"] += 1
