@@ -116,6 +116,13 @@ if settings.SENTRY_DSN:
         before_send=_sentry_before_send,
     )
 
+# Предупреждение: WB API токены хранятся без шифрования
+if not settings.FERNET_KEY:
+    logger.warning(
+        "FERNET_KEY не задан — WB API токены хранятся в БД открытым текстом. "
+        "Задайте FERNET_KEY в .env для шифрования."
+    )
+
 # Rate limiter — ключ по реальному IP клиента (с учётом Nginx X-Forwarded-For)
 limiter = Limiter(key_func=get_real_ip)
 
@@ -144,7 +151,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 

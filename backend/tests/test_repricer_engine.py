@@ -388,10 +388,8 @@ class TestApplyLimitsCombined:
         assert price == Decimal("500")
         assert reason == "CLAMPED_TO_MIN"
 
-    def test_margin_guard_result_above_max_price(self):
-        """If margin-guard pushes above max, max should still be enforced...
-        but note: in the current code, margin guard runs AFTER max_price check,
-        so margin can exceed max. This test documents that behavior."""
+    def test_margin_guard_result_clamped_to_max_price(self):
+        """If margin-guard pushes above max, max_price wins (hard ceiling)."""
         engine = _make_engine(user_settings={
             "min_margin_pct": "50",
             "commission_type": "pct",
@@ -405,7 +403,5 @@ class TestApplyLimitsCombined:
         config = _make_config(min_price="100", max_price="1500", product=product)
 
         price, reason = engine._apply_limits(Decimal("1200"), config)
-        # This documents current behavior: margin guard may push above max_price
-        # because it runs after the max_price check
-        if reason == "CLAMPED_TO_MARGIN":
-            assert price > Decimal("1500")  # margin guard overrode max
+        assert price == Decimal("1500")
+        assert reason == "CLAMPED_TO_MAX"

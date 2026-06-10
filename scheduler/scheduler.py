@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
@@ -91,7 +91,7 @@ def _user_should_run(db, user_id: int) -> bool:
         return False
 
     plan_id, trial_ends_at, is_admin = user_row
-    if not is_admin and not plan_id and (not trial_ends_at or trial_ends_at < datetime.utcnow()):
+    if not is_admin and not plan_id and (not trial_ends_at or trial_ends_at < datetime.now(timezone.utc).replace(tzinfo=None)):
         logger.info(f"  user={user_id}: план/триал истёк, пропускаем")
         return False
 
@@ -156,7 +156,7 @@ def _user_should_run(db, user_id: int) -> bool:
     ).fetchone()
 
     if last_run and last_run[0]:
-        elapsed = (datetime.utcnow() - last_run[0]).total_seconds() / 60
+        elapsed = (datetime.now(timezone.utc).replace(tzinfo=None) - last_run[0]).total_seconds() / 60
         if elapsed < interval_minutes - 2:  # 2-минутный буфер
             logger.info(f"  user={user_id}: ждём интервал ({elapsed:.0f}/{interval_minutes} мин)")
             return False
@@ -318,9 +318,10 @@ async def cleanup_stale_runs():
                     error_message = 'Прогон завис (превышен TTL) — помечен планировщиком',
                     completed_at = NOW()
                 WHERE status = 'running'
-                  AND started_at < NOW() - INTERVAL ':minutes minutes'
+                  AND started_at < NOW() - MAKE_INTERVAL(mins => :minutes)
                 RETURNING id, user_id
-            """.replace(":minutes", str(STALE_MINUTES)))
+            """),
+            {"minutes": STALE_MINUTES}
         )
         rows = result.fetchall()
         db.commit()
@@ -372,6 +373,14 @@ async def cleanup_old_price_changes():
                 break
         if total_deleted > 0:
             logger.info(f"Удалено старых price_changes: {total_deleted}")
+            try:
+                raw_conn = engine.raw_connection()
+                raw_conn.set_isolation_level(0)  # AUTOCOMMIT для VACUUM
+                raw_conn.cursor().execute("VACUUM ANALYZE price_changes")
+                raw_conn.close()
+                logger.info("VACUUM ANALYZE price_changes выполнен")
+            except Exception as e:
+                logger.warning(f"VACUUM ANALYZE price_changes не удался: {e}")
         else:
             logger.info("Старых price_changes нет")
     except Exception as e:

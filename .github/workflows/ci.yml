@@ -20,8 +20,8 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
         working-directory: backend
-      - name: Syntax check
-        run: python -m py_compile app/main.py
+      - name: Syntax check (all backend)
+        run: python -m compileall app/ -q
         working-directory: backend
       - name: Lint (errors only ??? no style)
         run: |

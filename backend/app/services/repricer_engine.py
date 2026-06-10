@@ -496,8 +496,11 @@ class RepricerEngine:
                 return None, None, None
             winner = min(instock, key=lambda x: x[1])
         elif rule == "avg_price":
-            avg_final = sum(p for _, p, _, _ in prices) / len(prices)
-            avg_basic = sum(b for _, _, _, b in prices) / len(prices)
+            instock = [(nm, price, s, b) for nm, price, s, b in prices if s and price > 0]
+            if not instock:
+                return None, None, None
+            avg_final = sum(p for _, p, _, _ in instock) / len(instock)
+            avg_basic = sum(b for _, _, _, b in instock) / len(instock)
             return Decimal(str(avg_final)), None, Decimal(str(avg_basic))
         else:  # min_price
             instock = [(nm, price, s, b) for nm, price, s, b in prices if s and price > 0]
@@ -710,6 +713,13 @@ class RepricerEngine:
                             )
                             new_price = min_price_by_margin
                             reason_code = "CLAMPED_TO_MARGIN"
+
+        if config.max_price and new_price > config.max_price:
+            logger.info(
+                f"Цена после защиты маржи ({new_price}₽) превышает max_price ({config.max_price}₽) — ограничиваем"
+            )
+            new_price = config.max_price
+            reason_code = "CLAMPED_TO_MAX"
 
         return new_price, reason_code
     
@@ -1353,6 +1363,12 @@ class RepricerEngine:
             if ratio <= 0:
                 continue
             corrected = Decimal(self._round_up(floor_final / ratio))
+            if corrected > new_seller * Decimal("3"):
+                logger.warning(
+                    "Closed-loop: аномальная коррекция nm=%s (seller=%s→%s, ratio=%.4f), пропускаем",
+                    nm, new_seller, corrected, ratio,
+                )
+                continue
             try:
                 corrected, _lr = self._apply_limits(
                     corrected, it["config"],

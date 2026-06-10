@@ -90,10 +90,13 @@ class CatalogParser:
     при отсутствии прокси делает прямой запрос.
     """
 
+    _BACKOFF_STEPS = [5 * 60, 15 * 60, 30 * 60]  # 5мин → 15мин → 30мин
+
     def __init__(self):
         self.max_retries = settings.RETRY_ATTEMPTS
         self._blocked_until = 0.0
         self._last_block_status: Optional[int] = None
+        self._consecutive_blocks = 0
 
     def _build_url(self, nm_id: int) -> str:
         """
@@ -173,14 +176,17 @@ class CatalogParser:
             ) as client:
                 response = await client.get(url)
                 if response.status_code == 200:
+                    self._consecutive_blocks = 0
                     return response.json()
                 if response.status_code in (403, 429):
-                    self._blocked_until = time.monotonic() + 30 * 60
+                    idx = min(self._consecutive_blocks, len(self._BACKOFF_STEPS) - 1)
+                    backoff = self._BACKOFF_STEPS[idx]
+                    self._consecutive_blocks += 1
+                    self._blocked_until = time.monotonic() + backoff
                     self._last_block_status = response.status_code
                     logger.warning(
-                        "Прямой запрос: код %s для %s; включён circuit breaker на 30 минут",
-                        response.status_code,
-                        url,
+                        "Прямой запрос: код %s для %s; circuit breaker на %d мин (шаг %d)",
+                        response.status_code, url, backoff // 60, self._consecutive_blocks,
                     )
                     return None
                 logger.warning(f"Прямой запрос: код {response.status_code} для {url}")

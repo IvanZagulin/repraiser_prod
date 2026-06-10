@@ -179,6 +179,43 @@ class TestGetCompetitorPriceAvgPrice:
         assert winner is None
 
 
+    def test_avg_excludes_oos(self):
+        """avg_price должен исключать OOS конкурентов из среднего."""
+        engine = _make_engine_with_settings()
+        engine._competitor_entries_map = {1: [111, 222, 333]}
+        config = _make_config(competitor_select_rule="avg_price")
+
+        snapshots = {
+            111: _comp(900),
+            222: _comp(100, in_stock=False),  # OOS — не должен входить в среднее
+            333: _comp(1100),  # avg(900, 1100) = 1000
+        }
+
+        async def fake_parse(nm_id):
+            return snapshots[nm_id]
+
+        with patch.object(engine, "_cached_parse_product", side_effect=fake_parse):
+            price, winner, _ = asyncio.run(engine._get_competitor_price(config))
+
+        assert price == Decimal("1000")
+
+    def test_avg_all_oos_returns_none(self):
+        """avg_price при всех OOS возвращает None."""
+        engine = _make_engine_with_settings()
+        engine._competitor_entries_map = {1: [111, 222]}
+        config = _make_config(competitor_select_rule="avg_price")
+
+        snapshots = {nm: _comp(500, in_stock=False) for nm in (111, 222)}
+
+        async def fake_parse(nm_id):
+            return snapshots[nm_id]
+
+        with patch.object(engine, "_cached_parse_product", side_effect=fake_parse):
+            price, winner, _ = asyncio.run(engine._get_competitor_price(config))
+
+        assert price is None
+
+
 class TestGetCompetitorPriceFallbacks:
     """Fallback-поведение: пустой список, legacy single competitor."""
 

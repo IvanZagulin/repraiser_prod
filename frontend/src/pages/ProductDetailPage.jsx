@@ -329,7 +329,7 @@ export default function ProductDetailPage() {
                     setSavingCost(true);
                     try {
                       // Заменяем запятую на точку для дробных чисел
-                      const normalized = costInput.replace(',', '.');
+                      const normalized = String(costInput).replace(',', '.');
                       const cost = parseFloat(normalized);
                       if (isNaN(cost) || cost <= 0) {
                         toast.error('Введите корректное число > 0');
@@ -358,7 +358,7 @@ export default function ProductDetailPage() {
               <p
                 className="text-xs mt-1 cursor-pointer hover:text-primary transition-colors"
                 style={{ color: 'var(--text-3)' }}
-                onClick={() => { setCostInput(margin.cost_price || ''); setEditingCost(true); }}
+                onClick={() => { setCostInput(String(margin.cost_price ?? '')); setEditingCost(true); }}
                 title="Нажмите для редактирования"
               >
                 {margin.cost_price ? `Себестоимость: ${fmt(margin.cost_price)}₽` : '+ Добавить себестоимость'}
