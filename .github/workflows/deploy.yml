@@ -1,12 +1,10 @@
 name: Deploy to Production
 
 on:
-  # ?????????????????????? ?????????????????????????? ???????????? ?????????? ?????????????????? CI ???? ?????????? main
   workflow_run:
     workflows: ["CI - Lint & Test"]
     types: [completed]
     branches: [main]
-  # ???????????? ???????????? (???????????????? ???????? ???????????? ???????????????????????? ?????? ??????????????????)
   workflow_dispatch:
 
 concurrency:
@@ -17,9 +15,6 @@ jobs:
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
-    # ?????????????? ???????????? ????????:
-    # - ???????????? ???????????? (workflow_dispatch)
-    # - ?????? CI ???????????????????? ?????????????? ???? ?????????? main
     if: >
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' &&
@@ -38,23 +33,78 @@ jobs:
           CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
           ssh-keyscan -H "$CLEAN_H" >> ~/.ssh/known_hosts
 
-      - name: Fix git permissions
-        env:
-          H: ${{ secrets.SERVER_HOST }}
-          U: ${{ secrets.SERVER_USER }}
-        run: |
-          CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
-          CLEAN_U=$(printf '%s' "$U" | tr -d '[:space:]"'"'"'')
-          ssh "${CLEAN_U}@${CLEAN_H}" 'cd ~/repraiser_prod/repraiser_prod && sudo chown -R $(whoami):$(id -gn) .git/ 2>/dev/null || chmod -R u+rwX .git/ 2>/dev/null || true'
-
       - name: Deploy
         env:
           H: ${{ secrets.SERVER_HOST }}
           U: ${{ secrets.SERVER_USER }}
+          GH_REPO: ${{ github.repository }}
         run: |
           CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
           CLEAN_U=$(printf '%s' "$U" | tr -d '[:space:]"'"'"'')
-          ssh "${CLEAN_U}@${CLEAN_H}" 'cd ~/repraiser_prod/repraiser_prod && bash deploy.sh'
+          ssh "${CLEAN_U}@${CLEAN_H}" bash -s "$GH_REPO" <<'DEPLOY_EOF'
+          set -e
+          REPO="$1"
+          PROJECT_DIR=~/repraiser_prod/repraiser_prod
+          cd "$PROJECT_DIR"
+
+          APP_SERVICES="backend celery_worker scheduler flower frontend"
+
+          # --- Wait for Celery to finish active tasks (max 5 min) ---
+          echo "[deploy] Checking celery..."
+          MAX_WAIT=300; WAITED=0
+          while true; do
+            if docker exec wb_repricer_celery celery -A app.celery_app inspect active 2>/dev/null | grep -q "'id':"; then
+              ACTIVE="busy"
+            else
+              ACTIVE="0"
+            fi
+            [ "$ACTIVE" = "0" ] && echo "[deploy] Celery idle ✓" && break
+            if [ "$WAITED" -ge "$MAX_WAIT" ]; then
+              echo "[deploy] WARNING: celery busy after ${MAX_WAIT}s — forcing deploy"
+              break
+            fi
+            echo "[deploy] Celery busy, waiting... (${WAITED}/${MAX_WAIT}s)"
+            sleep 15
+            WAITED=$((WAITED + 15))
+          done
+
+          # --- Update source code ---
+          echo "[deploy] Updating source code..."
+          # Try git pull first; if .git permissions are broken, fall back to archive
+          if sudo -n chown -R "$(whoami):$(id -gn)" .git/ 2>/dev/null; then
+            echo "[deploy] Fixed .git ownership via sudo"
+          fi
+          if git pull origin main 2>&1; then
+            echo "[deploy] git pull OK ✓"
+          else
+            echo "[deploy] git pull failed — downloading archive from GitHub..."
+            curl -sL "https://github.com/${REPO}/archive/refs/heads/main.tar.gz" \
+              | tar xz --strip-components=1
+            echo "[deploy] Archive extracted ✓"
+          fi
+
+          # --- Clean bytecache ---
+          find ./backend -name '*.pyc' -delete 2>/dev/null || true
+          find ./backend -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+
+          # --- Build & deploy ---
+          echo "[deploy] Building app images..."
+          docker compose build $APP_SERVICES
+
+          echo "[deploy] Running DB migrations..."
+          docker compose run --rm --no-deps backend alembic upgrade head
+
+          echo "[deploy] Recreating app services..."
+          docker compose up -d --no-deps $APP_SERVICES
+
+          echo "[deploy] Waiting for backend health check..."
+          timeout 90 bash -c 'until docker inspect --format="{{.State.Health.Status}}" wb_repricer_backend_prod 2>/dev/null | grep -q healthy; do sleep 3; done' \
+            && echo "[deploy] Backend healthy ✓" \
+            || echo "[deploy] WARNING: Backend health check timed out"
+
+          echo "[deploy] Done. Running containers:"
+          docker compose ps --format 'table {{.Name}}\t{{.Status}}'
+          DEPLOY_EOF
 
       - name: Verify
         env:

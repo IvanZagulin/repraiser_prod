@@ -35,10 +35,17 @@ while true; do
 done
 
 echo "[deploy] Fixing .git permissions..."
-sudo chown -R "$(whoami):$(id -gn)" .git/ 2>/dev/null || chmod -R u+rwX .git/ 2>/dev/null || true
+sudo -n chown -R "$(whoami):$(id -gn)" .git/ 2>/dev/null || chmod -R u+rwX .git/ 2>/dev/null || true
 
 echo "[deploy] Pulling from GitHub..."
-git pull origin main
+if git pull origin main 2>&1; then
+    echo "[deploy] git pull OK ✓"
+else
+    echo "[deploy] git pull failed — downloading archive..."
+    REPO_URL=$(git remote get-url origin | sed 's/\.git$//' | sed 's|git@github.com:|https://github.com/|')
+    curl -sL "${REPO_URL}/archive/refs/heads/main.tar.gz" | tar xz --strip-components=1
+    echo "[deploy] Archive extracted ✓"
+fi
 
 echo "[deploy] Clearing Python bytecache..."
 find ./backend -name '*.pyc' -delete 2>/dev/null || true
