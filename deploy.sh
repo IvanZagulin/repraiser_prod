@@ -34,6 +34,9 @@ while true; do
     WAITED=$((WAITED + 15))
 done
 
+echo "[deploy] Fixing .git permissions..."
+sudo chown -R "$(whoami):$(id -gn)" .git/ 2>/dev/null || chmod -R u+rwX .git/ 2>/dev/null || true
+
 echo "[deploy] Pulling from GitHub..."
 git pull origin main
 

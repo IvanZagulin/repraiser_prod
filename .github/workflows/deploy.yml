@@ -38,6 +38,15 @@ jobs:
           CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
           ssh-keyscan -H "$CLEAN_H" >> ~/.ssh/known_hosts
 
+      - name: Fix git permissions
+        env:
+          H: ${{ secrets.SERVER_HOST }}
+          U: ${{ secrets.SERVER_USER }}
+        run: |
+          CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
+          CLEAN_U=$(printf '%s' "$U" | tr -d '[:space:]"'"'"'')
+          ssh "${CLEAN_U}@${CLEAN_H}" 'cd ~/repraiser_prod/repraiser_prod && sudo chown -R $(whoami):$(id -gn) .git/ 2>/dev/null || chmod -R u+rwX .git/ 2>/dev/null || true'
+
       - name: Deploy
         env:
           H: ${{ secrets.SERVER_HOST }}
