@@ -86,6 +86,81 @@ class RepricerEngine:
     _SPP_MIN = Decimal("-10")
     _SPP_MAX = Decimal("95")
 
+    # Коридор стратегии competitor (см. [[repricer-business-rules]]):
+    # финальная (с СПП) НИКОГДА не должна быть ниже конкурента — иначе санкции
+    # поставщика; и не слишком высоко — иначе теряем позицию. Пол = конкурент +
+    # max(FLOOR_PCT%, FLOOR_MIN_RUB), потолок = конкурент + CEIL_PCT%.
+    _COMPETITOR_FLOOR_PCT = Decimal("0.5")
+    _COMPETITOR_FLOOR_MIN_RUB = Decimal("1")
+    _COMPETITOR_CEIL_PCT = Decimal("5")
+    # Демпфирование шага ВНИЗ (если оказались выше потолка). Вверх из-под пола —
+    # без демпфирования: приоритет немедленно выйти из нарушения.
+    _COMPETITOR_DOWN_DAMPING = Decimal("0.3")
+
+    # Детектор нестабильного СПП (осцилляция вокруг порога): окно истории и пороги.
+    _SPP_UNSTABLE_WINDOW = 6                 # последних снапшотов
+    _SPP_UNSTABLE_JITTER = Decimal("3")      # разброс СПП в пунктах
+    _SPP_UNSTABLE_COMP_TOL = Decimal("2")    # конкурент стабилен в пределах, %
+
+    # Closed-loop verify+correct: после заливки СПП у WB готов за 3-7с (замер
+    # 2026-06-10), поэтому для нестабильных товаров перепарсиваем факт и
+    # доправляем вторым шагом в рамках того же прогона.
+    _CLOSED_LOOP_ENABLED = True
+    _CLOSED_LOOP_SETTLE_SEC = 20
+
+    def _competitor_corridor(self, competitor_price: Decimal):
+        """Возвращает (пол, потолок) финальной цены для коридора competitor."""
+        floor = competitor_price + max(
+            competitor_price * self._COMPETITOR_FLOOR_PCT / 100,
+            self._COMPETITOR_FLOOR_MIN_RUB,
+        )
+        ceil = competitor_price + competitor_price * self._COMPETITOR_CEIL_PCT / 100
+        return floor, ceil
+
+    def _detect_spp_unstable(self, product_id: int) -> bool:
+        """True, если у товара СПП «прыгает туда-сюда» при стабильном конкуренте.
+
+        Определяем по истории снапшотов (без доп. запросов к WB): если конкурент
+        стоял на месте, а наша цена/СПП пляшет — это осцилляция вокруг порога СПП,
+        такие товары лечим closed-loop'ом. Если конкурент двигался — колебания
+        законны (мы следовали за ним), не помечаем. См. [[repricer-business-rules]].
+        """
+        try:
+            rows = self.db.execute(
+                select(
+                    PriceSnapshot.seller_price,
+                    PriceSnapshot.spp,
+                    PriceSnapshot.competitor_price,
+                )
+                .filter(PriceSnapshot.product_id == product_id)
+                .order_by(PriceSnapshot.snapshot_at.desc())
+                .limit(self._SPP_UNSTABLE_WINDOW)
+            ).all()
+        except Exception:
+            return False
+
+        if len(rows) < 4:
+            return False
+
+        sellers = [r[0] for r in rows if r[0] is not None]
+        spps = [r[1] for r in rows if r[1] is not None]
+        comps = [r[2] for r in rows if r[2] is not None]
+
+        # Конкурент должен быть стабилен, иначе колебания — законное следование.
+        if comps:
+            cmin, cmax = min(comps), max(comps)
+            if cmin > 0 and (cmax - cmin) / cmin * 100 > self._SPP_UNSTABLE_COMP_TOL:
+                return False
+
+        # Признак 1: большой разброс СПП в окне.
+        if spps and (max(spps) - min(spps)) >= self._SPP_UNSTABLE_JITTER:
+            return True
+
+        # Признак 2: «пила» по цене продавца (смена направления ≥2 раз).
+        dirs = [1 if b > a else -1 for a, b in zip(sellers, sellers[1:]) if b != a]
+        flips = sum(1 for x, y in zip(dirs, dirs[1:]) if x != y)
+        return flips >= 2
+
     def _calculate_seller_price_from_final(
         self,
         final_price: Decimal,
@@ -528,14 +603,58 @@ class RepricerEngine:
                 else:
                     target_final = competitor_price * (1 - offset_value / 100)
 
-            # Обратный расчет цены продавца (классический путь)
+            # Эффективный СПП берём из живого снапшота (final/discounted) БЕЗ
+            # округления до целого процента. Хранимый true_spp округлён (строка
+            # _get_current_price_data), из-за чего обратный расчёт давал ту же
+            # цену продавца, что уже стоит, и зазор в несколько рублей до
+            # конкурента не закрывался никогда — «застывшая точка».
+            # Пример: артикул 3891012 — финальная 1588₽ при конкуренте 1593₽ и
+            # СПП=34%: round_up(1593/0.66)=2414 == текущая цена → NO_CHANGE
+            # навечно, хотя по факту мы на 5₽ дешевле конкурента.
+            current_final = current_data.get('final_price') or Decimal(0)
+            discounted = current_data.get('discounted_price') or Decimal(0)
+            calc_spp = spp
+            if discounted > 0 and current_final > 0:
+                eff_spp = (Decimal(1) - current_final / discounted) * Decimal(100)
+                if self._SPP_MIN <= eff_spp < Decimal(100):
+                    calc_spp = eff_spp
+
+            # Коридор: пол = конкурент + запас (НИКОГДА не ниже конкурента), потолок.
+            floor_final, ceil_final = self._competitor_corridor(competitor_price)
+            # offset из конфига учитываем как доп. поднятие над полом, но сам пол —
+            # жёсткий минимум цели в любом случае.
+            target_final = max(target_final, floor_final)
+            move = "raise"
+
+            if current_final <= 0:
+                # Нет факта (OOS/parse) — целимся в пол.
+                pass
+            elif floor_final <= current_final <= ceil_final:
+                # В разрешённом коридоре — не трогаем (устойчивая точка).
+                return None, "NO_CHANGE", (
+                    f"Competitor ({rule}): финальная {current_final}₽ в коридоре "
+                    f"[{floor_final:.2f}; {ceil_final:.2f}]₽ (конкурент {competitor_price}₽)"
+                ), competitor_price, winning_nm_id
+            elif current_final < floor_final:
+                # Под полом (дешевле конкурента или без запаса) — НАРУШЕНИЕ.
+                # Поднимаем решительно сразу к цели, без демпфирования.
+                target_final = max(target_final, floor_final)
+                move = "raise"
+            else:
+                # Выше потолка — снижаемся ОСТОРОЖНО (демпфирование): из-за
+                # ступенчатого СПП резкий спуск может пробить пол.
+                goal = current_final - self._COMPETITOR_DOWN_DAMPING * (current_final - target_final)
+                target_final = max(goal, floor_final)
+                move = "lower"
+
+            # Обратный расчет цены продавца через эффективный СПП.
             try:
-                new_seller_price = self._calculate_seller_price_from_final(target_final, spp, seller_discount)
+                new_seller_price = self._calculate_seller_price_from_final(target_final, calc_spp, seller_discount)
 
                 reason_msg = (
-                    f"Competitor ({rule}): конкурент nm_id={winning_nm_id} цена={competitor_price}₽, "
-                    f"смещение {offset_direction} {offset_value}{offset_type}, "
-                    f"целевая {target_final}₽, новая цена продавца {new_seller_price}₽"
+                    f"Competitor ({rule}, {move}): конкурент nm_id={winning_nm_id} цена={competitor_price}₽, "
+                    f"коридор [{floor_final:.2f}; {ceil_final:.2f}]₽, "
+                    f"целевая {target_final:.2f}₽, СПП={calc_spp:.2f}%, новая цена продавца {new_seller_price}₽"
                 )
 
                 return new_seller_price, "CALCULATED", reason_msg, competitor_price, winning_nm_id
@@ -1122,9 +1241,21 @@ class RepricerEngine:
                     "limit_reason": limit_reason, "reason_msg": reason_msg, "_t0": _t0,
                     "snap_competitor_price": snap_competitor_price, "snap_competitor_nm_id": snap_competitor_nm_id}
 
+        # Помечаем нестабильные по СПП competitor-товары — для них в конце прогона
+        # включается closed-loop verify+correct. Детектор по истории, без доп.
+        # запросов; считаем только для реально обновляемых товаров (узкая доля).
+        spp_unstable = False
+        if (not dry_run and self._CLOSED_LOOP_ENABLED
+                and config.strategy == "competitor" and snap_competitor_price):
+            try:
+                spp_unstable = self._detect_spp_unstable(product.id)
+            except Exception:
+                spp_unstable = False
+
         return {"product": product, "needs_update": True, "skip_code": None,
                 "current_data": current_data, "new_price": final_new_price,
                 "limit_reason": limit_reason, "reason_msg": reason_msg, "_t0": _t0,
+                "spp_unstable": spp_unstable,
                 "snap_competitor_price": snap_competitor_price, "snap_competitor_nm_id": snap_competitor_nm_id}
 
     def _finalize_decision(
@@ -1201,6 +1332,107 @@ class RepricerEngine:
             "nm_id": product.nm_id, "sku": product.seller_sku, "reason": reason_code,
             "duration_ms": int((time.monotonic() - _t0) * 1000)}))
         return reason_code
+
+    async def _correct_unstable_products(self, run, items: list) -> int:
+        """Closed-loop: перепарсивает факт по нестабильным товарам и доправляет
+        тех, у кого финальная вышла за коридор (промах через порог СПП).
+
+        Один проход (первый шаг в основном цикле + эта коррекция = ≤2 шага).
+        Возвращает число доправленных товаров. Любая ошибка не должна ронять
+        прогон — вызывается под общим try в run_repricer.
+        """
+        if not items or not self._CLOSED_LOOP_ENABLED:
+            return 0
+        logger.info("Closed-loop: %d нестабильных товаров, пауза %dс на пересчёт СПП",
+                    len(items), self._CLOSED_LOOP_SETTLE_SEC)
+        await asyncio.sleep(self._CLOSED_LOOP_SETTLE_SEC)
+
+        by_nm = {it["nm_id"]: it for it in items}
+        try:
+            fresh = await catalog_parser.parse_batch_ids(list(by_nm.keys()))
+        except Exception as e:
+            logger.error("Closed-loop: батч-парсинг факта упал: %s", e)
+            return 0
+
+        corrective: dict = {}   # token -> [{nmID, price}]
+        plan: dict = {}         # nm_id -> (item, corrected_seller, target_final, actual_final, ratio)
+        for nm, it in by_nm.items():
+            pd = fresh.get(nm)
+            comp = it.get("competitor_price")
+            new_seller = it.get("new_price")
+            if pd is None or not comp or not new_seller:
+                continue
+            actual_final = Decimal(str(getattr(pd, "final_price", 0) or 0))
+            new_seller = Decimal(str(new_seller))
+            if actual_final <= 0 or new_seller <= 0:
+                continue
+            comp = Decimal(str(comp))
+            floor_final, ceil_final = self._competitor_corridor(comp)
+            if floor_final <= actual_final <= ceil_final:
+                continue  # стабилизировался в коридоре — ничего не делаем
+            # Второй шаг от ФАКТИЧЕСКОЙ точки: реальный фактор СПП при текущей цене
+            # (не предсказываем формулой, а измеряем по факту — обходит ступеньку).
+            ratio = actual_final / new_seller
+            if ratio <= 0:
+                continue
+            corrected = Decimal(self._round_up(floor_final / ratio))
+            try:
+                corrected, _lr = self._apply_limits(
+                    corrected, it["config"],
+                    seller_discount=(it["current_data"].get("discount") or Decimal(0)),
+                )
+            except Exception:
+                pass
+            if corrected == new_seller:
+                continue
+            corrective.setdefault(it["token"], []).append({"nmID": nm, "price": int(corrected)})
+            plan[nm] = (it, corrected, floor_final, actual_final, ratio)
+
+        if not corrective:
+            logger.info("Closed-loop: все нестабильные в коридоре, коррекция не нужна")
+            return 0
+
+        applied = set()
+        for token, updates in corrective.items():
+            try:
+                async with create_wb_client(token) as client:
+                    await client.update_prices(updates)
+                for u in updates:
+                    applied.add(u["nmID"])
+            except Exception as e:
+                logger.error("Closed-loop: ошибка отправки коррекции: %s", e)
+
+        n = 0
+        for nm, (it, corrected, target_final, actual_final, ratio) in plan.items():
+            if nm not in applied:
+                continue
+            product = it["product"]
+            base = dict(it["current_data"])
+            base["seller_price"] = Decimal(str(it["new_price"]))
+            base["final_price"] = actual_final
+            new_final_est = corrected * ratio
+            snap = dict(base)
+            snap["seller_price"] = corrected
+            snap["final_price"] = new_final_est
+            try:
+                self._save_price_snapshot(product, snap,
+                                          competitor_nm_id=it.get("competitor_nm_id"),
+                                          competitor_price=it.get("competitor_price"))
+                self._save_price_change(
+                    run, product, base, corrected, new_final_est, "CORRECTED",
+                    f"Closed-loop: факт {actual_final}₽ вне коридора → "
+                    f"seller {it['new_price']}→{corrected} (цель {target_final:.2f}₽)",
+                )
+                n += 1
+            except Exception as e:
+                logger.error("Closed-loop: ошибка сохранения для nm=%s: %s", nm, e)
+        try:
+            self.db.commit()
+        except Exception as e:
+            logger.error("Closed-loop: commit упал: %s", e)
+            self.db.rollback()
+        logger.info("Closed-loop: доправлено %d товаров", n)
+        return n
 
     async def run_repricer(
         self,
@@ -1350,6 +1582,9 @@ class RepricerEngine:
                 await self._prefetch_all_prices_once()
 
             total_chunks = (total_count + CHUNK_SIZE - 1) // CHUNK_SIZE
+            # Накопитель для closed-loop: обновлённые нестабильные по СПП товары.
+            # Доправляются одной пост-фазой после всех чанков.
+            unstable_corrections: list = []
             for chunk_idx, chunk_start in enumerate(range(0, total_count, CHUNK_SIZE)):
                 chunk_ids = all_product_ids[chunk_start:chunk_start + CHUNK_SIZE]
                 chunk_query = (
@@ -1515,6 +1750,20 @@ class RepricerEngine:
                         )
                         if reason_code in ["UPDATED", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX", "CLAMPED_TO_MARGIN"]:
                             results["updated"] += 1
+                            # Цена реально применена и товар нестабилен по СПП —
+                            # ставим в очередь на closed-loop коррекцию. Примитивы
+                            # снимаем сейчас (объекты живые до expire_all ниже).
+                            if dec.get("spp_unstable") and not dry_run:
+                                unstable_corrections.append({
+                                    "product": product,
+                                    "nm_id": product.nm_id,
+                                    "token": product.account.wb_api_token,
+                                    "config": product.config,
+                                    "new_price": dec["new_price"],
+                                    "current_data": dec["current_data"],
+                                    "competitor_price": dec.get("snap_competitor_price"),
+                                    "competitor_nm_id": dec.get("snap_competitor_nm_id"),
+                                })
                         elif reason_code in ["SKIPPED_PROMO", "SKIPPED_INACTIVE", "NO_CHANGE", "COMPETITOR_OOS", "OUT_OF_STOCK"]:
                             results["skipped"] += 1
                         else:
@@ -1538,6 +1787,16 @@ class RepricerEngine:
                     f"Чанк {chunk_idx + 1}/{total_chunks} готов "
                     f"({min(chunk_start + CHUNK_SIZE, total_count)}/{total_count} товаров)"
                 )
+
+            # === ФАЗА 4: closed-loop коррекция нестабильных по СПП товаров ===
+            # WB пересчитывает СПП за секунды, поэтому доправляем промахи (через
+            # порог СПП) в том же прогоне, не дожидаясь следующего часа.
+            if unstable_corrections and not dry_run:
+                try:
+                    corrected_n = await self._correct_unstable_products(run, unstable_corrections)
+                    results["updated"] += corrected_n
+                except Exception as e:
+                    logger.error("Closed-loop коррекция упала: %s", e, exc_info=True)
 
             # Обновляем статус прогона
             _duration_ms = int((time.monotonic() - _run_start) * 1000)
