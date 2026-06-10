@@ -324,75 +324,10 @@ class TestStrategyCompetitorCorridor:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# _detect_spp_unstable — детектор осцилляции по истории снапшотов
+# _verify_and_correct_competitor — closed-loop verify+correct
 # ═══════════════════════════════════════════════════════════════════════════════
 
-from datetime import datetime, timedelta
-from app.models.price_snapshot import PriceSnapshot
-
-
-def _seed_snapshots(db, product_id, rows):
-    """rows: список (seller, final, spp, competitor) от старых к новым."""
-    base = datetime(2026, 6, 10, 0, 0, 0)
-    for i, (seller, final, spp, comp) in enumerate(rows):
-        db.add(PriceSnapshot(
-            product_id=product_id,
-            seller_price=Decimal(str(seller)),
-            final_price=Decimal(str(final)),
-            spp=Decimal(str(spp)),
-            competitor_price=Decimal(str(comp)),
-            is_in_promo=False,
-            snapshot_at=base + timedelta(hours=i),
-        ))
-    db.commit()
-
-
-class TestDetectSppUnstable:
-    def test_unstable_when_spp_jumps_and_competitor_stable(self, db_session, test_product):
-        engine = RepricerEngine(db=db_session, user_id=None)
-        # конкурент стабилен (~290), СПП пляшет 43↔36 — осцилляция
-        _seed_snapshots(db_session, test_product.id, [
-            (509, 289, 43, 290),
-            (560, 357, 36, 290),
-            (509, 289, 43, 290),
-            (560, 357, 36, 291),
-            (509, 289, 43, 290),
-            (560, 357, 36, 290),
-        ])
-        assert engine._detect_spp_unstable(test_product.id) is True
-
-    def test_stable_when_everything_flat(self, db_session, test_product):
-        engine = RepricerEngine(db=db_session, user_id=None)
-        _seed_snapshots(db_session, test_product.id, [
-            (509, 289, 43, 290)] * 6)
-        assert engine._detect_spp_unstable(test_product.id) is False
-
-    def test_not_unstable_when_competitor_moves(self, db_session, test_product):
-        engine = RepricerEngine(db=db_session, user_id=None)
-        # СПП пляшет, НО конкурент тоже сильно двигается → законное следование
-        _seed_snapshots(db_session, test_product.id, [
-            (509, 289, 43, 290),
-            (560, 357, 36, 360),
-            (509, 289, 43, 250),
-            (560, 357, 36, 400),
-            (509, 289, 43, 250),
-            (560, 357, 36, 360),
-        ])
-        assert engine._detect_spp_unstable(test_product.id) is False
-
-    def test_false_with_too_few_snapshots(self, db_session, test_product):
-        engine = RepricerEngine(db=db_session, user_id=None)
-        _seed_snapshots(db_session, test_product.id, [
-            (509, 289, 43, 290),
-            (560, 357, 36, 290),
-        ])
-        assert engine._detect_spp_unstable(test_product.id) is False
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# _correct_unstable_products — closed-loop verify+correct
-# ═══════════════════════════════════════════════════════════════════════════════
-
+from datetime import datetime
 from app.models.repricer_run import RepricerRun
 from app.models.price_change import PriceChange
 
@@ -447,7 +382,7 @@ class TestCorrectUnstableProducts:
                    side_effect=fake_parse_batch), \
              patch("app.services.repricer_engine.create_wb_client",
                    return_value=fake_client):
-            n = asyncio.run(engine._correct_unstable_products(run, items))
+            n = asyncio.run(engine._verify_and_correct_competitor(run, items))
 
         assert n == 1
         # отправлена коррекция вверх: round_up(1600.965 / (1588/2414)) = 2434
@@ -487,7 +422,7 @@ class TestCorrectUnstableProducts:
                    side_effect=fake_parse_batch), \
              patch("app.services.repricer_engine.create_wb_client",
                    return_value=fake_client):
-            n = asyncio.run(engine._correct_unstable_products(run, items))
+            n = asyncio.run(engine._verify_and_correct_competitor(run, items))
 
         assert n == 0
         assert fake_client.calls == []
