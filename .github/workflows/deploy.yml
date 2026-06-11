@@ -106,7 +106,7 @@ jobs:
           docker compose build backend celery_worker scheduler flower
 
           echo "[deploy] Running DB migrations..."
-          docker compose run -T --rm --no-deps backend alembic upgrade head
+          docker compose run -T --rm --no-deps backend alembic upgrade head </dev/null
 
           echo "[deploy] Recreating app services..."
           docker compose up -d --no-deps --force-recreate $APP_SERVICES

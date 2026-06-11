@@ -61,7 +61,7 @@ docker compose build backend celery_worker scheduler flower
 
 # Применяем миграции на свежесобранном образе ДО пересоздания контейнеров.
 echo "[deploy] Running DB migrations (alembic upgrade head)..."
-docker compose run -T --rm --no-deps backend alembic upgrade head
+docker compose run -T --rm --no-deps backend alembic upgrade head </dev/null
 
 # --no-deps: не перезапускаем db/redis. Пересоздаются только app-сервисы.
 echo "[deploy] Recreating app services (DB/Redis/monitoring untouched)..."
