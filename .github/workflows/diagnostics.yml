@@ -1,0 +1,85 @@
+name: Server Diagnostics
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    name: Diagnose
+    runs-on: ubuntu-latest
+    steps:
+      - name: Load SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+
+      - name: Add server to known hosts
+        env:
+          H: ${{ secrets.SERVER_HOST }}
+        run: |
+          CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
+          ssh-keyscan -H "$CLEAN_H" >> ~/.ssh/known_hosts
+
+      - name: Run diagnostics
+        env:
+          H: ${{ secrets.SERVER_HOST }}
+          U: ${{ secrets.SERVER_USER }}
+        run: |
+          CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
+          CLEAN_U=$(printf '%s' "$U" | tr -d '[:space:]"'"'"'')
+          ssh "${CLEAN_U}@${CLEAN_H}" 'bash -s' <<'EOF'
+          cd ~/repraiser_prod/repraiser_prod
+
+          echo "===== CONTAINER STATUS ====="
+          docker compose ps --format 'table {{.Name}}\t{{.Status}}'
+
+          echo ""
+          echo "===== SCHEDULER LOGS (last 100 lines) ====="
+          docker logs wb_repricer_scheduler --tail 100 2>&1
+
+          echo ""
+          echo "===== CELERY WORKER LOGS (last 50 lines) ====="
+          docker logs wb_repricer_celery --tail 50 2>&1
+
+          echo ""
+          echo "===== DB: Last 10 repricer_runs ====="
+          docker exec wb_repricer_db_prod psql -U postgres -d wb_repricer -c "
+            SELECT id, user_id, run_type, status,
+                   started_at AT TIME ZONE 'Europe/Moscow' as started_msk,
+                   completed_at AT TIME ZONE 'Europe/Moscow' as completed_msk,
+                   total_products, price_changed, error_message
+            FROM repricer_runs
+            ORDER BY started_at DESC
+            LIMIT 10;
+          "
+
+          echo ""
+          echo "===== DB: repricer_schedules ====="
+          docker exec wb_repricer_db_prod psql -U postgres -d wb_repricer -c "
+            SELECT user_id, interval_minutes, work_start_hour, work_end_hour,
+                   timezone, paused_days, is_active
+            FROM repricer_schedules;
+          "
+
+          echo ""
+          echo "===== DB: Last 10 price_changes ====="
+          docker exec wb_repricer_db_prod psql -U postgres -d wb_repricer -c "
+            SELECT id, product_id, old_price, new_price, reason,
+                   changed_at AT TIME ZONE 'Europe/Moscow' as changed_msk
+            FROM price_changes
+            ORDER BY changed_at DESC
+            LIMIT 10;
+          "
+
+          echo ""
+          echo "===== REDIS: run locks ====="
+          docker exec wb_repricer_redis redis-cli KEYS "repricer:run_lock:*"
+
+          echo ""
+          echo "===== CELERY: active tasks ====="
+          docker exec wb_repricer_celery celery -A app.celery_app inspect active 2>&1 | head -30
+
+          echo ""
+          echo "===== CELERY: reserved tasks ====="
+          docker exec wb_repricer_celery celery -A app.celery_app inspect reserved 2>&1 | head -30
+          EOF
