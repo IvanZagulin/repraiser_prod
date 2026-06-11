@@ -419,16 +419,18 @@ def setup_scheduler() -> AsyncIOScheduler:
     """Настройка и запуск планировщика"""
     scheduler = AsyncIOScheduler(timezone="UTC")
 
-    # Тик ровно в начале каждого часа (xx:00) — 9:00, 10:00, 11:00 и т.д.
+    # Тик каждые 5 минут (xx:00, xx:05, ..., xx:55).
+    # _user_should_run() проверяет per-user interval_minutes — пропускает
+    # пользователя если с последнего прогона прошло меньше его интервала.
     scheduler.add_job(
         repricer_job,
-        trigger=CronTrigger(minute=0, timezone="UTC"),
+        trigger=CronTrigger(minute="*/5", timezone="UTC"),
         id="repricer_job",
-        name="Repricer Hourly Tick",
+        name="Repricer Tick (every 5 min)",
         replace_existing=True,
         max_instances=1
     )
-    logger.info("Задача 'repricer_job' зарегистрирована (каждый час ровно в :00)")
+    logger.info("Задача 'repricer_job' зарегистрирована (каждые 5 минут)")
 
     # Proxy health-check отключён — прокси не используются для каталога
     # (вызывали массовый бан WB). При необходимости раскомментировать.

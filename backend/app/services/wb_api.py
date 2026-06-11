@@ -222,51 +222,46 @@ class WBAPIClient:
     
     async def update_prices(self, price_updates: List[Dict[str, Any]]) -> dict:
         """
-        Пакетное обновление цен
-        
-        Endpoint: POST /api/v2/upload/task
-        
-        Args:
-            price_updates: Список обновлений формата:
-                [
-                    {
-                        "nmID": 123456,
-                        "price": 1500
-                    },
-                    ...
-                ]
-        
+        Пакетное обновление цен с автоматическим разбиением на чанки.
+
+        WB API ограничивает один запрос 1000 товарами. При >1000
+        автоматически разбивает на чанки и отправляет последовательно.
+
         Returns:
-            Ответ API с ID задачи
+            Ответ API последнего чанка (с ID задачи).
         """
         if not price_updates:
             raise ValueError("price_updates не может быть пустым")
-        
-        logger.info(f"Отправляем обновление {len(price_updates)} цен в WB API")
-        
-        try:
-            # Формируем payload
-            payload = {
-                "data": price_updates
-            }
 
-            data = await self._make_request('POST', '/api/v2/upload/task', json_data=payload)
+        WB_BATCH_LIMIT = 1000
+        chunks = [price_updates[i:i + WB_BATCH_LIMIT]
+                  for i in range(0, len(price_updates), WB_BATCH_LIMIT)]
 
-            task_id = data.get('data', {}).get('id')
-            logger.info(f"✓ Задача обновления создана: task_id={task_id}")
+        logger.info(
+            "Отправляем обновление %d цен в WB API (%d чанк(ов))",
+            len(price_updates), len(chunks),
+        )
 
-            return data
+        last_response = None
+        for idx, chunk in enumerate(chunks):
+            try:
+                payload = {"data": chunk}
+                data = await self._make_request('POST', '/api/v2/upload/task', json_data=payload)
+                task_id = data.get('data', {}).get('id')
+                logger.info("✓ Чанк %d/%d (%d цен): task_id=%s", idx + 1, len(chunks), len(chunk), task_id)
+                last_response = data
+            except WBAPIError as e:
+                if "This task already exists" in str(e):
+                    logger.info(
+                        "Чанк %d/%d: задача уже в очереди WB — считаем успехом",
+                        idx + 1, len(chunks),
+                    )
+                    last_response = {"data": {"id": None}, "_already_queued": True}
+                    continue
+                logger.error("Ошибка обновления цен (чанк %d/%d): %s", idx + 1, len(chunks), e)
+                raise
 
-        except WBAPIError as e:
-            # "This task already exists" — задача уже в очереди WB, считаем успехом
-            if "This task already exists" in str(e):
-                logger.info(
-                    "Задача на обновление цены уже существует в очереди WB — "
-                    "считаем как успех, цена будет применена"
-                )
-                return {"data": {"id": None}, "_already_queued": True}
-            logger.error(f"Ошибка обновления цен в WB API: {e}")
-            raise
+        return last_response
 
     async def verify_batch_update(
         self,
