@@ -363,9 +363,10 @@ class TestStrategyCompetitorCorridor:
 # _verify_and_correct_competitor — closed-loop verify+correct
 # ═══════════════════════════════════════════════════════════════════════════════
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from app.models.repricer_run import RepricerRun
 from app.models.price_change import PriceChange
+from app.models.price_snapshot import PriceSnapshot
 
 
 class _FakeClient:
@@ -462,3 +463,71 @@ class TestCorrectUnstableProducts:
 
         assert n == 0
         assert fake_client.calls == []
+
+
+class TestCompetitorCooldownSnapshots:
+    def test_oos_during_cooldown_saves_fresh_snapshot(self, db_session, test_product, test_product_config):
+        engine = RepricerEngine(db=db_session, user_id=None)
+        engine._user_settings = {}
+
+        test_product_config.strategy = "competitor"
+        test_product_config.competitor_nm_id = 577768295
+        test_product_config.competitor_offset_type = "rub"
+        test_product_config.competitor_offset_direction = "above"
+        test_product_config.competitor_offset_value = Decimal("0")
+        test_product_config.min_price = Decimal("300")
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        run = RepricerRun(run_type="manual", status="running", started_at=now)
+        db_session.add(run)
+        db_session.flush()
+
+        db_session.add(PriceChange(
+            run_id=run.id,
+            product_id=test_product.id,
+            old_seller_price=Decimal("709"),
+            new_seller_price=Decimal("789"),
+            old_final_price=Decimal("466"),
+            new_final_price=Decimal("520.74"),
+            reason_code="UPDATED",
+            reason_message="recent competitor update",
+            changed_at=now - timedelta(minutes=10),
+        ))
+        db_session.add(PriceSnapshot(
+            product_id=test_product.id,
+            seller_price=Decimal("789"),
+            final_price=Decimal("466"),
+            spp=Decimal("34.27"),
+            competitor_price=Decimal("516"),
+            competitor_nm_id=577768295,
+            total_quantity=1,
+            snapshot_at=now - timedelta(minutes=9),
+        ))
+        db_session.commit()
+
+        async def fake_parse(_nm_id):
+            return SimpleNamespace(
+                final_price=Decimal("0"),
+                seller_price=Decimal("0"),
+                spp=None,
+                total_quantity=0,
+                is_in_promo=False,
+                catalog_stale=False,
+            )
+
+        with patch.object(engine, "_cached_parse_product", side_effect=fake_parse):
+            decision = asyncio.run(engine._decide_product(test_product, run, dry_run=False))
+
+        assert decision["skip_code"] == "OUT_OF_STOCK"
+        assert decision["current_data"]["total_quantity"] == 0
+
+        reason = engine._finalize_decision(run, decision, success=False, failed=False)
+        db_session.commit()
+
+        assert reason == "OUT_OF_STOCK"
+        latest = db_session.query(PriceSnapshot).filter(
+            PriceSnapshot.product_id == test_product.id
+        ).order_by(PriceSnapshot.snapshot_at.desc(), PriceSnapshot.id.desc()).first()
+        assert latest.final_price == Decimal("0.00")
+        assert latest.total_quantity == 0
+        assert latest.competitor_price is None

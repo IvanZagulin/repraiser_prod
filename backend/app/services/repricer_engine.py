@@ -1124,15 +1124,36 @@ class RepricerEngine:
                 if last_snap and last_snap.competitor_price:
                     try:
                         cat = await self._cached_parse_product(product.nm_id)
-                        if cat and not getattr(cat, 'catalog_stale', False) and cat.final_price > 0:
-                            floor, _ = self._competitor_corridor(Decimal(str(last_snap.competitor_price)))
-                            if cat.final_price < floor:
-                                cooldown_override = True
-                                logger.warning(
-                                    "Competitor cooldown OVERRIDE nm_id=%s: "
-                                    "факт %.2f₽ < пол %.2f₽ (конкурент %.2f₽), SPP drift",
-                                    product.nm_id, cat.final_price, floor, last_snap.competitor_price,
-                                )
+                        if cat and not getattr(cat, 'catalog_stale', False):
+                            catalog_final = Decimal(str(getattr(cat, "final_price", 0) or 0))
+                            total_quantity = getattr(cat, "total_quantity", None)
+                            if total_quantity == 0 and catalog_final <= 0:
+                                current_data = {
+                                    "seller_price": Decimal(str(getattr(cat, "seller_price", 0) or 0)),
+                                    "final_price": Decimal(0),
+                                    "spp": Decimal(0),
+                                    "is_in_promo": getattr(cat, "is_in_promo", False),
+                                    "total_quantity": 0,
+                                }
+                                return {
+                                    "product": product,
+                                    "needs_update": False,
+                                    "skip_code": "OUT_OF_STOCK",
+                                    "current_data": current_data,
+                                    "new_price": None,
+                                    "limit_reason": None,
+                                    "reason_msg": "Нет остатка (обновлено во время competitor cooldown)",
+                                    "_t0": _t0,
+                                }
+                            if catalog_final > 0:
+                                floor, _ = self._competitor_corridor(Decimal(str(last_snap.competitor_price)))
+                                if catalog_final < floor:
+                                    cooldown_override = True
+                                    logger.warning(
+                                        "Competitor cooldown OVERRIDE nm_id=%s: "
+                                        "факт %.2f₽ < пол %.2f₽ (конкурент %.2f₽), SPP drift",
+                                        product.nm_id, catalog_final, floor, last_snap.competitor_price,
+                                    )
                     except Exception as e:
                         logger.debug("Cooldown override check nm_id=%s: %s", product.nm_id, e)
                 if not cooldown_override:

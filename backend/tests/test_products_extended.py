@@ -3,6 +3,7 @@ Extended product tests ??? config strategy, pricing rules, SPP tiers, history.
 """
 import pytest
 from decimal import Decimal
+from datetime import datetime, timedelta, timezone
 
 
 # ????????? Product Config ?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
@@ -191,6 +192,69 @@ class TestProductDetail:
     def test_detail_own_product(self, client, test_product):
         r = client.get(f"/api/products/{test_product.id}/detail")
         assert r.status_code in (200, 404)  # 404 if config not created
+
+    def test_detail_deduplicates_repeated_price_changes(self, client, db_session, test_product, test_product_config):
+        from app.models.repricer_run import RepricerRun
+        from app.models.price_change import PriceChange
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        run = RepricerRun(
+            user_id=test_product.account.user_id,
+            run_type="scheduled",
+            status="completed",
+            started_at=now - timedelta(minutes=5),
+            completed_at=now - timedelta(minutes=4),
+            total_products=1,
+            updated_count=1,
+        )
+        db_session.add(run)
+        db_session.flush()
+
+        duplicate_reason = "Competitor: target 1600.96. Price applied: 2435"
+        rows = [
+            PriceChange(
+                run_id=run.id,
+                product_id=test_product.id,
+                old_seller_price=Decimal("1636.00"),
+                new_seller_price=Decimal("2435.00"),
+                old_final_price=Decimal("1076.00"),
+                new_final_price=Decimal("1607.10"),
+                reason_code="UPDATED",
+                reason_message=duplicate_reason,
+                changed_at=now,
+            ),
+            PriceChange(
+                run_id=run.id,
+                product_id=test_product.id,
+                old_seller_price=Decimal("1636.00"),
+                new_seller_price=Decimal("2435.00"),
+                old_final_price=Decimal("1076.00"),
+                new_final_price=Decimal("1607.10"),
+                reason_code="UPDATED",
+                reason_message=duplicate_reason,
+                changed_at=now - timedelta(hours=2),
+            ),
+            PriceChange(
+                run_id=run.id,
+                product_id=test_product.id,
+                old_seller_price=Decimal("2414.00"),
+                new_seller_price=Decimal("2434.00"),
+                old_final_price=Decimal("1588.00"),
+                new_final_price=Decimal("1606.44"),
+                reason_code="UPDATED",
+                reason_message="Competitor: target 1600.96. Price applied: 2434",
+                changed_at=now - timedelta(hours=3),
+            ),
+        ]
+        db_session.add_all(rows)
+        db_session.commit()
+
+        r = client.get(f"/api/products/{test_product.id}/detail")
+        assert r.status_code == 200
+
+        changes = r.json()["changes"]
+        assert len(changes) == 2
+        assert [c["new_seller_price"] for c in changes] == [2435.0, 2434.0]
 
     def test_detail_idor(self, client, db_session):
         from app.models.user import User

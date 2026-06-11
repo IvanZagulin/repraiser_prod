@@ -870,14 +870,32 @@ async def get_product_detail(
         .all()
     )
 
-    # Price changes (last 10)
-    changes = (
+    # Price changes (last 10 meaningful entries). Repeated WB/SPP oscillations can
+    # produce identical rows across runs; keep the newest copy for the card history.
+    raw_changes = (
         db.query(PriceChange)
         .filter(PriceChange.product_id == product_id)
         .order_by(desc(PriceChange.changed_at))
-        .limit(10)
+        .limit(100)
         .all()
     )
+    changes = []
+    seen_change_keys = set()
+    for c in raw_changes:
+        key = (
+            str(c.old_seller_price),
+            str(c.new_seller_price) if c.new_seller_price is not None else None,
+            str(c.old_final_price),
+            str(c.new_final_price) if c.new_final_price is not None else None,
+            c.reason_code,
+            " ".join((c.reason_message or "").split()),
+        )
+        if key in seen_change_keys:
+            continue
+        seen_change_keys.add(key)
+        changes.append(c)
+        if len(changes) >= 10:
+            break
 
     # Stats
     total_changes = (
