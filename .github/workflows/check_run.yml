@@ -1,0 +1,30 @@
+name: Quick check
+on: workflow_dispatch
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+      - name: Setup
+        env:
+          H: ${{ secrets.SERVER_HOST }}
+        run: ssh-keyscan -H "$(printf '%s' "$H" | tr -d '[:space:]')" >> ~/.ssh/known_hosts
+      - name: Check
+        env:
+          H: ${{ secrets.SERVER_HOST }}
+          U: ${{ secrets.SERVER_USER }}
+        run: |
+          R="${U}@$(printf '%s' "$H" | tr -d '[:space:]')"
+          echo "=== Last 5 runs ==="
+          ssh "$R" "docker exec wb_repricer_db_prod psql -U postgres -d wb_repricer -c \"SELECT id, status, run_type, started_at, completed_at, total_products, updated_count, skipped_count FROM repricer_runs ORDER BY id DESC LIMIT 5;\""
+          echo ""
+          echo "=== Celery active ==="
+          ssh "$R" "docker exec wb_repricer_celery celery -A app.celery_app inspect active 2>/dev/null | head -30 || echo 'no response'"
+          echo ""
+          echo "=== Scheduler last 15 lines ==="
+          ssh "$R" "docker logs --tail 15 wb_repricer_scheduler_prod 2>&1"
+          echo ""
+          echo "=== Product 3874932 latest snapshot ==="
+          ssh "$R" "docker exec wb_repricer_db_prod psql -U postgres -d wb_repricer -c \"SELECT ps.snapshot_at, ps.seller_price, ps.final_price, ps.spp, ps.competitor_price FROM price_snapshots ps JOIN products p ON ps.product_id=p.id WHERE p.seller_sku='3874932' ORDER BY ps.snapshot_at DESC LIMIT 3;\""
