@@ -95,9 +95,10 @@ class RepricerEngine:
     _COMPETITOR_FLOOR_MIN_RUB = Decimal("1")
     _COMPETITOR_CEIL_PCT = Decimal("5")
 
-    # Cooldown для competitor-товаров: не переоценивать чаще чем раз в 12 часов
-    # (2 раза в сутки). Защита от осцилляции и от отключения СПП Wildberries'ом.
-    _COMPETITOR_COOLDOWN_HOURS = 12
+    # Cooldown для competitor-товаров: не переоценивать чаще чем раз в 4 часа
+    # (6 раз в сутки). Защита от осцилляции и от отключения СПП Wildberries'ом.
+    # Override: если финальная цена ниже пола конкурента (SPP drift) — немедленно.
+    _COMPETITOR_COOLDOWN_HOURS = 4
 
     # Closed-loop verify+correct: после заливки СПП у WB готов за 3-7с (замер
     # 2026-06-10). Перепарсиваем факт у ВСЕХ обновлённых competitor-товаров и
@@ -1103,7 +1104,9 @@ class RepricerEngine:
             return {"product": product, "needs_update": False, "skip_code": "SKIPPED_INACTIVE",
                     "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": None, "_t0": _t0}
 
-        # Cooldown для competitor: не переоценивать чаще раза в 12ч (2 р/сутки).
+        # Cooldown для competitor: не переоценивать чаще раза в N ч.
+        # OVERRIDE: если СПП дрейфнул и финальная цена ниже пола конкурента —
+        # реагируем немедленно, иначе теряем маржу и нарушаем условия поставщика.
         from datetime import timedelta
         if config.strategy == "competitor" and self._COMPETITOR_COOLDOWN_HOURS > 0:
             cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=self._COMPETITOR_COOLDOWN_HOURS)
@@ -1113,10 +1116,30 @@ class RepricerEngine:
                 PriceChange.changed_at >= cutoff,
             ).first()
             if recent:
-                return {"product": product, "needs_update": False, "skip_code": "COOLDOWN",
-                        "current_data": None, "new_price": None, "limit_reason": None,
-                        "reason_msg": f"Competitor cooldown: последнее изменение {recent.changed_at.isoformat()}, "
-                                      f"следующее через {self._COMPETITOR_COOLDOWN_HOURS}ч", "_t0": _t0}
+                cooldown_override = False
+                last_snap = self.db.query(PriceSnapshot).filter(
+                    PriceSnapshot.product_id == product.id,
+                    PriceSnapshot.competitor_price.isnot(None),
+                ).order_by(PriceSnapshot.snapshot_at.desc()).first()
+                if last_snap and last_snap.competitor_price:
+                    try:
+                        cat = await self._cached_parse_product(product.nm_id)
+                        if cat and not getattr(cat, 'catalog_stale', False) and cat.final_price > 0:
+                            floor, _ = self._competitor_corridor(Decimal(str(last_snap.competitor_price)))
+                            if cat.final_price < floor:
+                                cooldown_override = True
+                                logger.warning(
+                                    "Competitor cooldown OVERRIDE nm_id=%s: "
+                                    "факт %.2f₽ < пол %.2f₽ (конкурент %.2f₽), SPP drift",
+                                    product.nm_id, cat.final_price, floor, last_snap.competitor_price,
+                                )
+                    except Exception as e:
+                        logger.debug("Cooldown override check nm_id=%s: %s", product.nm_id, e)
+                if not cooldown_override:
+                    return {"product": product, "needs_update": False, "skip_code": "COOLDOWN",
+                            "current_data": None, "new_price": None, "limit_reason": None,
+                            "reason_msg": f"Competitor cooldown: последнее изменение {recent.changed_at.isoformat()}, "
+                                          f"следующее через {self._COMPETITOR_COOLDOWN_HOURS}ч", "_t0": _t0}
 
         account = product.account
         if not account or not account.is_active:
