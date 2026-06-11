@@ -53,8 +53,11 @@ find ./backend -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
 # Нативный `docker compose` (v2): шим /usr/local/bin/docker-compose молча
 # терял аргументы и печатал help с кодом 0 — деплои 2026-06-07..10 были no-op.
-echo "[deploy] Building app images..."
-docker compose build $APP_SERVICES
+echo "[deploy] Building frontend (no cache — ensures fresh JS bundle)..."
+docker compose build --no-cache frontend
+
+echo "[deploy] Building remaining app images..."
+docker compose build backend celery_worker scheduler flower
 
 # Применяем миграции на свежесобранном образе ДО пересоздания контейнеров.
 echo "[deploy] Running DB migrations (alembic upgrade head)..."

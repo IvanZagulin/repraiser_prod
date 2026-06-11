@@ -99,8 +99,11 @@ jobs:
           find ./backend -name '*.pyc' -delete 2>/dev/null || true
           find ./backend -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
-          echo "[deploy] Building app images..."
-          docker compose build $APP_SERVICES
+          echo "[deploy] Building frontend (no cache — ensures fresh JS bundle)..."
+          docker compose build --no-cache frontend
+
+          echo "[deploy] Building remaining app images..."
+          docker compose build backend celery_worker scheduler flower
 
           echo "[deploy] Running DB migrations..."
           docker compose run --rm --no-deps backend alembic upgrade head
