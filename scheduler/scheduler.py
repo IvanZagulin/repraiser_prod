@@ -306,6 +306,14 @@ async def cleanup_stale_runs():
     'последний прогон'. TTL = 185 мин (чуть больше Celery time_limit=10800s).
     Меньший TTL помечает failed ещё живые медленные прогоны и снимает их
     run-лок (инцидент 2026-06-10).
+
+    Дополнительно: снимает осиротевшие Redis run-локи (repricer:run_lock:{user_id}) —
+    если у пользователя нет ни одной записи status='running', а лок взят не
+    меньше минуты назад (защита от гонки со свежим прогоном, который ещё не
+    успел создать свою запись в БД). Такой лок остаётся висеть на полный TTL
+    (~3ч), если прогон был помечен failed/completed вручную в обход
+    release_run_lock — планировщик при этом молча пропускает все тики
+    пользователя (инцидент 2026-06-11, user=12 простаивал ~50 мин).
     """
     STALE_MINUTES = 185
     logger.info("Очистка зависших прогонов...")
@@ -336,6 +344,40 @@ async def cleanup_stale_runs():
             logger.info(f"Очищено зависших прогонов: {len(rows)}")
         else:
             logger.info("Зависших прогонов нет")
+
+        # --- Осиротевшие Redis run-локи ---
+        # Лок мог остаться висеть, если прогон был помечен failed/completed
+        # напрямую в БД (в обход release_run_lock в repricer_task.py): блок
+        # выше его не находит, т.к. status уже не 'running'. Без этой чистки
+        # планировщик молча пропускает все тики пользователя до истечения
+        # TTL лока (~3ч).
+        try:
+            redis_client = _get_redis()
+            running_users = {
+                uid for (uid,) in db.execute(
+                    text("SELECT DISTINCT user_id FROM repricer_runs WHERE status = 'running'")
+                ).fetchall()
+            }
+            for key in redis_client.scan_iter(match="repricer:run_lock:*"):
+                try:
+                    uid = int(key.rsplit(":", 1)[-1])
+                except ValueError:
+                    continue
+                if uid in running_users:
+                    continue
+                ttl = redis_client.ttl(key)
+                # ttl <= 0: уже истёк/без TTL — нечего снимать.
+                # ttl > 10800: лок взят меньше минуты назад (TTL=10860s) —
+                # запись в repricer_runs ещё может не успеть появиться, не трогаем.
+                if ttl <= 0 or ttl > 10800:
+                    continue
+                redis_client.delete(key)
+                logger.warning(
+                    f"  Осиротевший Redis-лок user={uid} снят "
+                    f"(running-записи нет, оставался TTL={ttl}s)"
+                )
+        except Exception as e:
+            logger.warning(f"Ошибка при очистке осиротевших Redis-локов: {e}")
     except Exception as e:
         logger.error(f"Ошибка при очистке зависших прогонов: {e}", exc_info=True)
     finally:
