@@ -1,0 +1,50 @@
+name: Check Run 2380
+on: workflow_dispatch
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Load SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+
+      - name: Add known hosts
+        env:
+          H: ${{ secrets.SERVER_HOST }}
+        run: |
+          CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
+          ssh-keyscan -H "$CLEAN_H" >> ~/.ssh/known_hosts
+
+      - name: Check run 2380
+        env:
+          H: ${{ secrets.SERVER_HOST }}
+          U: ${{ secrets.SERVER_USER }}
+        run: |
+          CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
+          CLEAN_U=$(printf '%s' "$U" | tr -d '[:space:]"'"'"'')
+          ssh "${CLEAN_U}@${CLEAN_H}" 'bash -s' <<'SCRIPT'
+          cd ~/repraiser_prod/repraiser_prod
+
+          echo "=== Run #2380 status ==="
+          docker exec wb_repricer_db_prod psql -U postgres -d wb_repricer -c \
+            "SELECT id, status, started_at, finished_at, total_products, updated_count, skipped_count, error_count, trigger_type FROM repricer_runs WHERE id = 2380;"
+
+          echo ""
+          echo "=== Last 5 runs ==="
+          docker exec wb_repricer_db_prod psql -U postgres -d wb_repricer -c \
+            "SELECT id, status, started_at, finished_at, total_products, updated_count, trigger_type FROM repricer_runs ORDER BY id DESC LIMIT 5;"
+
+          echo ""
+          echo "=== Active celery tasks ==="
+          docker exec wb_repricer_celery celery -A app.celery_app inspect active 2>/dev/null | head -20 || echo "No active tasks or celery not responding"
+
+          echo ""
+          echo "=== Scheduler container status ==="
+          docker inspect --format='{{.State.Status}} since {{.State.StartedAt}}' wb_repricer_scheduler_prod 2>/dev/null || echo "scheduler not found"
+
+          echo ""
+          echo "=== Recent scheduler logs (last 20 lines) ==="
+          docker logs --tail 20 wb_repricer_scheduler_prod 2>&1 || echo "no logs"
+          SCRIPT
