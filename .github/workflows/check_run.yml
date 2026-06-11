@@ -1,8 +1,8 @@
-name: Fix stuck run and redeploy
+name: Force restart containers
 on: workflow_dispatch
 
 jobs:
-  fix:
+  restart:
     runs-on: ubuntu-latest
     steps:
       - name: Load SSH
@@ -17,69 +17,26 @@ jobs:
           CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
           ssh-keyscan -H "$CLEAN_H" >> ~/.ssh/known_hosts
 
-      - name: Fix stuck run 2380 and redeploy all fixes
+      - name: Restart all app containers
         env:
           H: ${{ secrets.SERVER_HOST }}
           U: ${{ secrets.SERVER_USER }}
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
         run: |
           CLEAN_H=$(printf '%s' "$H" | tr -d '[:space:]"'"'"'')
           CLEAN_U=$(printf '%s' "$U" | tr -d '[:space:]"'"'"'')
           REMOTE="${CLEAN_U}@${CLEAN_H}"
-          DIR="~/repraiser_prod/repraiser_prod"
 
-          echo "=== Step 1: Mark stuck run #2380 as failed ==="
-          ssh "$REMOTE" "cd $DIR && docker exec wb_repricer_db_prod psql -U postgres -d wb_repricer -c \"UPDATE repricer_runs SET status='failed', error_message='Stuck: celery idle, 0 processed after 20min', completed_at=NOW() WHERE id=2380 AND status='running';\""
-
-          echo ""
-          echo "=== Step 2: Update source code ==="
-          if ssh "$REMOTE" "cd $DIR && sudo -n chown -R \$(whoami):\$(id -gn) .git/ 2>/dev/null; git pull origin main" 2>&1; then
-            echo "git pull OK"
-          else
-            echo "git pull failed, streaming archive..."
-            curl -sL -H "Authorization: token ${GH_TOKEN}" \
-              "https://api.github.com/repos/${GH_REPO}/tarball/main" \
-              | ssh "$REMOTE" "cd $DIR && tar xz --strip-components=1"
-            echo "Archive extracted"
-          fi
+          echo "=== Recreating app containers ==="
+          ssh "$REMOTE" "cd ~/repraiser_prod/repraiser_prod && docker compose up -d --no-deps --force-recreate backend celery_worker scheduler flower frontend"
 
           echo ""
-          echo "=== Step 3: Rebuild and restart all app services ==="
-          ssh "$REMOTE" 'bash -s' <<'EOF'
-          set -e
-          cd ~/repraiser_prod/repraiser_prod
-          APP_SERVICES="backend celery_worker scheduler flower frontend"
-
-          find ./backend -name '*.pyc' -delete 2>/dev/null || true
-          find ./backend -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
-
-          echo "Building frontend (no cache)..."
-          docker compose build --no-cache frontend
-
-          echo "Building remaining services..."
-          docker compose build backend celery_worker scheduler flower
-
-          echo "Running migrations..."
-          docker compose run --rm --no-deps backend alembic upgrade head
-
-          echo "Restarting all app services..."
-          docker compose up -d --no-deps $APP_SERVICES
-
-          echo "Waiting for backend health..."
-          timeout 90 bash -c 'until docker inspect --format="{{.State.Health.Status}}" wb_repricer_backend_prod 2>/dev/null | grep -q healthy; do sleep 3; done' \
-            && echo "Backend healthy" \
-            || echo "WARNING: health check timed out"
+          echo "=== Waiting for backend health ==="
+          ssh "$REMOTE" "timeout 90 bash -c 'until docker inspect --format={{.State.Health.Status}} wb_repricer_backend_prod 2>/dev/null | grep -q healthy; do sleep 3; done' && echo 'Backend healthy' || echo 'Health check timed out'"
 
           echo ""
-          echo "Running containers:"
-          docker compose ps --format 'table {{.Name}}\t{{.Status}}'
-          EOF
+          echo "=== Container status ==="
+          ssh "$REMOTE" "cd ~/repraiser_prod/repraiser_prod && docker compose ps --format 'table {{.Name}}\t{{.Status}}'"
 
           echo ""
-          echo "=== Step 4: Verify scheduler has new config ==="
-          ssh "$REMOTE" "sleep 5 && docker logs --tail 10 wb_repricer_scheduler_prod 2>&1"
-
-          echo ""
-          echo "=== Step 5: Verify run #2380 fixed ==="
-          ssh "$REMOTE" "cd ~/repraiser_prod/repraiser_prod && docker exec wb_repricer_db_prod psql -U postgres -d wb_repricer -c \"SELECT id, status, completed_at FROM repricer_runs WHERE id = 2380;\""
+          echo "=== Scheduler startup logs ==="
+          ssh "$REMOTE" "sleep 8 && docker logs --tail 15 wb_repricer_scheduler_prod 2>&1"
