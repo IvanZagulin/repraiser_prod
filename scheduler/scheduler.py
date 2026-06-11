@@ -22,6 +22,11 @@ import redis as redis_lib
 from app.config import settings
 from app.services.telegram import telegram_notifier
 from app.services.proxy_pool import proxy_pool
+from app.utils.schedule_slots import (
+    is_interval_slot,
+    next_interval_slot,
+    run_started_in_slot,
+)
 
 # Redis-клиент для проверки run-локов перед постановкой задач в очередь
 _redis_client: redis_lib.Redis = None
@@ -105,6 +110,9 @@ def _user_should_run(db, user_id: int) -> bool:
         {"uid": user_id}
     ).fetchone()
 
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    now_user = None
+
     if sched_row:
         interval_minutes, work_start, work_end, tz_name, paused_days, is_sched_active = sched_row
 
@@ -144,8 +152,19 @@ def _user_should_run(db, user_id: int) -> bool:
                 return False
     else:
         interval_minutes = 60  # default
+        tz = ZoneInfo("Europe/Moscow")
+        now_user = datetime.now(tz)
 
-    # Проверка: прошло ли достаточно времени с последнего прогона
+    if not is_interval_slot(now_user, interval_minutes):
+        next_slot = next_interval_slot(now_user, interval_minutes)
+        logger.info(
+            f"  user={user_id}: ждём ровный слот "
+            f"({now_user.strftime('%H:%M')}, следующий {next_slot.strftime('%H:%M')}, "
+            f"интервал={interval_minutes} мин)"
+        )
+        return False
+
+    # Не ставим повторную scheduled-задачу в один и тот же ровный слот.
     last_run = db.execute(
         text("""
             SELECT started_at FROM repricer_runs
@@ -156,12 +175,19 @@ def _user_should_run(db, user_id: int) -> bool:
     ).fetchone()
 
     if last_run and last_run[0]:
-        elapsed = (datetime.now(timezone.utc).replace(tzinfo=None) - last_run[0]).total_seconds() / 60
-        if elapsed < interval_minutes - 2:  # 2-минутный буфер
-            logger.info(f"  user={user_id}: ждём интервал ({elapsed:.0f}/{interval_minutes} мин)")
+        if run_started_in_slot(last_run[0], now_user, interval_minutes):
+            logger.info(
+                f"  user={user_id}: в текущем ровном слоте уже был scheduled-запуск "
+                f"({now_user.strftime('%H:%M')}, интервал={interval_minutes} мин)"
+            )
             return False
-        else:
-            logger.info(f"  user={user_id}: интервал прошёл ({elapsed:.0f}>={interval_minutes} мин), запускаем")
+
+        elapsed = (now_utc - last_run[0]).total_seconds() / 60
+        logger.info(
+            f"  user={user_id}: ровный слот наступил "
+            f"({now_user.strftime('%H:%M')}, интервал={interval_minutes} мин, "
+            f"прошло={elapsed:.0f} мин), запускаем"
+        )
 
     return True
 
@@ -462,8 +488,8 @@ def setup_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="UTC")
 
     # Тик каждые 5 минут (xx:00, xx:05, ..., xx:55).
-    # _user_should_run() проверяет per-user interval_minutes — пропускает
-    # пользователя если с последнего прогона прошло меньше его интервала.
+    # _user_should_run() выравнивает per-user interval_minutes по локальным
+    # wall-clock слотам пользователя: :00/:15/:30/:45, :00/:30, :00 и т.д.
     scheduler.add_job(
         repricer_job,
         trigger=CronTrigger(minute="*/5", timezone="UTC"),
