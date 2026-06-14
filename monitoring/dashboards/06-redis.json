@@ -1,0 +1,69 @@
+{
+  "title":"Redis","uid":"redis","tags":["redis","cache"],
+  "timezone":"browser","refresh":"30s","time":{"from":"now-6h","to":"now"},"schemaVersion":39,
+  "templating":{"list":[{"name":"job","type":"custom","query":"redis_repricer,redis_ai_ads","current":{"text":"redis_repricer","value":"redis_repricer"},"multi":false}]},
+  "panels":[
+    {"type":"stat","title":"Repricer Redis","id":1,"gridPos":{"x":0,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"up{job=\"redis_repricer\"}"}],
+     "fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"DOWN","color":"red"},"1":{"text":"UP","color":"green"}}}],"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"green","value":1}]}}},"options":{"colorMode":"background","textMode":"value"}
+    },
+    {"type":"stat","title":"AI Ads Redis","id":2,"gridPos":{"x":4,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"up{job=\"redis_ai_ads\"}"}],
+     "fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"DOWN","color":"red"},"1":{"text":"UP","color":"green"}}}],"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"green","value":1}]}}},"options":{"colorMode":"background","textMode":"value"}
+    },
+    {"type":"stat","title":"Memory used","id":3,"gridPos":{"x":8,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"redis_memory_used_bytes{job=\"$job\"}"}],
+     "fieldConfig":{"defaults":{"unit":"bytes","thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"yellow","value":268435456},{"color":"red","value":469762048}]}}},"options":{"colorMode":"background"}
+    },
+    {"type":"stat","title":"Connected clients","id":4,"gridPos":{"x":12,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"redis_connected_clients{job=\"$job\"}"}],
+     "fieldConfig":{"defaults":{"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"yellow","value":50},{"color":"red","value":100}]}}},"options":{"colorMode":"background","graphMode":"area"}
+    },
+    {"type":"stat","title":"Ops/sec","id":5,"gridPos":{"x":16,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"rate(redis_commands_processed_total{job=\"$job\"}[1m])"}],
+     "fieldConfig":{"defaults":{"unit":"ops","decimals":0}},"options":{"colorMode":"background","graphMode":"area"}
+    },
+    {"type":"stat","title":"Hit rate","id":6,"gridPos":{"x":20,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"redis_keyspace_hits_total{job=\"$job\"} / (redis_keyspace_hits_total{job=\"$job\"} + redis_keyspace_misses_total{job=\"$job\"})"}],
+     "fieldConfig":{"defaults":{"unit":"percentunit","decimals":2,"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"yellow","value":0.8},{"color":"green","value":0.95}]}}},"options":{"colorMode":"background"}
+    },
+    {"type":"timeseries","title":"Commands / sec","id":10,"gridPos":{"x":0,"y":4,"w":12,"h":8},
+     "targets":[{"expr":"rate(redis_commands_processed_total{job=\"$job\"}[1m])","legendFormat":"ops/s"}],
+     "fieldConfig":{"defaults":{"unit":"ops","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":15}}}
+    },
+    {"type":"timeseries","title":"Memory used","id":11,"gridPos":{"x":12,"y":4,"w":12,"h":8},
+     "targets":[
+       {"expr":"redis_memory_used_bytes{job=\"$job\"}","legendFormat":"used"},
+       {"expr":"redis_memory_max_bytes{job=\"$job\"}","legendFormat":"max"}
+     ],
+     "fieldConfig":{"defaults":{"unit":"bytes","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":10}}}
+    },
+    {"type":"timeseries","title":"Connected clients","id":12,"gridPos":{"x":0,"y":12,"w":12,"h":7},
+     "targets":[{"expr":"redis_connected_clients{job=\"$job\"}","legendFormat":"clients"}],
+     "fieldConfig":{"defaults":{"custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":15}}}
+    },
+    {"type":"timeseries","title":"Hits vs misses / sec","id":13,"gridPos":{"x":12,"y":12,"w":12,"h":7},
+     "targets":[
+       {"expr":"rate(redis_keyspace_hits_total{job=\"$job\"}[1m])","legendFormat":"hits"},
+       {"expr":"rate(redis_keyspace_misses_total{job=\"$job\"}[1m])","legendFormat":"misses"}
+     ],
+     "fieldConfig":{"defaults":{"unit":"ops","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":10}}}
+    },
+    {"type":"timeseries","title":"Keys by database","id":14,"gridPos":{"x":0,"y":19,"w":12,"h":7},
+     "targets":[{"expr":"redis_db_keys{job=\"$job\"}","legendFormat":"db{{db}}"}],
+     "fieldConfig":{"defaults":{"custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":10}}}
+    },
+    {"type":"timeseries","title":"Evicted keys / sec","id":15,"gridPos":{"x":12,"y":19,"w":12,"h":7},
+     "targets":[{"expr":"rate(redis_evicted_keys_total{job=\"$job\"}[1m])","legendFormat":"evicted"}],
+     "fieldConfig":{"defaults":{"unit":"ops","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":20},"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"red","value":1}]}}}
+    },
+    {"type":"timeseries","title":"Blocked clients","id":16,"gridPos":{"x":0,"y":26,"w":12,"h":6},
+     "targets":[{"expr":"redis_blocked_clients{job=\"$job\"}","legendFormat":"blocked"}],
+     "fieldConfig":{"defaults":{"custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":10},"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"red","value":5}]}}}
+    },
+    {"type":"timeseries","title":"Slowlog length","id":17,"gridPos":{"x":12,"y":26,"w":12,"h":6},
+     "targets":[{"expr":"redis_slowlog_length{job=\"$job\"}","legendFormat":"entries"}],
+     "fieldConfig":{"defaults":{"custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":10}}}
+    }
+  ]
+}

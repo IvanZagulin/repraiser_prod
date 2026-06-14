@@ -1,0 +1,70 @@
+{
+  "title":"Containers","uid":"containers","tags":["docker","containers"],
+  "timezone":"browser","refresh":"30s","time":{"from":"now-6h","to":"now"},"schemaVersion":39,
+  "templating":{"list":[{"name":"container","type":"query","query":"label_values(ops_docker_cpu_percent, name)","datasource":{"type":"prometheus","uid":"PBFA97CFB590B2093"},"multi":true,"includeAll":true,"current":{"text":"All","value":"$__all"}}]},
+  "panels":[
+    {"type":"stat","title":"Running containers","id":1,"gridPos":{"x":0,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"count(ops_container_running == 1)"}],
+     "fieldConfig":{"defaults":{"thresholds":{"mode":"absolute","steps":[{"color":"green"}]}}},"options":{"colorMode":"background"}
+    },
+    {"type":"stat","title":"Unhealthy","id":2,"gridPos":{"x":4,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"count(ops_container_healthy == 0) or vector(0)"}],
+     "fieldConfig":{"defaults":{"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"red","value":1}]}}},"options":{"colorMode":"background"}
+    },
+    {"type":"stat","title":"Total CPU %","id":3,"gridPos":{"x":8,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"sum(ops_docker_cpu_percent)"}],
+     "fieldConfig":{"defaults":{"unit":"percent","decimals":1,"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"yellow","value":150},{"color":"red","value":300}]}}},"options":{"colorMode":"background"}
+    },
+    {"type":"stat","title":"Total restarts","id":4,"gridPos":{"x":12,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"sum(ops_container_restart_count)"}],
+     "fieldConfig":{"defaults":{"unit":"none"}},"options":{"colorMode":"background","graphMode":"area"}
+    },
+    {"type":"stat","title":"Disk used","id":5,"gridPos":{"x":16,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_disk_used_pct"}],
+     "fieldConfig":{"defaults":{"unit":"percent","thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"yellow","value":70},{"color":"red","value":85}]}}},"options":{"colorMode":"background"}
+    },
+    {"type":"stat","title":"Memory used","id":6,"gridPos":{"x":20,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_mem_used_pct"}],
+     "fieldConfig":{"defaults":{"unit":"percent","thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"yellow","value":80},{"color":"red","value":90}]}}},"options":{"colorMode":"background"}
+    },
+    {"type":"table","title":"Container status","id":10,"gridPos":{"x":0,"y":4,"w":24,"h":8},
+     "targets":[
+       {"expr":"ops_container_running","legendFormat":"","refId":"A","format":"table","instant":true},
+       {"expr":"ops_container_healthy","legendFormat":"","refId":"B","format":"table","instant":true},
+       {"expr":"ops_container_restart_count","legendFormat":"","refId":"C","format":"table","instant":true}
+     ],
+     "transformations":[
+       {"id":"merge"},
+       {"id":"organize","options":{"excludeByName":{"Time":true,"__name__":true,"instance":true,"job":true},"renameByName":{"name":"Container","Value #A":"Running","Value #B":"Healthy","Value #C":"Restarts"}}}
+     ],
+     "fieldConfig":{"overrides":[
+       {"matcher":{"id":"byName","options":"Running"},"properties":[{"id":"mappings","value":[{"type":"value","options":{"0":{"text":"DOWN","color":"red"},"1":{"text":"UP","color":"green"}}}]}]},
+       {"matcher":{"id":"byName","options":"Healthy"},"properties":[{"id":"mappings","value":[{"type":"value","options":{"-1":{"text":"N/A","color":"text"},"0":{"text":"BAD","color":"red"},"1":{"text":"OK","color":"green"}}}]}]}
+     ]}
+    },
+    {"type":"timeseries","title":"CPU usage by container","id":20,"gridPos":{"x":0,"y":12,"w":12,"h":8},
+     "targets":[{"expr":"ops_docker_cpu_percent{name=~\"$container\"}","legendFormat":"{{name}}"}],
+     "fieldConfig":{"defaults":{"unit":"percent","custom":{"drawStyle":"line","lineWidth":1,"fillOpacity":10}}}
+    },
+    {"type":"timeseries","title":"Memory usage by container","id":21,"gridPos":{"x":12,"y":12,"w":12,"h":8},
+     "targets":[{"expr":"ops_docker_memory_bytes{name=~\"$container\"}","legendFormat":"{{name}}"}],
+     "fieldConfig":{"defaults":{"unit":"bytes","custom":{"drawStyle":"line","lineWidth":1,"fillOpacity":10}}}
+    },
+    {"type":"timeseries","title":"Memory % of limit","id":25,"gridPos":{"x":0,"y":20,"w":24,"h":7},
+     "targets":[{"expr":"ops_docker_memory_bytes{name=~\"$container\"} / ops_docker_memory_limit_bytes{name=~\"$container\"} * 100","legendFormat":"{{name}}"}],
+     "fieldConfig":{"defaults":{"unit":"percent","min":0,"max":100,"custom":{"drawStyle":"line","lineWidth":1,"fillOpacity":10},"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"yellow","value":80},{"color":"red","value":95}]}}}
+    },
+    {"type":"timeseries","title":"Network received","id":22,"gridPos":{"x":0,"y":27,"w":12,"h":7},
+     "targets":[{"expr":"ops_docker_net_rx_bytes{name=~\"$container\"}","legendFormat":"{{name}}"}],
+     "fieldConfig":{"defaults":{"unit":"bytes","custom":{"drawStyle":"line","lineWidth":1,"fillOpacity":10}}}
+    },
+    {"type":"timeseries","title":"Network transmitted","id":23,"gridPos":{"x":12,"y":27,"w":12,"h":7},
+     "targets":[{"expr":"ops_docker_net_tx_bytes{name=~\"$container\"}","legendFormat":"{{name}}"}],
+     "fieldConfig":{"defaults":{"unit":"bytes","custom":{"drawStyle":"line","lineWidth":1,"fillOpacity":10}}}
+    },
+    {"type":"timeseries","title":"Container restarts","id":24,"gridPos":{"x":0,"y":34,"w":24,"h":6},
+     "targets":[{"expr":"ops_container_restart_count","legendFormat":"{{name}}"}],
+     "fieldConfig":{"defaults":{"unit":"none"}}
+    }
+  ]
+}

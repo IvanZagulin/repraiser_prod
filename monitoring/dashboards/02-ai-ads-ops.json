@@ -1,0 +1,56 @@
+{
+  "title":"AI Ads — Operations","uid":"ai-ads-ops","tags":["ai_ads","ops"],
+  "timezone":"browser","refresh":"30s","time":{"from":"now-6h","to":"now"},"schemaVersion":39,
+  "panels":[
+    {"type":"stat","title":"Celery worker online","id":1,"gridPos":{"x":0,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_celery_worker_online{app=\"ai_ads\"}"}],
+     "fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"DOWN","color":"red"},"1":{"text":"UP","color":"green"}}}],"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"green","value":1}]}}},
+     "options":{"colorMode":"background","textMode":"value"}
+    },
+    {"type":"stat","title":"Celery beat alive","id":2,"gridPos":{"x":4,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_celery_beat_alive{app=\"ai_ads\"}"}],
+     "fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"DOWN","color":"red"},"1":{"text":"UP","color":"green"}}}],"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"green","value":1}]}}},
+     "options":{"colorMode":"background","textMode":"value"}
+    },
+    {"type":"stat","title":"Queue depth","id":3,"gridPos":{"x":8,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_celery_queue_depth{app=\"ai_ads\"}"}],
+     "fieldConfig":{"defaults":{"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"yellow","value":20},{"color":"red","value":50}]}}},
+     "options":{"colorMode":"background","graphMode":"area"}
+    },
+    {"type":"stat","title":"Worker container healthy","id":4,"gridPos":{"x":12,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_container_healthy{name=\"ai_ads_celery_worker\"}"}],
+     "fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"-1":{"text":"NO HC","color":"yellow"},"0":{"text":"UNHEALTHY","color":"red"},"1":{"text":"HEALTHY","color":"green"}}}],"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"green","value":1}]}}},
+     "options":{"colorMode":"background","textMode":"value"}
+    },
+    {"type":"stat","title":"Backend container","id":5,"gridPos":{"x":16,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_container_running{name=\"ai_ads_backend\"}"}],
+     "fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"DOWN","color":"red"},"1":{"text":"UP","color":"green"}}}],"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"green","value":1}]}}},
+     "options":{"colorMode":"background"}
+    },
+    {"type":"stat","title":"Postgres healthy","id":6,"gridPos":{"x":20,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_container_healthy{name=\"ai_ads_postgres\"}"}],
+     "fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"-1":{"text":"NO HC","color":"yellow"},"0":{"text":"BAD","color":"red"},"1":{"text":"OK","color":"green"}}}],"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"green","value":1}]}}},
+     "options":{"colorMode":"background"}
+    },
+    {"type":"timeseries","title":"Queue depth","id":10,"gridPos":{"x":0,"y":4,"w":12,"h":8},
+     "targets":[{"expr":"ops_celery_queue_depth{app=\"ai_ads\"}","legendFormat":"queue"}],
+     "fieldConfig":{"defaults":{"custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":15,"thresholdsStyle":{"mode":"line"}},"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"yellow","value":20},{"color":"red","value":50}]}}}
+    },
+    {"type":"timeseries","title":"Worker / Beat online","id":11,"gridPos":{"x":12,"y":4,"w":12,"h":8},
+     "targets":[{"expr":"ops_celery_worker_online{app=\"ai_ads\"}","legendFormat":"worker"},{"expr":"ops_celery_beat_alive{app=\"ai_ads\"}","legendFormat":"beat"}],
+     "fieldConfig":{"defaults":{"min":0,"max":1.2,"custom":{"drawStyle":"line","lineWidth":2,"stepBefore":true,"fillOpacity":10}}}
+    },
+    {"type":"timeseries","title":"DB connections","id":12,"gridPos":{"x":0,"y":12,"w":12,"h":7},
+     "targets":[{"expr":"sum by(datname)(pg_stat_activity_count{job=\"postgres_ai_ads\"})","legendFormat":"{{datname}}"}],
+     "fieldConfig":{"defaults":{"unit":"none"}}
+    },
+    {"type":"timeseries","title":"Redis ops/sec","id":13,"gridPos":{"x":12,"y":12,"w":12,"h":7},
+     "targets":[{"expr":"rate(redis_commands_processed_total{job=\"redis_ai_ads\"}[1m])","legendFormat":"ops/s"}],
+     "fieldConfig":{"defaults":{"unit":"ops"}}
+    },
+    {"type":"timeseries","title":"Worker container restarts","id":14,"gridPos":{"x":0,"y":19,"w":24,"h":6},
+     "targets":[{"expr":"ops_container_restart_count{name=~\"ai_ads_.*\"}","legendFormat":"{{name}}"}],
+     "fieldConfig":{"defaults":{"unit":"none"}}
+    }
+  ]
+}

@@ -145,6 +145,15 @@ services:
         limits:
           memory: 2g
           cpus: "3.0"
+    # Healthcheck: реальный inspect ping. Зависший воркер не отвечает → Docker
+    # помечает unhealthy → restart: unless-stopped пересоздаёт контейнер.
+    # Без этого зависший воркер вечно "Up" (инцидент 2026-06).
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -t 10 -d celery@$$HOSTNAME 2>&1 | grep -q pong"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 90s
     restart: unless-stopped
     logging:
       driver: json-file
@@ -285,6 +294,7 @@ services:
       - "127.0.0.1:9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -302,6 +312,10 @@ services:
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.52.1
     container_name: wb_repricer_cadvisor
+    command:
+      - '-containerd=/run/containerd/containerd.sock'
+      - '-docker_only=true'
+      - '-housekeeping_interval=15s'
     ports:
       - "127.0.0.1:8081:8080"
     volumes:
@@ -310,6 +324,7 @@ services:
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
+      - /run/containerd:/run/containerd:ro
     privileged: true
     devices:
       - /dev/kmsg
@@ -331,11 +346,15 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/rootfs:ro
+      # textfile collector: ops-watchdog пишет сюда .prom-файлы → автоматически
+      # появляются в Prometheus как метрики ops_*. Read-only.
+      - /var/lib/node_exporter/textfile:/var/lib/node_exporter/textfile:ro
     command:
       - '--path.procfs=/host/proc'
       - '--path.rootfs=/rootfs'
       - '--path.sysfs=/host/sys'
       - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.textfile.directory=/var/lib/node_exporter/textfile'
     deploy:
       resources:
         limits:
@@ -344,6 +363,80 @@ services:
     restart: unless-stopped
     networks:
       - wb_network
+
+  postgres_exporter_repricer:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: pg_exporter_repricer
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-wb_repricer}?sslmode=disable"
+    expose:
+      - "9187"
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+          cpus: "0.1"
+    restart: unless-stopped
+    networks:
+      - wb_network
+
+  redis_exporter_repricer:
+    image: oliver006/redis_exporter:v1.66.0
+    container_name: redis_exporter_repricer
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+    expose:
+      - "9121"
+    depends_on:
+      - redis
+    deploy:
+      resources:
+        limits:
+          memory: 32m
+          cpus: "0.1"
+    restart: unless-stopped
+    networks:
+      - wb_network
+
+  postgres_exporter_ai_ads:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: pg_exporter_ai_ads
+    environment:
+      # Connects to ai_ads stack via shared external network ai_ads_manager_default
+      DATA_SOURCE_NAME: "postgresql://${AI_ADS_POSTGRES_USER:-postgres}:${AI_ADS_POSTGRES_PASSWORD}@postgres:5432/${AI_ADS_POSTGRES_DB:-ai_ads_db}?sslmode=disable"
+    expose:
+      - "9187"
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+          cpus: "0.1"
+    restart: unless-stopped
+    networks:
+      - wb_network
+      - ai_ads_default
+
+  redis_exporter_ai_ads:
+    image: oliver006/redis_exporter:v1.66.0
+    container_name: redis_exporter_ai_ads
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+      REDIS_PASSWORD: "${AI_ADS_REDIS_PASSWORD}"
+    expose:
+      - "9121"
+    deploy:
+      resources:
+        limits:
+          memory: 32m
+          cpus: "0.1"
+    restart: unless-stopped
+    networks:
+      - wb_network
+      - ai_ads_default
 
   grafana:
     image: grafana/grafana:10.4.0
@@ -383,3 +476,8 @@ volumes:
 networks:
   wb_network:
     driver: bridge
+  # External network from ai_ads_manager compose — exporters use it to reach
+  # ai_ads postgres/redis directly. Created automatically when ai_ads stack runs.
+  ai_ads_default:
+    name: ai_ads_manager_default
+    external: true

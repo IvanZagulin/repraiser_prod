@@ -1,0 +1,159 @@
+groups:
+  - name: ops_watchdog
+    interval: 60s
+    rules:
+      - alert: WatchdogStopped
+        expr: time() - ops_watchdog_last_run_unixtime > 600
+        for: 2m
+        labels: { severity: critical, source: watchdog }
+        annotations:
+          summary: "ops-watchdog не запускался > 10 мин"
+
+      - alert: CeleryWorkerDown
+        expr: ops_celery_worker_online == 0
+        for: 2m
+        labels: { severity: critical, source: watchdog }
+        annotations:
+          summary: "Celery worker {{ $labels.app }} НЕ отвечает на ping"
+
+      - alert: CeleryQueueBacklog
+        expr: ops_celery_queue_depth > 100
+        for: 5m
+        labels: { severity: critical, source: watchdog }
+        annotations:
+          summary: "Очередь Celery {{ $labels.app }} = {{ $value }} > 100"
+
+      - alert: RepricerNoSuccessfulRuns
+        expr: ops_repricer_last_success_age_seconds > ops_repricer_threshold_seconds and ops_in_work_hours == 1
+        for: 5m
+        labels: { severity: critical, source: watchdog }
+        annotations:
+          summary: "Repricer: нет успешных прогонов > {{ $value | humanizeDuration }} (порог {{ with query \"ops_repricer_threshold_seconds\" }}{{ . | first | value | humanizeDuration }}{{ end }})"
+
+      - alert: RepricerStuckRunning
+        expr: ops_repricer_stuck_running > 0
+        for: 5m
+        labels: { severity: warning, source: watchdog }
+        annotations:
+          summary: "Repricer: {{ $value }} прогонов застряли > 185 мин"
+
+      - alert: ContainerDown
+        expr: ops_container_running == 0
+        for: 2m
+        labels: { severity: critical, source: watchdog }
+        annotations:
+          summary: "Контейнер {{ $labels.name }} не running"
+
+      - alert: ContainerUnhealthy
+        expr: ops_container_healthy == 0
+        for: 3m
+        labels: { severity: warning, source: watchdog }
+        annotations:
+          summary: "Контейнер {{ $labels.name }} unhealthy"
+
+      - alert: DiskHigh
+        expr: ops_disk_used_pct{mount="/"} > 85
+        for: 5m
+        labels: { severity: warning, source: watchdog }
+        annotations:
+          summary: "Диск {{ $labels.mount }} занят {{ $value }}%"
+
+      - alert: MemHigh
+        expr: ops_mem_used_pct > 90
+        for: 5m
+        labels: { severity: warning, source: watchdog }
+        annotations:
+          summary: "Память: {{ $value }}%"
+
+      - alert: CertExpiringSoon
+        expr: ops_tls_cert_expiry_days < 14
+        for: 5m
+        labels: { severity: warning, source: watchdog }
+        annotations:
+          summary: "TLS {{ $labels.domain }} истекает через {{ $value }} дн."
+
+      - alert: BackupStale
+        expr: ops_last_backup_age_seconds > 129600
+        for: 10m
+        labels: { severity: warning, source: watchdog }
+        annotations:
+          summary: "Бэкап не запускался > 36ч"
+
+      - alert: BackupUnitFailed
+        expr: ops_backup_unit_failed == 1
+        for: 5m
+        labels: { severity: critical, source: watchdog }
+        annotations:
+          summary: "server-backup.service в состоянии failed"
+
+      - alert: CertbotUnitFailed
+        expr: ops_certbot_unit_failed == 1
+        for: 5m
+        labels: { severity: warning, source: watchdog }
+        annotations:
+          summary: "certbot.service в состоянии failed"
+
+  - name: infrastructure
+    interval: 30s
+    rules:
+      - alert: NodeExporterDown
+        expr: up{job="node_exporter"} == 0
+        for: 3m
+        labels: { severity: warning }
+        annotations:
+          summary: "node_exporter не отвечает"
+
+      - alert: CadvisorDown
+        expr: up{job="cadvisor"} == 0
+        for: 3m
+        labels: { severity: warning }
+        annotations:
+          summary: "cadvisor не отвечает"
+
+      - alert: ContainerOOMKilled
+        expr: increase(container_oom_events_total[5m]) > 0
+        for: 1m
+        labels: { severity: warning, source: cadvisor }
+        annotations:
+          summary: "OOM kill в контейнере {{ $labels.name }}"
+
+      - alert: ContainerHighMemory
+        expr: (container_memory_usage_bytes{name=~".+"} / container_spec_memory_limit_bytes{name=~".+"}) > 0.9
+        for: 10m
+        labels: { severity: warning, source: cadvisor }
+        annotations:
+          summary: "Контейнер {{ $labels.name }} использует > 90% лимита памяти"
+
+  - name: postgres
+    interval: 30s
+    rules:
+      - alert: PostgresExporterDown
+        expr: up{job=~"postgres.*"} == 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "postgres_exporter не отвечает ({{ $labels.instance }})"
+
+      - alert: PostgresTooManyConnections
+        expr: sum by (datname) (pg_stat_activity_count) > 150
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "PG: {{ $value }} коннектов к {{ $labels.datname }} (лимит 200)"
+
+  - name: redis
+    interval: 30s
+    rules:
+      - alert: RedisExporterDown
+        expr: up{job=~"redis.*"} == 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "redis_exporter не отвечает ({{ $labels.instance }})"
+
+      - alert: RedisHighMemory
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.85
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Redis {{ $labels.instance }} использует > 85% maxmemory"

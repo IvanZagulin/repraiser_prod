@@ -1,0 +1,30 @@
+{
+  "title":"Logs","uid":"logs","tags":["logs","loki"],
+  "timezone":"browser","refresh":"","time":{"from":"now-1h","to":"now"},"schemaVersion":39,
+  "templating":{"list":[
+    {"name":"container","type":"query","query":"label_values(service)","datasource":{"type":"loki","uid":"P8E80F9AEF21F6940"},"multi":true,"includeAll":true,"current":{"text":"All","value":"$__all"}},
+    {"name":"search","type":"textbox","current":{"text":"","value":""},"label":"Search"}
+  ]},
+  "panels":[
+    {"type":"logs","title":"All container logs","id":1,"gridPos":{"x":0,"y":0,"w":24,"h":16},
+     "targets":[{"expr":"{service=~\"$container\"} |~ \"$search\"","refId":"A"}],
+     "datasource":{"type":"loki","uid":"P8E80F9AEF21F6940"},
+     "options":{"showTime":true,"showLabels":true,"showCommonLabels":false,"wrapLogMessage":true,"prettifyLogMessage":false,"enableLogDetails":true,"sortOrder":"Descending","dedupStrategy":"none"}
+    },
+    {"type":"timeseries","title":"Log volume by container","id":2,"gridPos":{"x":0,"y":16,"w":24,"h":7},
+     "targets":[{"expr":"sum by(service)(count_over_time({service=~\"$container\"}[1m]))","legendFormat":"{{service}}","refId":"A"}],
+     "datasource":{"type":"loki","uid":"P8E80F9AEF21F6940"},
+     "fieldConfig":{"defaults":{"unit":"short","custom":{"drawStyle":"bars","fillOpacity":40,"stacking":{"mode":"normal"}}}}
+    },
+    {"type":"logs","title":"Errors only","id":3,"gridPos":{"x":0,"y":23,"w":24,"h":12},
+     "targets":[{"expr":"{service=~\"$container\"} |~ \"(?i)(error|exception|traceback|critical|fatal)\"","refId":"A"}],
+     "datasource":{"type":"loki","uid":"P8E80F9AEF21F6940"},
+     "options":{"showTime":true,"showLabels":true,"wrapLogMessage":true,"enableLogDetails":true,"sortOrder":"Descending"}
+    },
+    {"type":"timeseries","title":"Error rate / min","id":4,"gridPos":{"x":0,"y":35,"w":24,"h":7},
+     "targets":[{"expr":"sum by(service)(count_over_time({service=~\"$container\"} |~ \"(?i)(error|exception|traceback|critical|fatal)\"[1m]))","legendFormat":"{{service}}","refId":"A"}],
+     "datasource":{"type":"loki","uid":"P8E80F9AEF21F6940"},
+     "fieldConfig":{"defaults":{"unit":"short","custom":{"drawStyle":"bars","fillOpacity":50},"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"red","value":5}]}}}
+    }
+  ]
+}

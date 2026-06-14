@@ -1,0 +1,69 @@
+{
+  "title":"PostgreSQL","uid":"postgresql","tags":["postgres","database"],
+  "timezone":"browser","refresh":"30s","time":{"from":"now-6h","to":"now"},"schemaVersion":39,
+  "templating":{"list":[{"name":"job","type":"custom","query":"postgres_repricer,postgres_ai_ads","current":{"text":"postgres_repricer","value":"postgres_repricer"},"multi":false}]},
+  "panels":[
+    {"type":"stat","title":"Repricer PG exporter","id":1,"gridPos":{"x":0,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"up{job=\"postgres_repricer\"}"}],
+     "fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"DOWN","color":"red"},"1":{"text":"UP","color":"green"}}}],"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"green","value":1}]}}},"options":{"colorMode":"background","textMode":"value"}
+    },
+    {"type":"stat","title":"AI Ads PG exporter","id":2,"gridPos":{"x":4,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"up{job=\"postgres_ai_ads\"}"}],
+     "fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"DOWN","color":"red"},"1":{"text":"UP","color":"green"}}}],"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"green","value":1}]}}},"options":{"colorMode":"background","textMode":"value"}
+    },
+    {"type":"stat","title":"Active connections","id":3,"gridPos":{"x":8,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"sum(pg_stat_activity_count{job=\"$job\"})"}],
+     "fieldConfig":{"defaults":{"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"yellow","value":80},{"color":"red","value":150}]}}},"options":{"colorMode":"background","graphMode":"area"}
+    },
+    {"type":"stat","title":"DB size","id":4,"gridPos":{"x":12,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"sum(pg_database_size_bytes{job=\"$job\"})"}],
+     "fieldConfig":{"defaults":{"unit":"bytes"}},"options":{"colorMode":"background"}
+    },
+    {"type":"stat","title":"Deadlocks (1h)","id":5,"gridPos":{"x":16,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"sum(increase(pg_stat_database_deadlocks{job=\"$job\"}[1h]))"}],
+     "fieldConfig":{"defaults":{"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"red","value":1}]}}},"options":{"colorMode":"background"}
+    },
+    {"type":"stat","title":"Temp files (1h)","id":6,"gridPos":{"x":20,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"sum(increase(pg_stat_database_temp_bytes{job=\"$job\"}[1h]))"}],
+     "fieldConfig":{"defaults":{"unit":"bytes","thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"yellow","value":104857600}]}}},"options":{"colorMode":"background"}
+    },
+    {"type":"timeseries","title":"Connections by database","id":10,"gridPos":{"x":0,"y":4,"w":12,"h":8},
+     "targets":[{"expr":"sum by(datname)(pg_stat_activity_count{job=\"$job\"})","legendFormat":"{{datname}}"}],
+     "fieldConfig":{"defaults":{"custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":15}}}
+    },
+    {"type":"timeseries","title":"Connections by state","id":11,"gridPos":{"x":12,"y":4,"w":12,"h":8},
+     "targets":[{"expr":"sum by(state)(pg_stat_activity_count{job=\"$job\"})","legendFormat":"{{state}}"}],
+     "fieldConfig":{"defaults":{"custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":15,"stacking":{"mode":"normal"}}}}
+    },
+    {"type":"timeseries","title":"Transactions / sec","id":12,"gridPos":{"x":0,"y":12,"w":12,"h":7},
+     "targets":[
+       {"expr":"sum(rate(pg_stat_database_xact_commit{job=\"$job\"}[1m]))","legendFormat":"commit"},
+       {"expr":"sum(rate(pg_stat_database_xact_rollback{job=\"$job\"}[1m]))","legendFormat":"rollback"}
+     ],
+     "fieldConfig":{"defaults":{"unit":"ops","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":10}}}
+    },
+    {"type":"timeseries","title":"Tuples: fetched vs returned","id":13,"gridPos":{"x":12,"y":12,"w":12,"h":7},
+     "targets":[
+       {"expr":"sum(rate(pg_stat_database_tup_fetched{job=\"$job\"}[1m]))","legendFormat":"fetched"},
+       {"expr":"sum(rate(pg_stat_database_tup_returned{job=\"$job\"}[1m]))","legendFormat":"returned"}
+     ],
+     "fieldConfig":{"defaults":{"unit":"ops","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":10}}}
+    },
+    {"type":"timeseries","title":"Tuples: inserted / updated / deleted","id":14,"gridPos":{"x":0,"y":19,"w":12,"h":7},
+     "targets":[
+       {"expr":"sum(rate(pg_stat_database_tup_inserted{job=\"$job\"}[1m]))","legendFormat":"inserted"},
+       {"expr":"sum(rate(pg_stat_database_tup_updated{job=\"$job\"}[1m]))","legendFormat":"updated"},
+       {"expr":"sum(rate(pg_stat_database_tup_deleted{job=\"$job\"}[1m]))","legendFormat":"deleted"}
+     ],
+     "fieldConfig":{"defaults":{"unit":"ops","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":10}}}
+    },
+    {"type":"timeseries","title":"Database size","id":15,"gridPos":{"x":12,"y":19,"w":12,"h":7},
+     "targets":[{"expr":"pg_database_size_bytes{job=\"$job\"}","legendFormat":"{{datname}}"}],
+     "fieldConfig":{"defaults":{"unit":"bytes","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":10}}}
+    },
+    {"type":"timeseries","title":"Cache hit ratio","id":16,"gridPos":{"x":0,"y":26,"w":24,"h":7},
+     "targets":[{"expr":"sum(pg_stat_database_blks_hit{job=\"$job\"}) / (sum(pg_stat_database_blks_hit{job=\"$job\"}) + sum(pg_stat_database_blks_read{job=\"$job\"}))","legendFormat":"hit ratio"}],
+     "fieldConfig":{"defaults":{"unit":"percentunit","min":0,"max":1,"custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":10},"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"yellow","value":0.9},{"color":"green","value":0.99}]}}}
+    }
+  ]
+}

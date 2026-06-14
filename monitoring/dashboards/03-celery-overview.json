@@ -1,0 +1,50 @@
+{
+  "title":"Celery — Overview","uid":"celery-overview","tags":["celery"],
+  "timezone":"browser","refresh":"30s","time":{"from":"now-6h","to":"now"},"schemaVersion":39,
+  "panels":[
+    {"type":"stat","title":"Repricer worker","id":1,"gridPos":{"x":0,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_celery_worker_online{app=\"repricer\"}"}],
+     "fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"DOWN","color":"red"},"1":{"text":"UP","color":"green"}}}],"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"green","value":1}]}}},"options":{"colorMode":"background","textMode":"value"}
+    },
+    {"type":"stat","title":"AI Ads worker","id":2,"gridPos":{"x":4,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_celery_worker_online{app=\"ai_ads\"}"}],
+     "fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"DOWN","color":"red"},"1":{"text":"UP","color":"green"}}}],"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"green","value":1}]}}},"options":{"colorMode":"background","textMode":"value"}
+    },
+    {"type":"stat","title":"AI Ads beat","id":3,"gridPos":{"x":8,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_celery_beat_alive{app=\"ai_ads\"}"}],
+     "fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"DOWN","color":"red"},"1":{"text":"UP","color":"green"}}}],"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"green","value":1}]}}},"options":{"colorMode":"background","textMode":"value"}
+    },
+    {"type":"stat","title":"Repricer queue","id":4,"gridPos":{"x":12,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_celery_queue_depth{app=\"repricer\"}"}],
+     "fieldConfig":{"defaults":{"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"yellow","value":50},{"color":"red","value":100}]}}},"options":{"colorMode":"background","graphMode":"area"}
+    },
+    {"type":"stat","title":"AI Ads queue","id":5,"gridPos":{"x":16,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_celery_queue_depth{app=\"ai_ads\"}"}],
+     "fieldConfig":{"defaults":{"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"yellow","value":20},{"color":"red","value":50}]}}},"options":{"colorMode":"background","graphMode":"area"}
+    },
+    {"type":"stat","title":"Repricer runs/5m","id":6,"gridPos":{"x":20,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_repricer_runs_5min"}],
+     "fieldConfig":{"defaults":{"unit":"none"}},"options":{"colorMode":"background","graphMode":"area"}
+    },
+    {"type":"timeseries","title":"Queue depth — all apps","id":10,"gridPos":{"x":0,"y":4,"w":12,"h":8},
+     "targets":[{"expr":"ops_celery_queue_depth","legendFormat":"{{app}}"}],
+     "fieldConfig":{"defaults":{"custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":15}}}
+    },
+    {"type":"timeseries","title":"Workers online","id":11,"gridPos":{"x":12,"y":4,"w":12,"h":8},
+     "targets":[{"expr":"ops_celery_worker_online","legendFormat":"{{app}}"}],
+     "fieldConfig":{"defaults":{"min":0,"max":1.2,"custom":{"drawStyle":"line","lineWidth":2,"stepBefore":true,"fillOpacity":10}}}
+    },
+    {"type":"timeseries","title":"Repricer: last success age","id":12,"gridPos":{"x":0,"y":12,"w":12,"h":7},
+     "targets":[{"expr":"ops_repricer_last_success_age_seconds","legendFormat":"age"}],
+     "fieldConfig":{"defaults":{"unit":"s","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":10,"thresholdsStyle":{"mode":"line"}},"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"yellow","value":900},{"color":"red","value":1800}]}}}
+    },
+    {"type":"timeseries","title":"Repricer: stuck runs","id":13,"gridPos":{"x":12,"y":12,"w":12,"h":7},
+     "targets":[{"expr":"ops_repricer_stuck_running","legendFormat":"stuck"}],
+     "fieldConfig":{"defaults":{"unit":"none","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":20},"thresholds":{"mode":"absolute","steps":[{"color":"green"},{"color":"red","value":1}]}}}
+    },
+    {"type":"timeseries","title":"Repricer runs / 5min","id":14,"gridPos":{"x":0,"y":19,"w":24,"h":6},
+     "targets":[{"expr":"ops_repricer_runs_5min","legendFormat":"runs"}],
+     "fieldConfig":{"defaults":{"custom":{"drawStyle":"bars","fillOpacity":40}}}
+    }
+  ]
+}

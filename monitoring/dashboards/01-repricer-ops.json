@@ -1,0 +1,67 @@
+{
+  "annotations": {"list": [{"datasource":{"type":"prometheus","uid":"PBFA97CFB590B2093"},"enable":true,"hide":true,"iconColor":"red","name":"WorkerDown","target":{"expr":"ops_celery_worker_online{app=\"repricer\"} == 0","format":"time_series"}}]},
+  "editable": true,
+  "title": "Repricer — Operations",
+  "uid": "repricer-ops",
+  "tags": ["repricer","ops"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {"from": "now-6h", "to": "now"},
+  "schemaVersion": 39,
+  "panels": [
+    {"type":"stat","title":"Celery worker online","id":1,"gridPos":{"x":0,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_celery_worker_online{app=\"repricer\"}","refId":"A"}],
+     "fieldConfig":{"defaults":{"thresholds":{"mode":"absolute","steps":[{"color":"red","value":null},{"color":"green","value":1}]},"mappings":[{"type":"value","options":{"0":{"text":"DOWN","color":"red"},"1":{"text":"UP","color":"green"}}}],"color":{"mode":"thresholds"}}},
+     "options":{"colorMode":"background","graphMode":"none","textMode":"value"}
+    },
+    {"type":"stat","title":"Queue depth","id":2,"gridPos":{"x":4,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_celery_queue_depth{app=\"repricer\"}","refId":"A"}],
+     "fieldConfig":{"defaults":{"unit":"none","thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"yellow","value":50},{"color":"red","value":100}]}}},
+     "options":{"colorMode":"background","graphMode":"area"}
+    },
+    {"type":"stat","title":"Last successful run (age)","id":3,"gridPos":{"x":8,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_repricer_last_success_age_seconds","refId":"A"}],
+     "fieldConfig":{"defaults":{"unit":"s","thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"yellow","value":900},{"color":"red","value":1800}]}}},
+     "options":{"colorMode":"background","graphMode":"area"}
+    },
+    {"type":"stat","title":"Stuck running runs","id":4,"gridPos":{"x":12,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_repricer_stuck_running","refId":"A"}],
+     "fieldConfig":{"defaults":{"unit":"none","thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"red","value":1}]}}},
+     "options":{"colorMode":"background"}
+    },
+    {"type":"stat","title":"Runs completed (5m)","id":5,"gridPos":{"x":16,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_repricer_runs_5min","refId":"A"}],
+     "fieldConfig":{"defaults":{"unit":"none"}},
+     "options":{"colorMode":"background","graphMode":"area"}
+    },
+    {"type":"stat","title":"Container healthy","id":6,"gridPos":{"x":20,"y":0,"w":4,"h":4},
+     "targets":[{"expr":"ops_container_healthy{name=\"wb_repricer_celery\"}","refId":"A"}],
+     "fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"-1":{"text":"NO HC","color":"yellow"},"0":{"text":"UNHEALTHY","color":"red"},"1":{"text":"HEALTHY","color":"green"}}}],"thresholds":{"mode":"absolute","steps":[{"color":"red"},{"color":"green","value":1}]}}},
+     "options":{"colorMode":"background","graphMode":"none","textMode":"value"}
+    },
+    {"type":"timeseries","title":"Queue depth over time","id":10,"gridPos":{"x":0,"y":4,"w":12,"h":8},
+     "targets":[{"expr":"ops_celery_queue_depth{app=\"repricer\"}","legendFormat":"queue","refId":"A"}],
+     "fieldConfig":{"defaults":{"unit":"none","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":15,"gradientMode":"opacity","thresholdsStyle":{"mode":"line"}},"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"yellow","value":50},{"color":"red","value":100}]}}}
+    },
+    {"type":"timeseries","title":"Last success age (seconds)","id":11,"gridPos":{"x":12,"y":4,"w":12,"h":8},
+     "targets":[{"expr":"ops_repricer_last_success_age_seconds","legendFormat":"age","refId":"A"}],
+     "fieldConfig":{"defaults":{"unit":"s","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":10,"thresholdsStyle":{"mode":"line"}},"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"yellow","value":900},{"color":"red","value":1800}]}}}
+    },
+    {"type":"timeseries","title":"Worker online (boolean)","id":12,"gridPos":{"x":0,"y":12,"w":12,"h":6},
+     "targets":[{"expr":"ops_celery_worker_online{app=\"repricer\"}","legendFormat":"worker","refId":"A"},{"expr":"ops_container_running{name=\"wb_repricer_celery\"}","legendFormat":"container","refId":"B"}],
+     "fieldConfig":{"defaults":{"min":0,"max":1.2,"custom":{"drawStyle":"line","lineWidth":2,"stepBefore":true}}}
+    },
+    {"type":"timeseries","title":"Repricer runs / 5min","id":13,"gridPos":{"x":12,"y":12,"w":12,"h":6},
+     "targets":[{"expr":"ops_repricer_runs_5min","legendFormat":"runs","refId":"A"}],
+     "fieldConfig":{"defaults":{"unit":"none","custom":{"drawStyle":"bars","fillOpacity":40}}}
+    },
+    {"type":"timeseries","title":"DB connections (repricer)","id":14,"gridPos":{"x":0,"y":18,"w":12,"h":7},
+     "targets":[{"expr":"sum by(datname) (pg_stat_activity_count{job=\"postgres_repricer\"})","legendFormat":"{{datname}}","refId":"A"}],
+     "fieldConfig":{"defaults":{"unit":"none"}}
+    },
+    {"type":"timeseries","title":"Redis ops/sec (repricer)","id":15,"gridPos":{"x":12,"y":18,"w":12,"h":7},
+     "targets":[{"expr":"rate(redis_commands_processed_total{job=\"redis_repricer\"}[1m])","legendFormat":"ops/s","refId":"A"}],
+     "fieldConfig":{"defaults":{"unit":"ops"}}
+    }
+  ]
+}

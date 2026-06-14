@@ -1,0 +1,105 @@
+{
+  "title":"Backups & Certs","uid":"backups-certs","tags":["backups","tls","restic","ops"],
+  "timezone":"browser","refresh":"1m","time":{"from":"now-7d","to":"now"},"schemaVersion":39,
+  "panels":[
+    {"type":"row","title":"TLS Certificates","id":100,"gridPos":{"x":0,"y":0,"w":24,"h":1},"collapsed":false},
+
+    {"type":"stat","title":"Nearest cert expiry","id":1,"gridPos":{"x":0,"y":1,"w":6,"h":5},
+     "targets":[{"expr":"min(ops_tls_cert_expiry_days)","legendFormat":"min days"}],
+     "fieldConfig":{"defaults":{"unit":"d","decimals":0,"thresholds":{"mode":"absolute","steps":[{"color":"red","value":null},{"color":"yellow","value":14},{"color":"green","value":30}]}},
+      "overrides":[]},
+     "options":{"colorMode":"background","graphMode":"none","reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false}}
+    },
+    {"type":"table","title":"Certificate expiry by domain","id":2,"gridPos":{"x":6,"y":1,"w":18,"h":5},
+     "targets":[{"expr":"ops_tls_cert_expiry_days","format":"table","instant":true,"refId":"A"}],
+     "transformations":[
+       {"id":"organize","options":{"excludeByName":{"Time":true,"__name__":true,"instance":true,"job":true},"renameByName":{"domain":"Domain","Value":"Days left"}}}
+     ],
+     "fieldConfig":{"overrides":[
+       {"matcher":{"id":"byName","options":"Days left"},"properties":[
+         {"id":"unit","value":"d"},
+         {"id":"custom.cellOptions","value":{"type":"color-background"}},
+         {"id":"thresholds","value":{"mode":"absolute","steps":[{"color":"red","value":null},{"color":"yellow","value":14},{"color":"green","value":30}]}}
+       ]}
+     ]}
+    },
+    {"type":"timeseries","title":"TLS cert expiry trend","id":3,"gridPos":{"x":0,"y":6,"w":24,"h":7},
+     "targets":[{"expr":"ops_tls_cert_expiry_days","legendFormat":"{{domain}}"}],
+     "fieldConfig":{"defaults":{"unit":"d","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":5,"showPoints":"auto","pointSize":5},"thresholds":{"mode":"absolute","steps":[{"color":"red","value":null},{"color":"yellow","value":14},{"color":"green","value":30}]}}}
+    },
+
+    {"type":"row","title":"Restic Backups (S3)","id":200,"gridPos":{"x":0,"y":13,"w":24,"h":1},"collapsed":false},
+
+    {"type":"stat","title":"Last backup","id":10,"gridPos":{"x":0,"y":14,"w":4,"h":5},
+     "targets":[{"expr":"ops_restic_last_snapshot_age_seconds / 3600"}],
+     "fieldConfig":{"defaults":{"unit":"h","decimals":1,"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"yellow","value":25},{"color":"red","value":49}]}}},
+     "options":{"colorMode":"background","graphMode":"none","reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false}}
+    },
+    {"type":"stat","title":"Snapshots","id":11,"gridPos":{"x":4,"y":14,"w":4,"h":5},
+     "targets":[{"expr":"ops_restic_snapshot_count"}],
+     "fieldConfig":{"defaults":{"thresholds":{"mode":"absolute","steps":[{"color":"red","value":null},{"color":"yellow","value":1},{"color":"green","value":3}]}}},
+     "options":{"colorMode":"background","graphMode":"none","reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false}}
+    },
+    {"type":"stat","title":"Last snapshot size","id":12,"gridPos":{"x":8,"y":14,"w":4,"h":5},
+     "targets":[{"expr":"ops_restic_last_snapshot_bytes"}],
+     "fieldConfig":{"defaults":{"unit":"bytes","decimals":2,"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null}]}}},
+     "options":{"colorMode":"background","graphMode":"none","reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false}}
+    },
+    {"type":"stat","title":"Files in snapshot","id":13,"gridPos":{"x":12,"y":14,"w":4,"h":5},
+     "targets":[{"expr":"ops_restic_last_snapshot_files"}],
+     "fieldConfig":{"defaults":{"thresholds":{"mode":"absolute","steps":[{"color":"blue","value":null}]}}},
+     "options":{"colorMode":"background","graphMode":"none","reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false}}
+    },
+    {"type":"stat","title":"Repo size (dedup)","id":14,"gridPos":{"x":16,"y":14,"w":4,"h":5},
+     "targets":[{"expr":"ops_restic_repo_bytes"}],
+     "fieldConfig":{"defaults":{"unit":"bytes","decimals":2,"thresholds":{"mode":"absolute","steps":[{"color":"purple","value":null}]}}},
+     "options":{"colorMode":"background","graphMode":"none","reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false}}
+    },
+    {"type":"stat","title":"Backup unit","id":15,"gridPos":{"x":20,"y":14,"w":4,"h":5},
+     "targets":[{"expr":"ops_backup_unit_failed"}],
+     "fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"OK","color":"green"},"1":{"text":"FAILED","color":"red"}}}],"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"red","value":1}]}}},
+     "options":{"colorMode":"background","textMode":"value","reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false}}
+    },
+
+    {"type":"text","title":"","id":16,"gridPos":{"x":0,"y":19,"w":24,"h":3},
+     "options":{"mode":"markdown","content":"### Backup policy\n| Parameter | Value |\n|---|---|\n| **Schedule** | Daily at 03:20 UTC (±30min jitter) |\n| **Retention** | 7 daily, 4 weekly, 2 monthly |\n| **Storage** | S3 (TWC Storage) |\n| **Tool** | restic 0.16.4, encrypted |\n| **Content** | PG dumps (4 DBs), nginx, .env, compose, Docker volumes, LetsEncrypt, /srv/apps |\n| **Restore drill** | Weekly (Sundays) |"}
+    },
+
+    {"type":"timeseries","title":"Snapshot size over time","id":20,"gridPos":{"x":0,"y":22,"w":12,"h":7},
+     "targets":[{"expr":"ops_restic_last_snapshot_bytes","legendFormat":"snapshot size"}],
+     "fieldConfig":{"defaults":{"unit":"bytes","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":15}}}
+    },
+    {"type":"timeseries","title":"Repo size (deduplicated)","id":21,"gridPos":{"x":12,"y":22,"w":12,"h":7},
+     "targets":[{"expr":"ops_restic_repo_bytes","legendFormat":"repo size"}],
+     "fieldConfig":{"defaults":{"unit":"bytes","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":15}}}
+    },
+    {"type":"timeseries","title":"Time since last backup","id":22,"gridPos":{"x":0,"y":29,"w":12,"h":7},
+     "targets":[{"expr":"ops_restic_last_snapshot_age_seconds / 3600","legendFormat":"hours since backup"}],
+     "fieldConfig":{"defaults":{"unit":"h","custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":10},"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"yellow","value":25},{"color":"red","value":49}]}}}
+    },
+    {"type":"timeseries","title":"Snapshot count","id":23,"gridPos":{"x":12,"y":29,"w":12,"h":7},
+     "targets":[{"expr":"ops_restic_snapshot_count","legendFormat":"snapshots"}],
+     "fieldConfig":{"defaults":{"custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":15}}}
+    },
+
+    {"type":"row","title":"System Health","id":300,"gridPos":{"x":0,"y":36,"w":24,"h":1},"collapsed":false},
+
+    {"type":"stat","title":"Certbot unit","id":30,"gridPos":{"x":0,"y":37,"w":6,"h":4},
+     "targets":[{"expr":"ops_certbot_unit_failed"}],
+     "fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"0":{"text":"OK","color":"green"},"1":{"text":"FAILED","color":"red"}}}],"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"red","value":1}]}}},
+     "options":{"colorMode":"background","textMode":"value","reduceOptions":{"calcs":["lastNotNull"],"fields":"","values":false}}
+    },
+    {"type":"timeseries","title":"Disk usage %","id":31,"gridPos":{"x":6,"y":37,"w":9,"h":8},
+     "targets":[{"expr":"ops_disk_used_pct{mount=\"/\"}","legendFormat":"disk /"}],
+     "fieldConfig":{"defaults":{"unit":"percent","min":0,"max":100,"custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":10,"thresholdsStyle":{"mode":"line"}},"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"yellow","value":70},{"color":"red","value":85}]}}}
+    },
+    {"type":"timeseries","title":"Memory usage %","id":32,"gridPos":{"x":15,"y":37,"w":9,"h":8},
+     "targets":[{"expr":"ops_mem_used_pct","legendFormat":"memory %"}],
+     "fieldConfig":{"defaults":{"unit":"percent","min":0,"max":100,"custom":{"drawStyle":"line","lineWidth":2,"fillOpacity":10,"thresholdsStyle":{"mode":"line"}},"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"yellow","value":80},{"color":"red","value":90}]}}}
+    },
+    {"type":"timeseries","title":"Systemd unit failures","id":33,"gridPos":{"x":0,"y":45,"w":24,"h":6},
+     "targets":[{"expr":"ops_backup_unit_failed","legendFormat":"backup"},{"expr":"ops_certbot_unit_failed","legendFormat":"certbot"},{"expr":"ops_restore_drill_failed","legendFormat":"restore-drill"}],
+     "fieldConfig":{"defaults":{"min":0,"max":1.2,"custom":{"drawStyle":"line","lineWidth":2,"stepBefore":true,"fillOpacity":15}}}
+    }
+  ]
+}
