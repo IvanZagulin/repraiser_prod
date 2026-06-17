@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import json
 import logging
 import time
@@ -1619,6 +1619,14 @@ class RepricerEngine:
             CHUNK_SIZE  = 1000  # вдвое меньше чанков → меньше pre-fetch раундов
             COMMIT_EVERY = 200  # товаров между коммитами (меньше DB round-trips)
 
+            def _commit_run_progress() -> None:
+                # Живой прогресс в БД: UI и cleanup-логика видят, что run реально двигается,
+                # даже если текущий чанк тянется долго из-за 429/backoff WB API.
+                run.updated_count = results['updated']
+                run.skipped_count = results['skipped']
+                run.error_count = results['errors']
+                self.db.commit()
+
             # Загружаем цены ВСЕХ аккаунтов один раз до цикла (не повторять per-chunk)
             if not dry_run:
                 await self._prefetch_all_prices_once()
@@ -1813,7 +1821,7 @@ class RepricerEngine:
                             results["errors"] += 1
                         pending += 1
                         if pending >= COMMIT_EVERY:
-                            self.db.commit()
+                            _commit_run_progress()
                             pending = 0
                     except Exception as e:
                         logger.error("Ошибка сохранения для %s: %s", dec["product"].seller_sku, e, exc_info=True)
@@ -1822,7 +1830,12 @@ class RepricerEngine:
                         pending = 0
 
                 if pending:
-                    self.db.commit()
+                    _commit_run_progress()
+
+                # Даже если в чанке не было DB-изменений, фиксируем накопленные counters,
+                # чтобы run не выглядел "зависшим" с нулями в течение часов.
+                if pending == 0:
+                    _commit_run_progress()
 
                 self.db.expire_all()
 

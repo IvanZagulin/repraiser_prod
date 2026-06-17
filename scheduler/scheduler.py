@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import logging
 import sys
 from datetime import datetime, timezone
@@ -192,6 +192,112 @@ def _user_should_run(db, user_id: int) -> bool:
     return True
 
 
+def _user_can_run_now(db, user_id: int) -> bool:
+    """
+    Более мягкая проверка для recovery после stale-run:
+    пользователь активен, план/триал активен, расписание включено и текущее
+    время попадает в рабочее окно. Проверку "ровного слота" здесь намеренно
+    не применяем, иначе зависший scheduled-run может ждать следующего часа/слота
+    вместо немедленного восстановления.
+    """
+    user_row = db.execute(
+        text("""
+            SELECT plan_id, trial_ends_at, is_admin
+            FROM users WHERE id = :uid AND is_active = TRUE
+        """),
+        {"uid": user_id}
+    ).fetchone()
+
+    if not user_row:
+        return False
+
+    plan_id, trial_ends_at, is_admin = user_row
+    if not is_admin and not plan_id and (
+        not trial_ends_at or trial_ends_at < datetime.now(timezone.utc).replace(tzinfo=None)
+    ):
+        return False
+
+    sched_row = db.execute(
+        text("""
+            SELECT work_start_hour, work_end_hour,
+                   timezone, paused_days, is_active
+            FROM repricer_schedules WHERE user_id = :uid
+        """),
+        {"uid": user_id}
+    ).fetchone()
+
+    if not sched_row:
+        return True
+
+    work_start, work_end, tz_name, paused_days, is_sched_active = sched_row
+    if not is_sched_active:
+        return False
+
+    try:
+        tz = ZoneInfo(tz_name or "Europe/Moscow")
+    except Exception:
+        tz = ZoneInfo("Europe/Moscow")
+
+    now_user = datetime.now(tz)
+    current_hour = now_user.hour
+    current_dow = now_user.weekday()
+
+    if work_end == 24:
+        if current_hour < work_start:
+            return False
+    else:
+        if current_hour < work_start or current_hour >= work_end:
+            return False
+
+    if paused_days:
+        paused = set()
+        for d in paused_days.split(","):
+            d = d.strip()
+            if d.isdigit():
+                paused.add(int(d))
+        if current_dow in paused:
+            return False
+
+    return True
+
+
+def _dispatch_recovery_run(db, user_id: int) -> bool:
+    """Best-effort немедленный перезапуск scheduled-run после stale cleanup."""
+    if not _user_can_run_now(db, user_id):
+        logger.info(f"  user={user_id}: recovery-run пропущен — сейчас вне разрешённого окна запуска")
+        return False
+
+    if _is_run_locked(user_id):
+        logger.info(f"  user={user_id}: recovery-run пропущен — Redis-lock уже существует")
+        return False
+
+    product_rows = db.execute(
+        text("""
+            SELECT p.id FROM products p
+            JOIN accounts a ON p.account_id = a.id
+            JOIN product_config pc ON pc.product_id = p.id
+            WHERE a.user_id = :uid
+              AND a.is_active = TRUE
+              AND pc.is_active = TRUE
+        """),
+        {"uid": user_id}
+    ).fetchall()
+    product_ids = [r[0] for r in product_rows]
+
+    if not product_ids:
+        logger.info(f"  user={user_id}: recovery-run пропущен — нет активных товаров")
+        return False
+
+    from app.tasks.repricer_task import run_repricer_for_user
+
+    task = run_repricer_for_user.delay(user_id, product_ids, "scheduled")
+    logger.warning(
+        f"  user={user_id}: recovery-run поставлен в очередь после stale cleanup "
+        f"(task_id={task.id}, products={len(product_ids)})"
+    )
+    return True
+
+
 def _repricer_job_sync():
     """Синхронная часть repricer_job — выполняется в отдельном потоке,
     чтобы блокирующие DB-вызовы не замораживали asyncio event loop."""
@@ -342,6 +448,7 @@ async def cleanup_stale_runs():
     пользователя (инцидент 2026-06-11, user=12 простаивал ~50 мин).
     """
     STALE_MINUTES = 185
+    ORPHAN_GRACE_SECONDS = 120
     logger.info("Очистка зависших прогонов...")
     db = SessionLocal()
     try:
@@ -353,23 +460,103 @@ async def cleanup_stale_runs():
                     completed_at = NOW()
                 WHERE status = 'running'
                   AND started_at < NOW() - MAKE_INTERVAL(mins => :minutes)
-                RETURNING id, user_id
+                RETURNING id, user_id, run_type
             """),
             {"minutes": STALE_MINUTES}
         )
         rows = result.fetchall()
         db.commit()
         if rows:
-            for run_id, user_id in rows:
+            for run_id, user_id, run_type in rows:
                 logger.warning(f"  Зависший прогон id={run_id} user={user_id} → failed")
                 # Освобождаем Redis-лок если он ещё жив
                 try:
                     _get_redis().delete(f"repricer:run_lock:{user_id}")
                 except Exception as e:
                     logger.warning(f"Failed to delete Redis lock for user {user_id}: {e}")
+
+                restarted = False
+                if run_type == "scheduled" and user_id is not None:
+                    try:
+                        restarted = _dispatch_recovery_run(db, user_id)
+                    except Exception as e:
+                        logger.warning(f"Recovery rerun failed for user {user_id}: {e}", exc_info=True)
+
+                try:
+                    await telegram_notifier.notify_stale_run_recovered(
+                        run_id=run_id,
+                        user_id=user_id,
+                        restarted=restarted,
+                    )
+                except Exception as e:
+                    logger.warning(f"Telegram stale-run notification failed for run {run_id}: {e}")
             logger.info(f"Очищено зависших прогонов: {len(rows)}")
         else:
             logger.info("Зависших прогонов нет")
+
+        # --- Осиротевшие running-записи без Redis-лока ---
+        # Если воркер умер/перезапустился между commit'ом run.status='running'
+        # и release_run_lock(), UI будет вечно видеть running, хотя активной
+        # задачи уже нет. Отдельно лечим кейс "running в БД, но лока нет".
+        try:
+            orphan_rows = db.execute(
+                text("""
+                    SELECT id, user_id, run_type
+                    FROM repricer_runs
+                    WHERE status = 'running'
+                      AND user_id IS NOT NULL
+                      AND started_at < NOW() - MAKE_INTERVAL(secs => :grace)
+                    ORDER BY started_at
+                """),
+                {"grace": ORPHAN_GRACE_SECONDS},
+            ).fetchall()
+
+            orphan_fixed = 0
+            for run_id, user_id, run_type in orphan_rows:
+                if _is_run_locked(user_id):
+                    continue
+
+                updated = db.execute(
+                    text("""
+                        UPDATE repricer_runs
+                        SET status = 'failed',
+                            error_message = 'Прогон осиротел (running без Redis-lock) — помечен планировщиком',
+                            completed_at = NOW()
+                        WHERE id = :run_id
+                          AND status = 'running'
+                    """),
+                    {"run_id": run_id},
+                )
+                if updated.rowcount <= 0:
+                    continue
+
+                db.commit()
+                orphan_fixed += 1
+                logger.warning(
+                    f"  Осиротевший прогон id={run_id} user={user_id} "
+                    "→ failed (running без Redis-lock)"
+                )
+
+                restarted = False
+                if run_type == "scheduled":
+                    try:
+                        restarted = _dispatch_recovery_run(db, user_id)
+                    except Exception as e:
+                        logger.warning(f"Recovery rerun failed for orphan run user {user_id}: {e}", exc_info=True)
+
+                try:
+                    await telegram_notifier.notify_stale_run_recovered(
+                        run_id=run_id,
+                        user_id=user_id,
+                        restarted=restarted,
+                    )
+                except Exception as e:
+                    logger.warning(f"Telegram orphan-run notification failed for run {run_id}: {e}")
+
+            if orphan_fixed:
+                logger.info(f"Очищено осиротевших running-прогонов: {orphan_fixed}")
+        except Exception as e:
+            logger.warning(f"Ошибка при очистке осиротевших running-прогонов: {e}", exc_info=True)
 
         # --- Осиротевшие Redis run-локи ---
         # Лок мог остаться висеть, если прогон был помечен failed/completed

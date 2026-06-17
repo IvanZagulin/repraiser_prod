@@ -9,42 +9,42 @@ logger = logging.getLogger(__name__)
 
 
 class WBAPIError(Exception):
-    """Ошибка WB API"""
+    """?????? WB API"""
     pass
 
 
 class WBAuthError(WBAPIError):
-    """401 от WB — токен невалиден или отозван. Caller должен деактивировать аккаунт."""
+    """401 ?? WB ? ????? ????????? ??? ???????. Caller ?????? ?????????????? ???????."""
     pass
 
 
 class WBQuarantineError(WBAPIError):
-    """WB пометил товар в Price Quarantine. Caller должен заблокировать товар на 24ч."""
+    """WB ??????? ????? ? Price Quarantine. Caller ?????? ????????????? ????? ?? 24?."""
     def __init__(self, message: str, nm_id: int):
         super().__init__(message)
         self.nm_id = nm_id
 
 
 class RateLimitError(WBAPIError):
-    """Ошибка превышения лимита запросов (429)"""
+    """?????? ?????????? ?????? ???????? (429)"""
     pass
 
 
 class PartialCatalogError(WBAPIError):
-    """Каталог загружен не полностью из-за сетевой ошибки или 429"""
+    """??????? ???????? ?? ????????? ??-?? ??????? ?????? ??? 429"""
     def __init__(self, message: str, partial_cards: dict):
         super().__init__(message)
         self.partial_cards = partial_cards
 
 
 class PriceData:
-    """Данные о цене товара из WB Prices API"""
+    """?????? ? ???? ?????? ?? WB Prices API"""
 
     def __init__(self, raw_data: dict):
         self.nm_id = raw_data.get('nmID')
         self.vendor_code = raw_data.get('vendorCode', '')
 
-        # discounts-prices-api возвращает цены в sizes[0], discount — на верхнем уровне
+        # discounts-prices-api ?????????? ???? ? sizes[0], discount ? ?? ??????? ??????
         sizes = raw_data.get('sizes', [])
         if sizes:
             first_size = sizes[0]
@@ -54,7 +54,7 @@ class PriceData:
             self.seller_price = Decimal(str(raw_data.get('price', 0)))
             self.discounted_price = Decimal(0)
 
-        # discount всегда на верхнем уровне объекта товара (не внутри sizes)
+        # discount ?????? ?? ??????? ?????? ??????? ?????? (?? ?????? sizes)
         self.discount = Decimal(str(raw_data.get('discount', 0)))
 
         self.sizes = sizes
@@ -69,31 +69,46 @@ class PriceData:
         }
     
     def __repr__(self):
-        return f"<WBPrice nm={self.nm_id} price={self.seller_price}₽ discount={self.discount}%>"
+        return f"<WBPrice nm={self.nm_id} price={self.seller_price}? discount={self.discount}%>"
 
 
 class WBAPIClient:
     """
-    Клиент для работы с WB Prices API
+    ?????? ??? ?????? ? WB Prices API
     
-    Документация: https://openapi.wildberries.ru/prices/api/ru/
+    ????????????: https://openapi.wildberries.ru/prices/api/ru/
     """
     
     def __init__(self, api_token: str):
         """
         Args:
-            api_token: JWT токен WB API
+            api_token: JWT ????? WB API
         """
         self.base_url = settings.WB_API_BASE_URL
         self.api_token = api_token
 
     def _get_headers(self) -> dict:
-        """Формирование заголовков для запросов"""
+        """???????????? ?????????? ??? ????????"""
         return {
             'Authorization': self.api_token,
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         }
+
+    @staticmethod
+    def _ratelimit_delay(response: httpx.Response, fallback_delay: int) -> int:
+        """????? delay ?? X-Ratelimit-Retry/Reset, ???? WB ??? ???????."""
+        for header_name in ("X-Ratelimit-Retry", "X-Ratelimit-Reset"):
+            raw_value = response.headers.get(header_name)
+            if not raw_value:
+                continue
+            try:
+                parsed = int(float(raw_value))
+            except ValueError:
+                continue
+            if parsed > 0:
+                return parsed
+        return fallback_delay
     
     async def _make_request(
         self,
@@ -105,27 +120,27 @@ class WBAPIClient:
         max_retries: int = 5
     ) -> dict:
         """
-        Выполнение HTTP запроса с обработкой ошибок.
-        Сессия создаётся и гарантированно закрывается внутри каждого вызова
-        (fix: TCP socket leak — persistent self.session мог не закрываться).
+        ?????????? HTTP ??????? ? ?????????? ??????.
+        ?????? ????????? ? ?????????????? ??????????? ?????? ??????? ??????
+        (fix: TCP socket leak ? persistent self.session ??? ?? ???????????).
 
         Args:
-            method: HTTP метод (GET, POST, etc)
+            method: HTTP ????? (GET, POST, etc)
             endpoint: Endpoint API
-            json_data: JSON данные для POST
-            params: Query параметры
-            retry_on_429: Повторять ли при 429 ошибке
-            max_retries: Максимум попыток при 429
+            json_data: JSON ?????? ??? POST
+            params: Query ?????????
+            retry_on_429: ????????? ?? ??? 429 ??????
+            max_retries: ???????? ??????? ??? 429
 
         Returns:
-            JSON ответ
+            JSON ?????
 
         Raises:
-            WBAPIError: При ошибках API
-            RateLimitError: При превышении лимита
+            WBAPIError: ??? ??????? API
+            RateLimitError: ??? ?????????? ??????
         """
         retry_count = 0
-        backoff_delay = 7  # Начальная задержка при 429 (> 6s window WB rate limit)
+        backoff_delay = 7  # ????????? ???????? ??? 429 (> 6s window WB rate limit)
 
         async with httpx.AsyncClient(
             base_url=self.base_url,
@@ -142,38 +157,48 @@ class WBAPIClient:
                         params=params
                     )
 
-                    # Обработка кодов ответа
-                    if response.status_code == 200:
+                    # ????????? ????? ??????
+                    if response.status_code in (200, 208):
                         return response.json()
 
                     elif response.status_code == 429:
                         # Rate limit exceeded
                         if not retry_on_429 or retry_count >= max_retries:
-                            raise RateLimitError(f"Rate limit exceeded (429) после {retry_count} попыток")
+                            raise RateLimitError(f"Rate limit exceeded (429) ????? {retry_count} ???????")
 
-                        logger.warning(f"Rate limit (429), ждем {backoff_delay}s перед retry {retry_count + 1}/{max_retries}")
-                        await asyncio.sleep(backoff_delay)
-                        backoff_delay *= 2  # Exponential backoff
+                        delay = self._ratelimit_delay(response, backoff_delay)
+                        logger.warning(
+                            "Rate limit (429), ???? %ss ????? retry %s/%s "
+                            "(retry=%s reset=%s remaining=%s)",
+                            delay,
+                            retry_count + 1,
+                            max_retries,
+                            response.headers.get("X-Ratelimit-Retry"),
+                            response.headers.get("X-Ratelimit-Reset"),
+                            response.headers.get("X-Ratelimit-Remaining"),
+                        )
+                        await asyncio.sleep(delay)
+                        backoff_delay = max(backoff_delay * 2, delay)
                         retry_count += 1
                         continue
 
                     elif response.status_code == 401:
-                        raise WBAuthError("Unauthorized (401) - токен невалиден или отозван WB")
+                        raise WBAuthError("Unauthorized (401) - ????? ????????? ??? ??????? WB")
 
                     elif response.status_code == 400:
                         error_msg = response.text
                         raise WBAPIError(f"Bad Request (400): {error_msg}")
 
                     else:
-                        raise WBAPIError(f"API вернул код {response.status_code}: {response.text}")
+                        raise WBAPIError(f"API ?????? ??? {response.status_code}: {response.text}")
 
                 except httpx.TimeoutException:
-                    raise WBAPIError("Timeout при запросе к WB API")
+                    raise WBAPIError("Timeout ??? ??????? ? WB API")
                 except httpx.RequestError as e:
-                    raise WBAPIError(f"Ошибка соединения с WB API: {e}")
+                    raise WBAPIError(f"?????? ?????????? ? WB API: {e}")
 
-        # Если вышли из цикла - значит превысили лимит попыток
-        raise RateLimitError(f"Rate limit (429) после {max_retries} попыток")
+        # ???? ????? ?? ????? - ?????? ????????? ????? ???????
+        raise RateLimitError(f"Rate limit (429) ????? {max_retries} ???????")
     
     async def get_prices(
         self,
@@ -182,63 +207,63 @@ class WBAPIClient:
         offset: int = 0
     ) -> List[PriceData]:
         """
-        Получение цен товаров
+        ????????? ??? ???????
         
         Endpoint: GET /api/v2/list/goods/filter
         
         Args:
-            nm_ids: Список артикулов (если None - все товары)
-            limit: Лимит товаров в ответе
-            offset: Смещение для пагинации
+            nm_ids: ?????? ????????? (???? None - ??? ??????)
+            limit: ????? ??????? ? ??????
+            offset: ???????? ??? ?????????
             
         Returns:
-            Список PriceData
+            ?????? PriceData
         """
         params = {
             'limit': limit,
             'offset': offset
         }
         
-        # Фильтр по nmID (если указан)
+        # ?????? ?? nmID (???? ??????)
         if nm_ids:
-            # WB API принимает несколько nmID через запятую
+            # WB API ????????? ????????? nmID ????? ???????
             params['filterNmID'] = ','.join(map(str, nm_ids))
         
-        logger.info(f"Получаем цены из WB API (limit={limit}, offset={offset}, nm_ids={len(nm_ids) if nm_ids else 'all'})")
+        logger.info(f"???????? ???? ?? WB API (limit={limit}, offset={offset}, nm_ids={len(nm_ids) if nm_ids else 'all'})")
         
         try:
             data = await self._make_request('GET', '/api/v2/list/goods/filter', params=params)
             
-            # Парсим ответ
+            # ?????? ?????
             goods = data.get('data', {}).get('listGoods', [])
             prices = [PriceData(item) for item in goods]
             
-            logger.info(f"✓ Получено {len(prices)} цен из WB API")
+            logger.info(f"? ???????? {len(prices)} ??? ?? WB API")
             return prices
             
         except Exception as e:
-            logger.error(f"Ошибка получения цен из WB API: {e}")
+            logger.error(f"?????? ????????? ??? ?? WB API: {e}")
             raise
     
     async def update_prices(self, price_updates: List[Dict[str, Any]]) -> dict:
         """
-        Пакетное обновление цен с автоматическим разбиением на чанки.
+        ???????? ?????????? ??? ? ?????????????? ?????????? ?? ?????.
 
-        WB API ограничивает один запрос 1000 товарами. При >1000
-        автоматически разбивает на чанки и отправляет последовательно.
+        WB API ???????????? ???? ?????? 1000 ????????. ??? >1000
+        ????????????? ????????? ?? ????? ? ?????????? ???????????????.
 
         Returns:
-            Ответ API последнего чанка (с ID задачи).
+            ????? API ?????????? ????? (? ID ??????).
         """
         if not price_updates:
-            raise ValueError("price_updates не может быть пустым")
+            raise ValueError("price_updates ?? ????? ???? ??????")
 
         WB_BATCH_LIMIT = 1000
         chunks = [price_updates[i:i + WB_BATCH_LIMIT]
                   for i in range(0, len(price_updates), WB_BATCH_LIMIT)]
 
         logger.info(
-            "Отправляем обновление %d цен в WB API (%d чанк(ов))",
+            "?????????? ?????????? %d ??? ? WB API (%d ????(??))",
             len(price_updates), len(chunks),
         )
 
@@ -248,17 +273,24 @@ class WBAPIClient:
                 payload = {"data": chunk}
                 data = await self._make_request('POST', '/api/v2/upload/task', json_data=payload)
                 task_id = data.get('data', {}).get('id')
-                logger.info("✓ Чанк %d/%d (%d цен): task_id=%s", idx + 1, len(chunks), len(chunk), task_id)
+                if data.get('data', {}).get('alreadyExists'):
+                    logger.info(
+                        "???? %d/%d: ?????? ??? ?????????? ? WB (task_id=%s)",
+                        idx + 1, len(chunks), task_id,
+                    )
+                    last_response = {**data, "_already_queued": True}
+                    continue
+                logger.info("? ???? %d/%d (%d ???): task_id=%s", idx + 1, len(chunks), len(chunk), task_id)
                 last_response = data
             except WBAPIError as e:
                 if "This task already exists" in str(e):
                     logger.info(
-                        "Чанк %d/%d: задача уже в очереди WB — считаем успехом",
+                        "???? %d/%d: ?????? ??? ? ??????? WB ? ??????? ???????",
                         idx + 1, len(chunks),
                     )
                     last_response = {"data": {"id": None}, "_already_queued": True}
                     continue
-                logger.error("Ошибка обновления цен (чанк %d/%d): %s", idx + 1, len(chunks), e)
+                logger.error("?????? ?????????? ??? (???? %d/%d): %s", idx + 1, len(chunks), e)
                 raise
 
         return last_response
@@ -270,17 +302,17 @@ class WBAPIClient:
         delay: float = 5.0,
     ) -> Dict[int, Tuple[bool, str]]:
         """
-        Опрашивает WB о per-nm статусе задачи batch-обновления цен.
+        ?????????? WB ? per-nm ??????? ?????? batch-?????????? ???.
 
-        WB обрабатывает POST /upload/task асинхронно и может отклонить
-        отдельные товары (например, при снижении цены более чем в 2 раза
-        или при price < cost). Статус каждого товара виден в
-        /history/goods/task?uploadID=<id>. Метод опрашивает несколько раз,
-        пока есть pending товары.
+        WB ???????????? POST /upload/task ?????????? ? ????? ?????????
+        ????????? ?????? (????????, ??? ???????? ???? ????? ??? ? 2 ????
+        ??? ??? price < cost). ?????? ??????? ?????? ????? ?
+        /history/goods/task?uploadID=<id>. ????? ?????????? ????????? ???,
+        ???? ???? pending ??????.
 
         Returns:
-            dict {nm_id: (success, error_text)}. Пустой dict если статус
-            не получен за max_attempts опросов.
+            dict {nm_id: (success, error_text)}. ?????? dict ???? ??????
+            ?? ??????? ?? max_attempts ???????.
         """
         if not upload_id:
             return {}
@@ -290,7 +322,7 @@ class WBAPIClient:
             if attempt > 1:
                 await asyncio.sleep(delay)
             else:
-                await asyncio.sleep(8)  # первый опрос: WB нужно время применить цену
+                await asyncio.sleep(8)  # ?????? ?????: WB ????? ????? ????????? ????
             try:
                 data = await self._make_request(
                     'GET',
@@ -298,7 +330,7 @@ class WBAPIClient:
                     params={'uploadID': upload_id, 'limit': 1000, 'offset': 0},
                 )
             except Exception as e:
-                logger.warning(f"Не удалось получить статус задачи {upload_id}: {e}")
+                logger.warning(f"?? ??????? ???????? ?????? ?????? {upload_id}: {e}")
                 continue
 
             goods = (data.get('data') or {}).get('historyGoods') or []
@@ -309,7 +341,7 @@ class WBAPIClient:
             if pending:
                 last_pending = len(pending)
                 logger.info(
-                    f"Задача {upload_id}: {last_pending}/{len(goods)} товаров ещё в обработке"
+                    f"?????? {upload_id}: {last_pending}/{len(goods)} ??????? ??? ? ?????????"
                 )
                 continue
 
@@ -320,17 +352,17 @@ class WBAPIClient:
                     continue
                 status = g.get('status')
                 err = g.get('errorText') or ""
-                # status==2: успешно применено
+                # status==2: ??????? ?????????
                 ok = (status == 2) and not err
                 result[int(nm_id)] = (ok, err)
             logger.info(
-                f"Задача {upload_id}: финальные статусы получены для {len(result)} товаров"
+                f"?????? {upload_id}: ????????? ??????? ???????? ??? {len(result)} ???????"
             )
             return result
 
         logger.warning(
-            f"Задача {upload_id} не завершилась за {max_attempts} опросов "
-            f"(осталось {last_pending} pending) — статусы неизвестны"
+            f"?????? {upload_id} ?? ??????????? ?? {max_attempts} ??????? "
+            f"(???????? {last_pending} pending) ? ??????? ??????????"
         )
         return {}
     
@@ -342,61 +374,61 @@ class WBAPIClient:
         delay: int = None
     ) -> bool:
         """
-        Проверка применения обновленной цены
+        ???????? ?????????? ??????????? ????
         
         Args:
-            nm_id: Артикул товара
-            expected_price: Ожидаемая цена
-            max_attempts: Максимум попыток проверки (default из config)
-            delay: Задержка между попытками в секундах (default из config)
+            nm_id: ??????? ??????
+            expected_price: ????????? ????
+            max_attempts: ???????? ??????? ???????? (default ?? config)
+            delay: ???????? ????? ????????? ? ???????? (default ?? config)
             
         Returns:
-            True если цена применилась, False если нет
+            True ???? ???? ???????????, False ???? ???
         """
         if max_attempts is None:
             max_attempts = settings.PRICE_CHECK_ATTEMPTS
         if delay is None:
             delay = settings.PRICE_CHECK_DELAY
         
-        logger.info(f"Проверка применения цены для nm_id={nm_id} (ожидается {expected_price}₽)")
+        logger.info(f"???????? ?????????? ???? ??? nm_id={nm_id} (????????? {expected_price}?)")
         
         for attempt in range(1, max_attempts + 1):
             if attempt > 1:
                 await asyncio.sleep(delay)
             else:
-                await asyncio.sleep(delay // 2)  # Первая проверка — ждём меньше
+                await asyncio.sleep(delay // 2)  # ?????? ???????? ? ???? ??????
 
             try:
                 prices = await self.get_prices(nm_ids=[nm_id])
                 
                 if not prices:
-                    logger.warning(f"Попытка {attempt}/{max_attempts}: товар nm_id={nm_id} не найден")
+                    logger.warning(f"??????? {attempt}/{max_attempts}: ????? nm_id={nm_id} ?? ??????")
                     continue
                 
                 current_price = prices[0].seller_price
                 
                 if current_price == expected_price:
-                    logger.info(f"✓ Цена применилась на попытке {attempt}/{max_attempts}: {current_price}₽")
+                    logger.info(f"? ???? ??????????? ?? ??????? {attempt}/{max_attempts}: {current_price}?")
                     return True
                 else:
                     logger.warning(
-                        f"Попытка {attempt}/{max_attempts}: текущая цена {current_price}₽, "
-                        f"ожидается {expected_price}₽"
+                        f"??????? {attempt}/{max_attempts}: ??????? ???? {current_price}?, "
+                        f"????????? {expected_price}?"
                     )
                     
             except Exception as e:
-                logger.error(f"Ошибка проверки цены на попытке {attempt}: {e}")
+                logger.error(f"?????? ???????? ???? ?? ??????? {attempt}: {e}")
                 continue
         
-        logger.error(f"✗ Цена не применилась после {max_attempts} попыток")
+        logger.error(f"? ???? ?? ??????????? ????? {max_attempts} ???????")
         return False
     
     async def get_card_info(self, nm_id: int, max_retries: int = 5) -> dict:
         """
-        Получение информации о карточке товара из WB Content API по nmID.
+        ????????? ?????????? ? ???????? ?????? ?? WB Content API ?? nmID.
 
-        Возвращает словарь {seller_sku, name, image_url} или {} если не найдено.
-        Автоматически повторяет запрос при 429 с экспоненциальной задержкой.
+        ?????????? ??????? {seller_sku, name, image_url} ??? {} ???? ?? ???????.
+        ????????????? ????????? ?????? ??? 429 ? ???????????????? ?????????.
         """
         content_api_url = "https://content-api.wildberries.ru"
         payload = {
@@ -421,10 +453,10 @@ class WBAPIClient:
                     )
 
                 if response.status_code == 429:
-                    delay = retry_delays[min(attempt, len(retry_delays) - 1)]
+                    delay = self._ratelimit_delay(response, retry_delays[min(attempt, len(retry_delays) - 1)])
                     logger.warning(
-                        f"get_card_info: 429 для nm_id={nm_id} "
-                        f"(попытка {attempt + 1}/{max_retries}), ждём {delay}s..."
+                        f"get_card_info: 429 ??? nm_id={nm_id} "
+                        f"(??????? {attempt + 1}/{max_retries}), ???? {delay}s..."
                     )
                     if attempt < max_retries - 1:
                         await asyncio.sleep(delay)
@@ -432,7 +464,7 @@ class WBAPIClient:
                     return {}
 
                 if response.status_code != 200:
-                    logger.warning(f"Content API вернул {response.status_code} для nm_id={nm_id}")
+                    logger.warning(f"Content API ?????? {response.status_code} ??? nm_id={nm_id}")
                     return {}
 
                 cards = response.json().get("cards", [])
@@ -448,14 +480,14 @@ class WBAPIClient:
                             "name":       card.get("title", ""),
                             "image_url":  image_url,
                         }
-                        logger.info(f"✓ Информация о карточке получена для nm_id={nm_id}: {info['name']!r}")
+                        logger.info(f"? ?????????? ? ???????? ???????? ??? nm_id={nm_id}: {info['name']!r}")
                         return info
 
-                logger.warning(f"Карточка не найдена для nm_id={nm_id} (карточек в ответе: {len(cards)})")
+                logger.warning(f"???????? ?? ??????? ??? nm_id={nm_id} (???????? ? ??????: {len(cards)})")
                 return {}
 
             except Exception as e:
-                logger.error(f"Ошибка получения информации о карточке nm_id={nm_id}: {e}")
+                logger.error(f"?????? ????????? ?????????? ? ???????? nm_id={nm_id}: {e}")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(retry_delays[min(attempt, len(retry_delays) - 1)])
                     continue
@@ -465,9 +497,9 @@ class WBAPIClient:
 
     async def get_card_info_by_sku(self, seller_sku: str) -> dict:
         """
-        Получение информации о карточке товара из WB Content API по артикулу продавца (vendorCode).
+        ????????? ?????????? ? ???????? ?????? ?? WB Content API ?? ???????? ???????? (vendorCode).
 
-        Возвращает словарь {nm_id, seller_sku, name, image_url} или {} если не найдено.
+        ?????????? ??????? {nm_id, seller_sku, name, image_url} ??? {} ???? ?? ???????.
         """
         try:
             content_api_url = "https://content-api.wildberries.ru"
@@ -488,11 +520,11 @@ class WBAPIClient:
                     headers=self._get_headers()
                 )
                 if response.status_code != 200:
-                    logger.warning(f"Content API вернул {response.status_code} при поиске по артикулу {seller_sku!r}")
+                    logger.warning(f"Content API ?????? {response.status_code} ??? ?????? ?? ???????? {seller_sku!r}")
                     return {}
                 cards = response.json().get("cards", [])
 
-            # Ищем точное совпадение vendorCode
+            # ???? ?????? ?????????? vendorCode
             for card in cards:
                 if card.get("vendorCode") == seller_sku:
                     photos = card.get("photos", [])
@@ -506,20 +538,20 @@ class WBAPIClient:
                         "name":       card.get("title", ""),
                         "image_url":  image_url,
                     }
-                    logger.info(f"✓ Карточка найдена по артикулу {seller_sku!r}: nm_id={info['nm_id']}")
+                    logger.info(f"? ???????? ??????? ?? ???????? {seller_sku!r}: nm_id={info['nm_id']}")
                     return info
 
-            logger.warning(f"Карточка с артикулом {seller_sku!r} не найдена (карточек в ответе: {len(cards)})")
+            logger.warning(f"???????? ? ????????? {seller_sku!r} ?? ??????? (???????? ? ??????: {len(cards)})")
             return {}
 
         except Exception as e:
-            logger.error(f"Ошибка поиска карточки по артикулу {seller_sku!r}: {e}")
+            logger.error(f"?????? ?????? ???????? ?? ???????? {seller_sku!r}: {e}")
             return {}
 
     async def get_card_photo(self, nm_id: int) -> Optional[str]:
         """
-        Получение URL фото товара из WB Content API по nmID.
-        Обёртка над get_card_info для обратной совместимости.
+        ????????? URL ???? ?????? ?? WB Content API ?? nmID.
+        ??????? ??? get_card_info ??? ???????? ?????????????.
         """
         info = await self.get_card_info(nm_id)
         return info.get("image_url")
@@ -530,11 +562,11 @@ class WBAPIClient:
         concurrency: int = 10
     ) -> Dict[int, dict]:
         """
-        Batch-получение информации о карточках по списку nmID.
-        Запросы выполняются параллельно с ограничением concurrency.
+        Batch-????????? ?????????? ? ????????? ?? ?????? nmID.
+        ??????? ??????????? ??????????? ? ???????????? concurrency.
 
         Returns:
-            Словарь {nm_id: {seller_sku, name, image_url}}
+            ??????? {nm_id: {seller_sku, name, image_url}}
         """
         if not nm_ids:
             return {}
@@ -554,29 +586,29 @@ class WBAPIClient:
         result: Dict[int, dict] = {}
         for item in results_raw:
             if isinstance(item, Exception):
-                logger.warning(f"Ошибка в batch-запросе карточки: {item}")
+                logger.warning(f"?????? ? batch-??????? ????????: {item}")
                 continue
             nm_id, info = item
             if info:
                 result[nm_id] = info
 
-        logger.info(f"get_cards_batch: запрошено {len(nm_ids)}, получено {len(result)}")
+        logger.info(f"get_cards_batch: ????????? {len(nm_ids)}, ???????? {len(result)}")
         return result
 
     async def get_all_cards(self, page_limit: int = 100) -> Dict[str, dict]:
         """
-        Загружает ВСЕ карточки аккаунта через cursor-пагинацию.
-        Вместо N отдельных запросов (по одному на артикул) делает 2-5 запросов.
+        ????????? ??? ???????? ???????? ????? cursor-?????????.
+        ?????? N ????????? ???????? (?? ?????? ?? ???????) ?????? 2-5 ????????.
 
         Returns:
-            Словарь {vendorCode: {nm_id, seller_sku, name, image_url}}
+            ??????? {vendorCode: {nm_id, seller_sku, name, image_url}}
         """
         content_api_url = "https://content-api.wildberries.ru"
         all_cards: Dict[str, dict] = {}
         cursor: dict = {"limit": page_limit}
 
         max_page_retries = 5
-        retry_delays = [2, 5, 10, 20, 30]  # секунды перед каждой попыткой
+        retry_delays = [2, 5, 10, 20, 30]  # ??????? ????? ?????? ????????
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             while True:
@@ -588,7 +620,7 @@ class WBAPIClient:
                     }
                 }
 
-                # Retry-цикл для текущей страницы
+                # Retry-???? ??? ??????? ????????
                 page_data = None
                 for attempt in range(max_page_retries):
                     try:
@@ -598,7 +630,7 @@ class WBAPIClient:
                             headers=self._get_headers(),
                         )
                     except Exception as e:
-                        logger.error(f"get_all_cards: ошибка запроса (попытка {attempt+1}): {e}")
+                        logger.error(f"get_all_cards: ?????? ??????? (??????? {attempt+1}): {e}")
                         if attempt < max_page_retries - 1:
                             await asyncio.sleep(retry_delays[attempt])
                             continue
@@ -608,7 +640,8 @@ class WBAPIClient:
                         page_data = response.json()
                         break
                     elif response.status_code == 429:
-                        wait_time = retry_delays[min(attempt, len(retry_delays)-1)] * 4
+                        fallback_wait = retry_delays[min(attempt, len(retry_delays)-1)] * 4
+                        wait_time = self._ratelimit_delay(response, fallback_wait)
                         logger.warning(f"get_all_cards: Rate limit 429, wait {wait_time}s attempt {attempt+1}/{max_page_retries}")
                         if attempt < max_page_retries - 1:
                             await asyncio.sleep(wait_time)
@@ -617,23 +650,23 @@ class WBAPIClient:
                         break
                     elif response.status_code in (500, 502, 503, 504):
                         logger.warning(
-                            f"get_all_cards: Content API вернул {response.status_code} "
-                            f"(попытка {attempt+1}/{max_page_retries}), повтор через {retry_delays[attempt]}s..."
+                            f"get_all_cards: Content API ?????? {response.status_code} "
+                            f"(??????? {attempt+1}/{max_page_retries}), ?????? ????? {retry_delays[attempt]}s..."
                         )
                         if attempt < max_page_retries - 1:
                             await asyncio.sleep(retry_delays[attempt])
                             continue
-                        logger.error(f"get_all_cards: страница не загружена после {max_page_retries} попыток, прерываем")
+                        logger.error(f"get_all_cards: ???????? ?? ????????? ????? {max_page_retries} ???????, ?????????")
                         break
                     else:
-                        logger.warning(f"get_all_cards: Content API вернул {response.status_code}")
+                        logger.warning(f"get_all_cards: Content API ?????? {response.status_code}")
                         break
 
                 if page_data is None:
-                    # Прервалось из-за 429 или сетевой ошибки — каталог неполный
+                    # ?????????? ??-?? 429 ??? ??????? ?????? ? ??????? ????????
                     logger.error(
-                        "get_all_cards: прервано после загрузки %d карточек "
-                        "(ошибка API или 429). Каталог неполный.", len(all_cards)
+                        "get_all_cards: ???????? ????? ???????? %d ???????? "
+                        "(?????? API ??? 429). ??????? ????????.", len(all_cards)
                     )
                     raise PartialCatalogError(
                         "Partial catalog: loaded %d cards before API error" % len(all_cards),
@@ -659,10 +692,10 @@ class WBAPIClient:
 
                 resp_cursor = page_data.get("cursor", {})
                 total = resp_cursor.get("total", 0)
-                logger.info(f"get_all_cards: страница {len(all_cards)} карточек, total={total}")
+                logger.info(f"get_all_cards: ???????? {len(all_cards)} ????????, total={total}")
 
                 if total < page_limit:
-                    break  # последняя страница
+                    break  # ????????? ????????
 
                 cursor = {
                     "limit":     page_limit,
@@ -670,7 +703,7 @@ class WBAPIClient:
                     "nmID":      resp_cursor.get("nmID"),
                 }
 
-        logger.info(f"get_all_cards: итого загружено {len(all_cards)} карточек")
+        logger.info(f"get_all_cards: ????? ????????? {len(all_cards)} ????????")
         return all_cards
 
     async def get_cards_batch_by_skus(
@@ -679,11 +712,11 @@ class WBAPIClient:
         concurrency: int = 10
     ) -> Dict[str, dict]:
         """
-        Batch-получение информации о карточках по списку артикулов продавца.
-        Ищет каждый SKU точечно через Content API search — без загрузки всего каталога.
+        Batch-????????? ?????????? ? ????????? ?? ?????? ????????? ????????.
+        ???? ?????? SKU ??????? ????? Content API search ? ??? ???????? ????? ????????.
 
         Returns:
-            Словарь {seller_sku: {nm_id, seller_sku, name, image_url}}
+            ??????? {seller_sku: {nm_id, seller_sku, name, image_url}}
         """
         if not seller_skus:
             return {}
@@ -718,12 +751,12 @@ class WBAPIClient:
         tasks = [_search_one(sku) for sku in seller_skus]
         await asyncio.gather(*tasks)
 
-        logger.info(f"get_cards_batch_by_skus: запрошено {len(seller_skus)}, найдено {len(result)}")
+        logger.info(f"get_cards_batch_by_skus: ????????? {len(seller_skus)}, ??????? {len(result)}")
         return result
 
     async def search_cards(self, text_search: str, limit: int = 100) -> List[dict]:
         """
-        Поиск карточек товаров по nmID или артикулу продавца через Content API
+        ????? ???????? ??????? ?? nmID ??? ???????? ???????? ????? Content API
 
         Endpoint: POST https://content-api.wildberries.ru/content/v2/get/cards/list
         """
@@ -752,28 +785,29 @@ class WBAPIClient:
                     return data.get("cards", [])
                 else:
                     raise WBAPIError(
-                        f"Content API вернул код {response.status_code}: {response.text}"
+                        f"Content API ?????? ??? {response.status_code}: {response.text}"
                     )
         except httpx.RequestError as e:
-            raise WBAPIError(f"Ошибка соединения с WB Content API: {e}")
+            raise WBAPIError(f"?????? ?????????? ? WB Content API: {e}")
 
     async def __aenter__(self):
-        """Context manager support (no-op: сессии управляются per-request)."""
+        """Context manager support (no-op: ?????? ??????????? per-request)."""
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Context manager support (no-op: сессии управляются per-request)."""
+        """Context manager support (no-op: ?????? ??????????? per-request)."""
         pass
 
 
 def create_wb_client(api_token: str) -> WBAPIClient:
     """
-    Фабрика для создания WB API клиента
+    ??????? ??? ???????? WB API ???????
     
     Args:
-        api_token: JWT токен WB API
+        api_token: JWT ????? WB API
         
     Returns:
         WBAPIClient
     """
     return WBAPIClient(api_token)
+
