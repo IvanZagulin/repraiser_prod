@@ -134,6 +134,27 @@ class TelegramNotifier:
         # Отправляем без звука
         await self.send_message(text, disable_notification=True)
 
+    async def notify_stale_run_recovered(
+        self,
+        run_id: int,
+        user_id: int | None,
+        restarted: bool,
+    ):
+        """Уведомление о зависшем прогоне и результате recovery."""
+        status_text = (
+            "перезапуск поставлен в очередь"
+            if restarted
+            else "автоперезапуск не выполнен"
+        )
+        text = (
+            f"⚠️ <b>Зависший прогон репрайсера</b>\n\n"
+            f"Run ID: <b>{run_id}</b>\n"
+            f"User ID: <b>{user_id if user_id is not None else '—'}</b>\n"
+            f"Действие: прогон помечен как failed, Redis-lock снят.\n"
+            f"Результат recovery: <b>{status_text}</b>."
+        )
+        await self.send_message(text)
+
 
 # Singleton instance
 telegram_notifier = TelegramNotifier()
