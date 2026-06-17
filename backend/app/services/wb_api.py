@@ -1,11 +1,61 @@
 import asyncio
+from collections import deque
 import logging
 from typing import Optional, List, Dict, Any, Tuple
 from decimal import Decimal
+import time
 import httpx
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+class _AsyncWBLimiter:
+    def __init__(self, period: float, limit: int, interval: float, burst: int):
+        self.period = period
+        self.limit = limit
+        self.interval = interval
+        self.burst = burst
+        self._timestamps = deque()
+        self._lock = asyncio.Lock()
+
+    async def wait(self) -> None:
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                while self._timestamps and now - self._timestamps[0] >= self.period:
+                    self._timestamps.popleft()
+
+                waits = []
+                if len(self._timestamps) >= self.limit:
+                    waits.append(self.period - (now - self._timestamps[0]))
+
+                recent = [ts for ts in self._timestamps if now - ts < self.interval]
+                if len(recent) >= self.burst:
+                    waits.append(self.interval - (now - recent[0]))
+
+                wait_for = max((delay for delay in waits if delay > 0), default=0)
+                if wait_for <= 0:
+                    self._timestamps.append(now)
+                    return
+
+            await asyncio.sleep(wait_for)
+
+
+_LIMITS = {
+    # WB docs: Prices and Discounts category, per seller account.
+    "prices": {"period": 6.0, "limit": 10, "interval": 0.6, "burst": 5},
+    # WB docs: Content category, per seller account.
+    "content": {"period": 60.0, "limit": 100, "interval": 0.6, "burst": 5},
+}
+_limiters: Dict[Tuple[str, str], _AsyncWBLimiter] = {}
+
+
+def _get_limiter(category: str, api_token: str) -> _AsyncWBLimiter:
+    key = (category, api_token)
+    if key not in _limiters:
+        _limiters[key] = _AsyncWBLimiter(**_LIMITS[category])
+    return _limiters[key]
 
 
 class WBAPIError(Exception):
@@ -109,6 +159,9 @@ class WBAPIClient:
             if parsed > 0:
                 return parsed
         return fallback_delay
+
+    async def _wait_for_limit(self, category: str) -> None:
+        await _get_limiter(category, self.api_token).wait()
     
     async def _make_request(
         self,
@@ -150,6 +203,7 @@ class WBAPIClient:
         ) as client:
             while retry_count <= max_retries:
                 try:
+                    await self._wait_for_limit("prices")
                     response = await client.request(
                         method=method,
                         url=endpoint,
@@ -446,6 +500,7 @@ class WBAPIClient:
         for attempt in range(max_retries):
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:
+                    await self._wait_for_limit("content")
                     response = await client.post(
                         f"{content_api_url}/content/v2/get/cards/list",
                         json=payload,
@@ -514,6 +569,7 @@ class WBAPIClient:
                 }
             }
             async with httpx.AsyncClient(timeout=15.0) as client:
+                await self._wait_for_limit("content")
                 response = await client.post(
                     f"{content_api_url}/content/v2/get/cards/list",
                     json=payload,
@@ -624,6 +680,7 @@ class WBAPIClient:
                 page_data = None
                 for attempt in range(max_page_retries):
                     try:
+                        await self._wait_for_limit("content")
                         response = await client.post(
                             f"{content_api_url}/content/v2/get/cards/list",
                             json=payload,
@@ -775,6 +832,7 @@ class WBAPIClient:
         }
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
+                await self._wait_for_limit("content")
                 response = await client.post(
                     f"{content_api_url}/content/v2/get/cards/list",
                     json=payload,
