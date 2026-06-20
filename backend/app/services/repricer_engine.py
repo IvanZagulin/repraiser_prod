@@ -1879,7 +1879,16 @@ class RepricerEngine:
                 "dry_run": dry_run,
                 "products_per_sec": round(run.total_products / (_duration_ms / 1000), 2) if _duration_ms > 0 else 0,
             }))
-            
+
+            if results['updated'] == 0 and run.total_products > 0 and not dry_run:
+                await telegram_notifier.notify_zero_updates(
+                    run_id=run.id,
+                    total=run.total_products,
+                    errors=results['errors'],
+                    run_type=run_type,
+                    duration_seconds=_duration_ms // 1000,
+                )
+
             return run
             
         except Exception as e:

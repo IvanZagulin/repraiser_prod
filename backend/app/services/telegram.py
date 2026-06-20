@@ -134,6 +134,32 @@ class TelegramNotifier:
         # Отправляем без звука
         await self.send_message(text, disable_notification=True)
 
+    async def notify_zero_updates(
+        self,
+        run_id: int,
+        total: int,
+        errors: int,
+        run_type: str,
+        duration_seconds: int,
+    ):
+        """Уведомление о прогоне с 0 обновлённых товаров — признак системного сбоя"""
+        text = (
+            f"🚨 <b>ВНИМАНИЕ: 0 товаров переоценено</b>\n\n"
+            f"Run ID: <b>{run_id}</b>\n"
+            f"Тип: {run_type}\n"
+            f"Всего товаров: {total}\n"
+            f"Ошибок: {errors}\n"
+            f"Время: {duration_seconds}с\n\n"
+        )
+        if errors == total and total > 0:
+            text += (
+                "⚠️ Все товары завершились с ошибкой.\n"
+                "Вероятная причина: блокировка WB (403/429) или сбой парсинга каталога."
+            )
+        else:
+            text += "Проверьте логи celery-воркера."
+        await self.send_message(text)
+
     async def notify_stale_run_recovered(
         self,
         run_id: int,
