@@ -172,7 +172,7 @@ class CatalogParser:
             async with AsyncSession(
                 timeout=15,
                 headers=_HEADERS,
-                impersonate="chrome124",
+                impersonate="edge101",
             ) as client:
                 response = await client.get(url)
                 if response.status_code == 200:
