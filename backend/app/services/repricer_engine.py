@@ -86,18 +86,14 @@ class RepricerEngine:
     _SPP_MIN = Decimal("-10")
     _SPP_MAX = Decimal("95")
 
-    # Коридор стратегии competitor: финальная (с СПП) НИКОГДА не должна быть
-    # ниже конкурента — иначе санкции поставщика. Если выше конкурента — ОК,
-    # не снижаем (потолок мягкий): из-за ступенчатого СПП снижение может
-    # провалить цену ниже конкурента ("мёртвая зона"), а частые перепады цен
-    # портят индекс привлекательности и могут привести к обнулению СПП.
-    _COMPETITOR_FLOOR_PCT = Decimal("0.5")
-    _COMPETITOR_FLOOR_MIN_RUB = Decimal("1")
-    _COMPETITOR_CEIL_PCT = Decimal("5")
+    # Стратегия competitor должна стремиться к рассчитанной цене конкурента
+    # (с учетом offset из конфига). Экономические ограничения применяются ниже:
+    # min_price, max_price, margin guard и защита WB от резкого снижения.
+    _TARGET_EPSILON_RUB = Decimal("0.01")
 
     # Cooldown для competitor-товаров: не переоценивать чаще чем раз в 4 часа
     # (6 раз в сутки). Защита от осцилляции и от отключения СПП Wildberries'ом.
-    # Override: если финальная цена ниже пола конкурента (SPP drift) — немедленно.
+    # Override: если финальная цена вышла из коридора (SPP drift) — немедленно.
     _COMPETITOR_COOLDOWN_HOURS = 4
 
     # Closed-loop verify+correct: после заливки СПП у WB готов за 3-7с (замер
@@ -107,14 +103,24 @@ class RepricerEngine:
     _CLOSED_LOOP_ENABLED = True
     _CLOSED_LOOP_SETTLE_SEC = 20
 
-    def _competitor_corridor(self, competitor_price: Decimal):
-        """Возвращает (пол, потолок) финальной цены для коридора competitor."""
-        floor = competitor_price + max(
-            competitor_price * self._COMPETITOR_FLOOR_PCT / 100,
-            self._COMPETITOR_FLOOR_MIN_RUB,
-        )
-        ceil = competitor_price + competitor_price * self._COMPETITOR_CEIL_PCT / 100
-        return floor, ceil
+    def _competitor_target_final(self, config, competitor_price: Decimal) -> Decimal:
+        """Return target final buyer price for competitor strategy."""
+        offset_type = config.competitor_offset_type
+        offset_direction = config.competitor_offset_direction
+        offset_value = config.competitor_offset_value or Decimal(0)
+
+        if offset_type == 'rub':
+            if offset_direction == 'above':
+                return competitor_price + offset_value
+            return competitor_price - offset_value
+
+        if offset_direction == 'above':
+            return competitor_price * (1 + offset_value / 100)
+        return competitor_price * (1 - offset_value / 100)
+
+    def _has_rrp_target(self, config, spp: Decimal) -> bool:
+        seller_price_direct, rrp = self._resolve_rrp(config, spp)
+        return bool(seller_price_direct or rrp)
 
     def _calculate_seller_price_from_final(
         self,
@@ -378,7 +384,6 @@ class RepricerEngine:
         if not rrp:
             return None, "SKIPPED_INACTIVE", "РРЦ не настроен"
 
-        tolerance = config.rrp_tolerance or Decimal(5)
         current_final = current_data['final_price']
         seller_discount = current_data.get('discount') or Decimal(0)
 
@@ -389,17 +394,14 @@ class RepricerEngine:
             wallet_factor = 1 - wallet_pct / 100
             current_effective = current_final * wallet_factor
 
-            min_effective = rrp - tolerance
-            max_effective = rrp + tolerance
-
             logger.info(
                 f"RRP+кошелёк стратегия: текущая с кошельком={current_effective}₽, "
-                f"диапазон=[{min_effective}₽; {max_effective}₽], кошелёк={wallet_pct}%"
+                f"цель={rrp}₽, кошелёк={wallet_pct}%"
             )
 
-            if min_effective <= current_effective <= max_effective:
+            if abs(current_effective - rrp) <= self._TARGET_EPSILON_RUB:
                 return None, "NO_CHANGE", (
-                    f"Цена с кошельком в допуске РРЦ ({current_effective}₽)"
+                    f"Цена с кошельком уже равна РРЦ ({current_effective}₽)"
                 )
 
             # Целевая финальная цена до применения кошелька
@@ -417,17 +419,13 @@ class RepricerEngine:
                 return None, "PARSE_ERROR", f"Ошибка расчета: {e}"
 
         else:
-            # Стандартное поведение без кошелька
-            min_final = rrp - tolerance
-            max_final = rrp + tolerance
-
             logger.info(
                 f"RRP стратегия: текущая={current_final}₽, "
-                f"диапазон=[{min_final}₽; {max_final}₽]"
+                f"цель={rrp}₽"
             )
 
-            if min_final <= current_final <= max_final:
-                return None, "NO_CHANGE", f"Цена в допуске РРЦ ({current_final}₽)"
+            if abs(current_final - rrp) <= self._TARGET_EPSILON_RUB:
+                return None, "NO_CHANGE", f"Цена уже равна РРЦ ({current_final}₽)"
 
             target_final = rrp
 
@@ -545,21 +543,7 @@ class RepricerEngine:
                 f"цена конкурента={competitor_price}₽, winning_nm_id={winning_nm_id}"
             )
 
-            # Рассчитываем целевую финальную цену со смещением
-            offset_type = config.competitor_offset_type
-            offset_direction = config.competitor_offset_direction
-            offset_value = config.competitor_offset_value or Decimal(0)
-
-            if offset_type == 'rub':
-                if offset_direction == 'above':
-                    target_final = competitor_price + offset_value
-                else:
-                    target_final = competitor_price - offset_value
-            else:  # pct
-                if offset_direction == 'above':
-                    target_final = competitor_price * (1 + offset_value / 100)
-                else:
-                    target_final = competitor_price * (1 - offset_value / 100)
+            target_final = self._competitor_target_final(config, competitor_price)
 
             # Эффективный СПП берём из живого снапшота (final/discounted) БЕЗ
             # округления до целого процента. Хранимый true_spp округлён (строка
@@ -577,29 +561,12 @@ class RepricerEngine:
                 if self._SPP_MIN <= eff_spp < Decimal(100):
                     calc_spp = eff_spp
 
-            # Коридор: пол = конкурент + запас (НИКОГДА не ниже конкурента), потолок.
-            floor_final, ceil_final = self._competitor_corridor(competitor_price)
-            # offset из конфига учитываем как доп. поднятие над полом, но сам пол —
-            # жёсткий минимум цели в любом случае.
-            target_final = max(target_final, floor_final)
-            move = "raise"
-
-            if current_final <= 0:
-                # Нет факта (OOS/parse) — целимся в пол.
-                pass
-            elif current_final < floor_final:
-                # Под полом (дешевле конкурента или без запаса) — НАРУШЕНИЕ.
-                # Поднимаем решительно сразу к цели, без демпфирования.
-                target_final = max(target_final, floor_final)
-                move = "raise"
-            else:
-                # Выше конкурента (>= floor) — НЕ ТРОГАЕМ. Потолок мягкий:
-                # из-за ступенчатого СПП снижение может провалить в "мёртвую
-                # зону" ниже конкурента, а частые перепады цен портят индекс
-                # привлекательности WB.
+            move = "lower" if current_final > target_final else "raise"
+            if current_final > 0 and abs(current_final - target_final) <= self._TARGET_EPSILON_RUB:
                 return None, "NO_CHANGE", (
-                    f"Competitor ({rule}): финальная {current_final}₽ >= пола "
-                    f"{floor_final:.2f}₽ (конкурент {competitor_price}₽), не снижаем"
+                    f"Competitor ({rule}): финальная {current_final}₽ уже равна цели "
+                    f"{target_final:.2f}₽ "
+                    f"(конкурент {competitor_price}₽)"
                 ), competitor_price, winning_nm_id
 
             # Обратный расчет цены продавца через эффективный СПП.
@@ -608,7 +575,6 @@ class RepricerEngine:
 
                 reason_msg = (
                     f"Competitor ({rule}, {move}): конкурент nm_id={winning_nm_id} цена={competitor_price}₽, "
-                    f"коридор [{floor_final:.2f}; {ceil_final:.2f}]₽, "
                     f"целевая {target_final:.2f}₽, СПП={calc_spp:.2f}%, новая цена продавца {new_seller_price}₽"
                 )
 
@@ -910,7 +876,19 @@ class RepricerEngine:
             logger.error(f"Неизвестная стратегия: {config.strategy}")
             logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": "PARSE_ERROR", "duration_ms": int((time.monotonic() - _t0) * 1000)}))
             return "PARSE_ERROR"
-        
+
+        if new_price is None:
+            _spp_for_rrp = current_data.get('spp') or Decimal(0)
+            if reason_code == 'COMPETITOR_OOS' and self._has_rrp_target(config, _spp_for_rrp):
+                logger.info(
+                    "Конкурент OOS для nm_id=%s, fallback на РРЦ",
+                    product.nm_id,
+                )
+                new_price, reason_code, reason_msg = await self._strategy_rrp(
+                    product, config, current_data, wallet_pct
+                )
+                reason_msg = f"[Fallback РРЦ при OOS конкурента] {reason_msg}"
+
         # Если стратегия не требует изменений — всё равно прогоняем через защиту маржи.
         # Если текущая цена нарушает минимум маржи, _apply_limits поднимет её.
         # Если маржа в норме — final_new_price == current_seller_price → NO_CHANGE (ниже).
@@ -1105,8 +1083,8 @@ class RepricerEngine:
                     "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": None, "_t0": _t0}
 
         # Cooldown для competitor: не переоценивать чаще раза в N ч.
-        # OVERRIDE: если СПП дрейфнул и финальная цена ниже пола конкурента —
-        # реагируем немедленно, иначе теряем маржу и нарушаем условия поставщика.
+        # OVERRIDE: если СПП дрейфнул и финальная цена ушла от цели конкурента —
+        # реагируем немедленно вверх или вниз.
         from datetime import timedelta
         if config.strategy == "competitor" and self._COMPETITOR_COOLDOWN_HOURS > 0:
             cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=self._COMPETITOR_COOLDOWN_HOURS)
@@ -1146,13 +1124,14 @@ class RepricerEngine:
                                     "_t0": _t0,
                                 }
                             if catalog_final > 0:
-                                floor, _ = self._competitor_corridor(Decimal(str(last_snap.competitor_price)))
-                                if catalog_final < floor:
+                                competitor_price = Decimal(str(last_snap.competitor_price))
+                                target_final = self._competitor_target_final(config, competitor_price)
+                                if abs(catalog_final - target_final) > self._TARGET_EPSILON_RUB:
                                     cooldown_override = True
                                     logger.warning(
                                         "Competitor cooldown OVERRIDE nm_id=%s: "
-                                        "факт %.2f₽ < пол %.2f₽ (конкурент %.2f₽), SPP drift",
-                                        product.nm_id, catalog_final, floor, last_snap.competitor_price,
+                                        "факт %.2f₽ != цель %.2f₽ (конкурент %.2f₽), SPP drift",
+                                        product.nm_id, catalog_final, target_final, last_snap.competitor_price,
                                     )
                     except Exception as e:
                         logger.debug("Cooldown override check nm_id=%s: %s", product.nm_id, e)
@@ -1219,8 +1198,9 @@ class RepricerEngine:
 
         if new_price is None:
             # Fallback на РРЦ если конкурент недоступен и РРЦ настроена
-            if reason_code == "COMPETITOR_OOS" and config.rrp_price:
-                logger.info(f"Конкурент OOS для nm_id={product.nm_id}, fallback на РРЦ {config.rrp_price}₽")
+            _spp_for_rrp = current_data.get('spp') or Decimal(0)
+            if reason_code == "COMPETITOR_OOS" and self._has_rrp_target(config, _spp_for_rrp):
+                logger.info("Конкурент OOS для nm_id=%s, fallback на РРЦ", product.nm_id)
                 new_price, reason_code, reason_msg = await self._strategy_rrp(product, config, current_data, wallet_pct)
                 reason_msg = f"[Fallback РРЦ при OOS конкурента] {reason_msg}"
 
@@ -1348,8 +1328,7 @@ class RepricerEngine:
         Две задачи:
         1. ВСЕГДА обновляет snapshot РЕАЛЬНОЙ final_price (а не предсказанной) —
            иначе UI показывает фантомную цену СПП.
-        2. Если факт НИЖЕ пола (конкурента) — поднимает. Если ВЫШЕ — не трогает
-           (мягкий потолок: лучше быть дороже, чем осциллировать).
+        2. Если факт ушёл от цели competitor — доправляет вверх или вниз.
         """
         if not items or not self._CLOSED_LOOP_ENABLED:
             return 0
@@ -1397,16 +1376,17 @@ class RepricerEngine:
             if not comp:
                 continue
             comp = Decimal(str(comp))
-            floor_final, _ceil_final = self._competitor_corridor(comp)
+            target_final = self._competitor_target_final(it["config"], comp)
 
-            if actual_final >= floor_final:
+            if abs(actual_final - target_final) <= self._TARGET_EPSILON_RUB:
                 continue
 
-            # Ниже пола — поднимаем.
             ratio = actual_final / new_seller
             if ratio <= 0:
                 continue
-            corrected = Decimal(self._round_up(floor_final / ratio))
+            corrected = Decimal(self._round_up(target_final / ratio))
+            if corrected < new_seller * Decimal("0.55"):
+                corrected = Decimal(self._round_up(new_seller * Decimal("0.55") + Decimal("1")))
             if corrected > new_seller * Decimal("3"):
                 logger.warning(
                     "Closed-loop: аномальная коррекция nm=%s (seller=%s→%s, ratio=%.4f), пропускаем",
@@ -1423,10 +1403,10 @@ class RepricerEngine:
             if corrected == new_seller:
                 continue
             corrective.setdefault(it["token"], []).append({"nmID": nm, "price": int(corrected)})
-            plan[nm] = (it, corrected, floor_final, actual_final, ratio)
+            plan[nm] = (it, corrected, target_final, actual_final, ratio)
 
         if not corrective:
-            logger.info("Closed-loop: snapshots обновлено=%d, коррекция не нужна (все >= пола)", snapshots_updated)
+            logger.info("Closed-loop: snapshots обновлено=%d, коррекция не нужна (все у цели)", snapshots_updated)
             try:
                 self.db.commit()
             except Exception as e:
@@ -1462,7 +1442,7 @@ class RepricerEngine:
                                           competitor_price=it.get("competitor_price"))
                 self._save_price_change(
                     run, product, base, corrected, new_final_est, "CORRECTED",
-                    f"Closed-loop: факт {actual_final}₽ < пола {target_final:.2f}₽ → "
+                    f"Closed-loop: факт {actual_final}₽ != цели {target_final:.2f}₽ → "
                     f"seller {it['new_price']}→{corrected}",
                 )
                 n += 1
@@ -1473,7 +1453,7 @@ class RepricerEngine:
         except Exception as e:
             logger.error("Closed-loop: commit упал: %s", e)
             self.db.rollback()
-        logger.info("Closed-loop: snapshots обновлено=%d, доправлено (ниже пола)=%d", snapshots_updated, n)
+        logger.info("Closed-loop: snapshots обновлено=%d, доправлено к цели=%d", snapshots_updated, n)
         return n
 
     async def run_repricer(

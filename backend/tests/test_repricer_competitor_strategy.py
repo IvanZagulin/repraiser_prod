@@ -41,6 +41,8 @@ def _make_config(
     offset_type="rub",
     offset_direction="below",
     offset_value="0",
+    rrp_price=None,
+    rrp_tolerance="5",
 ):
     return SimpleNamespace(
         id=config_id,
@@ -49,6 +51,10 @@ def _make_config(
         competitor_offset_type=offset_type,
         competitor_offset_direction=offset_direction,
         competitor_offset_value=Decimal(offset_value),
+        rrp_price=Decimal(str(rrp_price)) if rrp_price is not None else None,
+        rrp_tolerance=Decimal(str(rrp_tolerance)),
+        rrp_consider_wallet=False,
+        rrp_spp_tiers=[],
     )
 
 
@@ -262,19 +268,9 @@ def _run_strategy(engine, config, current_data, competitor_final):
 
 
 class TestStrategyCompetitorCorridor:
-    """Пол + мягкий потолок + эффективный СПП (регрессия артикулов 3891012/3874932).
+    """Competitor strategy targets the configured competitor price."""
 
-    Пол = конкурент + max(0.5%, 1₽). Ниже пола — поднимаем. Выше пола (включая
-    выше потолка) — НЕ трогаем: мягкий потолок, т.к. снижение может провалить
-    цену в "мёртвую зону" СПП ниже конкурента.
-    """
-
-    def test_raises_from_under_floor(self):
-        """final=1588 < конкурент=1593 → под полом, поднимаем к полу через eff_spp.
-
-        Пол = 1593 + max(1593*0.5%=7.965, 1) = 1600.965. eff_spp=34.22%.
-        round_up(1600.965/0.657829)=2434 (> текущей 2414).
-        """
+    def test_raises_to_competitor_target(self):
         engine = _make_engine_with_settings()
         config = _make_config(offset_type="rub", offset_direction="above", offset_value="0")
         current_data = {
@@ -290,16 +286,14 @@ class TestStrategyCompetitorCorridor:
         )
 
         assert reason_code == "CALCULATED"
-        assert new_seller > Decimal("2414")  # обязан подняться из-под пола
-        assert new_seller == Decimal("2434")
+        assert new_seller > Decimal("2414")
+        assert new_seller == Decimal("2422")
         assert comp_price == Decimal("1593")
         assert winner == 999
 
-    def test_no_change_inside_corridor(self):
-        """Финальная в коридоре [floor; ceil] → не трогаем."""
+    def test_lowers_when_above_competitor_target(self):
         engine = _make_engine_with_settings()
         config = _make_config(offset_type="rub", offset_direction="above", offset_value="0")
-        # конкурент 1593 → коридор [1600.965; 1672.65]; берём 1620 (внутри)
         current_data = {
             "seller_price": Decimal("2460"),
             "discounted_price": Decimal("2460"),
@@ -312,15 +306,10 @@ class TestStrategyCompetitorCorridor:
             engine, config, current_data, competitor_final=1593
         )
 
-        assert reason_code == "NO_CHANGE"
-        assert new_seller is None
+        assert reason_code == "CALCULATED"
+        assert new_seller == Decimal("2419")
 
-    def test_no_change_above_floor_soft_ceiling(self):
-        """Финальная выше потолка → НЕ снижаем (мягкий потолок).
-
-        Из-за ступенчатого СПП снижение может провалить цену в "мёртвую зону"
-        ниже конкурента. Безопаснее оставить как есть.
-        """
+    def test_lowers_when_far_above_competitor_target(self):
         engine = _make_engine_with_settings()
         config = _make_config(offset_type="rub", offset_direction="above", offset_value="0")
         current_data = {
@@ -335,8 +324,8 @@ class TestStrategyCompetitorCorridor:
             engine, config, current_data, competitor_final=1593
         )
 
-        assert reason_code == "NO_CHANGE"
-        assert new_seller is None
+        assert reason_code == "CALCULATED"
+        assert new_seller == Decimal("2478")
 
     def test_falls_back_to_stored_spp_without_discounted(self):
         """Если discounted_price отсутствует (напр. dry_run) — берём хранимый СПП."""
@@ -355,8 +344,33 @@ class TestStrategyCompetitorCorridor:
         )
 
         assert reason_code == "CALCULATED"
-        # под полом 1507.5; round_up(1507.5 / 0.65) = round_up(2319.23) = 2320
-        assert new_seller == Decimal("2320")
+        assert new_seller == Decimal("2308")
+
+
+class TestStrategyRRPTarget:
+    def test_rrp_reprices_inside_old_tolerance(self):
+        engine = _make_engine_with_settings()
+        config = SimpleNamespace(
+            rrp_price=Decimal("1000"),
+            rrp_tolerance=Decimal("10"),
+            rrp_consider_wallet=False,
+            rrp_spp_tiers=[],
+        )
+        current_data = {
+            "seller_price": Decimal("1005"),
+            "final_price": Decimal("1005"),
+            "discount": Decimal("0"),
+            "spp": Decimal("0"),
+        }
+        product = SimpleNamespace(nm_id=111, seller_sku="SKU")
+
+        new_seller, reason_code, reason_msg = asyncio.run(
+            engine._strategy_rrp(product, config, current_data)
+        )
+
+        assert reason_code == "CALCULATED"
+        assert new_seller == Decimal("1000")
+        assert "целевая финальная 1000" in reason_msg
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -394,8 +408,13 @@ class TestCorrectUnstableProducts:
                           started_at=datetime(2026, 6, 10, 14, 0, 0))
         db_session.add(run); db_session.commit(); db_session.refresh(run)
 
-        config = SimpleNamespace(min_price=Decimal("80"), max_price=None,
-                                 skip_margin_check=True, product=test_product)
+        config = SimpleNamespace(
+            min_price=Decimal("80"), max_price=None,
+            skip_margin_check=True, product=test_product,
+            competitor_offset_type="rub",
+            competitor_offset_direction="above",
+            competitor_offset_value=Decimal("0"),
+        )
         items = [{
             "product": test_product,
             "nm_id": test_product.nm_id,
@@ -408,7 +427,7 @@ class TestCorrectUnstableProducts:
             "competitor_nm_id": 948560176,
         }]
 
-        # Факт после первого шага: 1588 — всё ещё под полом 1600.965 → коррекция.
+        # Факт после первого шага: 1588 ниже цели 1593 → коррекция.
         fresh = {test_product.nm_id: SimpleNamespace(final_price=Decimal("1588"), spp=Decimal("34"))}
         fake_client = _FakeClient()
 
@@ -422,15 +441,14 @@ class TestCorrectUnstableProducts:
             n = asyncio.run(engine._verify_and_correct_competitor(run, items))
 
         assert n == 1
-        # отправлена коррекция вверх: round_up(1600.965 / (1588/2414)) = 2434
-        assert fake_client.calls == [[{"nmID": test_product.nm_id, "price": 2434}]]
+        assert fake_client.calls == [[{"nmID": test_product.nm_id, "price": 2422}]]
         changes = db_session.query(PriceChange).filter(
             PriceChange.run_id == run.id, PriceChange.reason_code == "CORRECTED"
         ).all()
         assert len(changes) == 1
-        assert changes[0].new_seller_price == Decimal("2434")
+        assert changes[0].new_seller_price == Decimal("2422")
 
-    def test_no_correction_when_actual_in_corridor(self, db_session, test_product):
+    def test_corrects_when_actual_above_target(self, db_session, test_product):
         engine = RepricerEngine(db=db_session, user_id=None)
         engine._user_settings = {}
         engine._CLOSED_LOOP_SETTLE_SEC = 0
@@ -439,8 +457,13 @@ class TestCorrectUnstableProducts:
                           started_at=datetime(2026, 6, 10, 14, 0, 0))
         db_session.add(run); db_session.commit(); db_session.refresh(run)
 
-        config = SimpleNamespace(min_price=Decimal("80"), max_price=None,
-                                 skip_margin_check=True, product=test_product)
+        config = SimpleNamespace(
+            min_price=Decimal("80"), max_price=None,
+            skip_margin_check=True, product=test_product,
+            competitor_offset_type="rub",
+            competitor_offset_direction="above",
+            competitor_offset_value=Decimal("0"),
+        )
         items = [{
             "product": test_product, "nm_id": test_product.nm_id, "token": "tok",
             "config": config, "new_price": Decimal("2460"),
@@ -448,7 +471,7 @@ class TestCorrectUnstableProducts:
                              "discount": Decimal("0"), "spp": Decimal("34")},
             "competitor_price": Decimal("1593"), "competitor_nm_id": 1,
         }]
-        # Факт 1620 >= пол 1600.965 → коррекция не нужна (мягкий потолок).
+        # Факт 1620 выше цели 1593 → коррекция вниз.
         fresh = {test_product.nm_id: SimpleNamespace(final_price=Decimal("1620"), spp=Decimal("34"))}
         fake_client = _FakeClient()
 
@@ -461,11 +484,54 @@ class TestCorrectUnstableProducts:
                    return_value=fake_client):
             n = asyncio.run(engine._verify_and_correct_competitor(run, items))
 
-        assert n == 0
-        assert fake_client.calls == []
+        assert n == 1
+        assert fake_client.calls == [[{"nmID": test_product.nm_id, "price": 2419}]]
 
 
 class TestCompetitorCooldownSnapshots:
+    def test_competitor_oos_falls_back_to_rrp(self, db_session, test_product, test_product_config):
+        engine = RepricerEngine(db=db_session, user_id=None)
+        engine._user_settings = {}
+        engine._COMPETITOR_COOLDOWN_HOURS = 0
+
+        test_product_config.strategy = "competitor"
+        test_product_config.competitor_nm_id = 577768295
+        test_product_config.competitor_offset_type = "rub"
+        test_product_config.competitor_offset_direction = "above"
+        test_product_config.competitor_offset_value = Decimal("0")
+        test_product_config.min_price = Decimal("300")
+        test_product_config.rrp_price = Decimal("900")
+        db_session.commit()
+        db_session.refresh(test_product)
+
+        run = RepricerRun(
+            run_type="manual",
+            status="running",
+            started_at=datetime(2026, 6, 10, 14, 0, 0),
+        )
+        db_session.add(run)
+        db_session.commit()
+        db_session.refresh(run)
+
+        current_data = {
+            "seller_price": Decimal("1300"),
+            "discounted_price": Decimal("1300"),
+            "final_price": Decimal("975"),
+            "discount": Decimal("0"),
+            "spp": Decimal("25"),
+            "is_in_promo": False,
+            "total_quantity": 1,
+        }
+
+        with patch("app.services.repricer_engine.is_token_expired", return_value=False), \
+             patch.object(engine, "_get_current_price_data", new=AsyncMock(return_value=current_data)), \
+             patch.object(engine, "_cached_parse_product", new=AsyncMock(return_value=_comp(700, in_stock=False))):
+            decision = asyncio.run(engine._decide_product(test_product, run, dry_run=False))
+
+        assert decision["needs_update"] is True
+        assert decision["new_price"] == Decimal("1200")
+        assert "[Fallback РРЦ при OOS конкурента]" in decision["reason_msg"]
+
     def test_oos_during_cooldown_saves_fresh_snapshot(self, db_session, test_product, test_product_config):
         engine = RepricerEngine(db=db_session, user_id=None)
         engine._user_settings = {}
