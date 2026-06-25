@@ -38,6 +38,7 @@ class RepricerEngine:
         self.user_id = user_id  # None → глобальные/дефолтные настройки
         self._user_settings: Optional[Dict] = None  # loaded once per run
         self._prefetched_prices: Dict[int, object] = {}  # nm_id -> PriceData, cleared per chunk
+        self._price_fetch_failed: set[int] = set()
         self._competitor_entries_map: Optional[Dict[int, list]] = None  # config_id -> [nm_id], прогрев на прогон
 
     def _load_user_settings(self) -> Dict:
@@ -233,7 +234,7 @@ class RepricerEngine:
                 logger.warning("Ошибка pre-fetch цен для %s: %s", account.name, e)
 
     async def _prefetch_all_prices_once(self) -> None:
-        """Загружает цены ВСЕХ аккаунтов параллельно (один раз до цикла чанков)."""
+        """Load all account prices once and retain pages fetched before errors."""
         accounts = self.db.execute(
             select(Account).filter(Account.user_id == self.user_id, Account.is_active == True)
         ).scalars().all()
@@ -255,9 +256,66 @@ class RepricerEngine:
                         offset += 1000
                 logger.info("Pre-fetch цен (global): %d товаров для аккаунта %s", fetched, account.name)
             except Exception as e:
-                logger.warning("Ошибка pre-fetch цен для %s: %s", account.name, e)
+                logger.warning(
+                    "Partial price prefetch for %s: retained %d items; "
+                    "missing items will use batch fallback: %s",
+                    account.name,
+                    fetched,
+                    e,
+                )
 
         await asyncio.gather(*[_fetch_account(a) for a in accounts])
+
+    async def _prefetch_missing_prices(self, products: list) -> None:
+        """Fetch missing prices with one POST batch per account.
+
+        Failed or absent nmIDs are marked for this run so decision workers do
+        not fall back to concurrent single-item GET requests.
+        """
+        by_token: Dict[str, dict] = {}
+        for product in products:
+            if product.nm_id in self._prefetched_prices:
+                continue
+            account = product.account
+            if not account or not account.is_active or is_token_expired(account.wb_api_token):
+                self._price_fetch_failed.add(product.nm_id)
+                continue
+            entry = by_token.setdefault(
+                account.wb_api_token,
+                {"account": account, "nm_ids": []},
+            )
+            entry["nm_ids"].append(product.nm_id)
+
+        async def _fetch_batch(token: str, entry: dict) -> None:
+            requested = list(dict.fromkeys(entry["nm_ids"]))
+            account = entry["account"]
+            try:
+                async with create_wb_client(token) as client:
+                    prices = await client.get_prices_by_articles(requested)
+                returned = set()
+                for price in prices:
+                    self._prefetched_prices[price.nm_id] = price
+                    returned.add(price.nm_id)
+                missing = set(requested) - returned
+                self._price_fetch_failed.update(missing)
+                logger.info(
+                    "Price batch fallback for %s: %d/%d",
+                    account.name,
+                    len(returned),
+                    len(requested),
+                )
+            except Exception as e:
+                self._price_fetch_failed.update(requested)
+                logger.warning(
+                    "Price batch fallback failed for %s (%d items): %s",
+                    account.name,
+                    len(requested),
+                    e,
+                )
+
+        await asyncio.gather(
+            *[_fetch_batch(token, entry) for token, entry in by_token.items()]
+        )
 
     async def _get_current_price_data(
         self,
@@ -274,6 +332,13 @@ class RepricerEngine:
             # Используем предзагруженные данные если есть (batch pre-fetch)
             if product.nm_id in self._prefetched_prices:
                 price_data = self._prefetched_prices[product.nm_id]
+            elif product.nm_id in self._price_fetch_failed:
+                logger.warning(
+                    "Price unavailable after batch fallback for nm_id=%s; "
+                    "single-item GET skipped",
+                    product.nm_id,
+                )
+                return None
             else:
                 async with create_wb_client(account.wb_api_token) as client:
                     prices = await client.get_prices(nm_ids=[product.nm_id])
@@ -1626,6 +1691,10 @@ class RepricerEngine:
 
                 # === PRE-FETCH для текущего чанка ===
                 if not dry_run:
+                    # A failed pagination page leaves earlier pages usable.
+                    # Fetch only the missing chunk items in one POST batch.
+                    await self._prefetch_missing_prices(chunk_products)
+
                     # Прогрев каталога собственных товаров (цены уже загружены глобально)
                     # OOS товарам каталог не нужен (57% = OUT_OF_STOCK → пропускаются).
                     # Проверяем по prefetched_prices: если seller_price=0, товар нет на складе.

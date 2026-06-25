@@ -170,7 +170,8 @@ class WBAPIClient:
         json_data: Optional[dict] = None,
         params: Optional[dict] = None,
         retry_on_429: bool = True,
-        max_retries: int = 5
+        max_retries: int = 5,
+        retry_on_5xx: bool = True,
     ) -> dict:
         """
         ?????????? HTTP ??????? ? ?????????? ??????.
@@ -194,6 +195,7 @@ class WBAPIClient:
         """
         retry_count = 0
         backoff_delay = 7  # ????????? ???????? ??? 429 (> 6s window WB rate limit)
+        transient_delay = 1.0
 
         async with httpx.AsyncClient(
             base_url=self.base_url,
@@ -233,6 +235,25 @@ class WBAPIClient:
                         )
                         await asyncio.sleep(delay)
                         backoff_delay = max(backoff_delay * 2, delay)
+                        retry_count += 1
+                        continue
+
+                    elif retry_on_5xx and response.status_code in (500, 502, 503, 504):
+                        if retry_count >= max_retries:
+                            raise WBAPIError(
+                                f"API error {response.status_code} after "
+                                f"{retry_count} retries: {response.text}"
+                            )
+
+                        logger.warning(
+                            "WB API %s, waiting %.1fs before retry %s/%s",
+                            response.status_code,
+                            transient_delay,
+                            retry_count + 1,
+                            max_retries,
+                        )
+                        await asyncio.sleep(transient_delay)
+                        transient_delay = min(transient_delay * 2, 16.0)
                         retry_count += 1
                         continue
 
@@ -298,7 +319,39 @@ class WBAPIClient:
         except Exception as e:
             logger.error(f"?????? ????????? ??? ?? WB API: {e}")
             raise
-    
+
+    async def get_prices_by_articles(
+        self,
+        nm_ids: List[int],
+        batch_size: int = 1000,
+    ) -> List[PriceData]:
+        """Fetch prices by article using POST batches of up to 1000 nmIDs.
+
+        This is the safe fallback after a partial paginated prefetch. It avoids
+        turning one failed page into hundreds of concurrent single-item GETs.
+        """
+        if not nm_ids:
+            return []
+
+        prices: List[PriceData] = []
+        unique_nm_ids = list(dict.fromkeys(int(nm_id) for nm_id in nm_ids))
+        for start in range(0, len(unique_nm_ids), batch_size):
+            chunk = unique_nm_ids[start:start + batch_size]
+            data = await self._make_request(
+                "POST",
+                "/api/v2/list/goods/filter",
+                json_data={"nmList": chunk},
+            )
+            goods = data.get("data", {}).get("listGoods", [])
+            prices.extend(PriceData(item) for item in goods)
+
+        logger.info(
+            "WB price batch fallback returned %d/%d items",
+            len(prices),
+            len(unique_nm_ids),
+        )
+        return prices
+
     async def update_prices(self, price_updates: List[Dict[str, Any]]) -> dict:
         """
         ???????? ?????????? ??? ? ?????????????? ?????????? ?? ?????.
