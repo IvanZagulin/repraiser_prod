@@ -311,8 +311,8 @@ export default function ProductDetailPage() {
             )}
             {isOzon && current_price?.ozon_price_index > 0 && (
               <p className="text-xs mt-1" style={{
-                color: current_price.ozon_color_index === 'COLOR_INDEX_GREEN' ? '#16a34a'
-                  : current_price.ozon_color_index === 'COLOR_INDEX_RED' ? '#ef4444'
+                color: current_price.ozon_color_index === 'GREEN' ? '#16a34a'
+                  : current_price.ozon_color_index === 'RED' ? '#ef4444'
                   : 'var(--text-3)'
               }}>
                 Индекс: {current_price.ozon_price_index.toFixed(2)}
@@ -414,11 +414,11 @@ export default function ProductDetailPage() {
                 <div className="mt-2 flex items-center gap-2">
                   <span className="text-xs" style={{ color: 'var(--text-3)' }}>Индекс цены:</span>
                   <span className="text-xs font-bold px-1.5 py-0.5 rounded" style={{
-                    background: ozon_live.color_index === 'COLOR_INDEX_GREEN' ? '#dcfce7'
-                      : ozon_live.color_index === 'COLOR_INDEX_RED' ? '#fee2e2'
+                    background: ozon_live.color_index === 'GREEN' ? '#dcfce7'
+                      : ozon_live.color_index === 'RED' ? '#fee2e2'
                       : '#fef9c3',
-                    color: ozon_live.color_index === 'COLOR_INDEX_GREEN' ? '#16a34a'
-                      : ozon_live.color_index === 'COLOR_INDEX_RED' ? '#ef4444'
+                    color: ozon_live.color_index === 'GREEN' ? '#16a34a'
+                      : ozon_live.color_index === 'RED' ? '#ef4444'
                       : '#ca8a04',
                   }}>
                     {ozon_live.price_index.toFixed(2)}
