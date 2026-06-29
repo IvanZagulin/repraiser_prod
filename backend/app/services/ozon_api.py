@@ -30,7 +30,19 @@ def _to_decimal(value: Any, default: str = "0") -> Decimal:
 
 
 class OzonPriceData:
-    """Normalized Ozon price response used by the repricer."""
+    """Normalized Ozon price response used by the repricer.
+
+    Ozon pricing model:
+      seller_price  = what seller sets ("Ваша цена")
+      marketing_seller_price = price after seller's own promotions
+      final_price (customer) = marketing_seller_price - Ozon co-investment
+                               (NOT available in Seller API)
+
+    We use marketing_seller_price as our best approximation of the effective
+    price. The actual customer-facing price may be lower due to Ozon's
+    co-investment (bank partnerships, бустинг, etc.), which the Seller API
+    does not expose.
+    """
 
     def __init__(self, raw_data: Dict[str, Any]):
         self.raw_data = raw_data
@@ -47,15 +59,31 @@ class OzonPriceData:
         self.marketing_seller_price = _to_decimal(price.get("marketing_seller_price"))
         self.currency_code = price.get("currency_code") or "RUB"
 
+        price_indexes = raw_data.get("price_indexes") or {}
+        ozon_idx = price_indexes.get("ozon_index_data") or {}
+        ext_idx = price_indexes.get("external_index_data") or {}
+        self.price_index = _to_decimal(ozon_idx.get("price_index_value"))
+        self.ozon_min_price = _to_decimal(ozon_idx.get("min_price"))
+        self.external_min_price = _to_decimal(ext_idx.get("min_price"))
+        self.color_index = price_indexes.get("color_index") or ""
+
     @property
     def seller_price(self) -> Decimal:
         return self.price
 
     @property
     def final_price(self) -> Decimal:
-        # Ozon marketing prices are not an SPP-equivalent reverse formula.
-        # The repricer controls seller price, so use it as the target surface.
+        msp = self.marketing_seller_price
+        if msp > 0:
+            return msp
         return self.price
+
+    @property
+    def ozon_discount_pct(self) -> Decimal:
+        """Estimated seller-side discount (price → marketing_seller_price)."""
+        if self.price > 0 and self.marketing_seller_price > 0 and self.marketing_seller_price < self.price:
+            return (self.price - self.marketing_seller_price) / self.price * 100
+        return Decimal(0)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -68,6 +96,10 @@ class OzonPriceData:
             "marketing_price": float(self.marketing_price),
             "marketing_seller_price": float(self.marketing_seller_price),
             "currency_code": self.currency_code,
+            "price_index": float(self.price_index),
+            "ozon_min_price": float(self.ozon_min_price),
+            "external_min_price": float(self.external_min_price),
+            "color_index": self.color_index,
         }
 
 

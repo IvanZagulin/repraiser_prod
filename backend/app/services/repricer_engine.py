@@ -71,8 +71,8 @@ class RepricerEngine:
 
                 return {
                     "seller_price": price_data.seller_price,
-                    "discounted_price": price_data.seller_price,
-                    "discount": Decimal(0),
+                    "discounted_price": price_data.final_price,
+                    "discount": price_data.ozon_discount_pct,
                     "final_price": price_data.final_price,
                     "spp": Decimal(0),
                     "is_in_promo": False,
@@ -82,6 +82,12 @@ class RepricerEngine:
                     "ozon_offer_id": price_data.offer_id,
                     "ozon_marketing_price": price_data.marketing_price,
                     "ozon_marketing_seller_price": price_data.marketing_seller_price,
+                    "ozon_price_index": float(price_data.price_index),
+                    "ozon_min_price": float(price_data.ozon_min_price),
+                    "ozon_external_min_price": float(price_data.external_min_price),
+                    "ozon_color_index": price_data.color_index,
+                    "ozon_old_price": price_data.old_price,
+                    "ozon_min_price_api": price_data.min_price,
                 }
         except Exception as e:
             logger.error("Ошибка получения данных Ozon для product_id=%s: %s", product.nm_id, e)
@@ -1811,12 +1817,16 @@ class RepricerEngine:
                         key = (marketplace, account.id)
                         entry = pending_updates.setdefault(key, {"account": account, "updates": []})
                         if marketplace == "ozon":
-                            entry["updates"].append({
+                            ozon_update = {
                                 "_product_pk": product.id,
                                 "product_id": product.nm_id,
                                 "offer_id": product.seller_sku,
                                 "price": int(dec["new_price"]),
-                            })
+                            }
+                            cd = dec.get("current_data") or {}
+                            if cd.get("ozon_old_price"):
+                                ozon_update["old_price"] = str(int(cd["ozon_old_price"]))
+                            entry["updates"].append(ozon_update)
                         else:
                             entry["updates"].append({
                                 "_product_pk": product.id,

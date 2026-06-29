@@ -560,28 +560,6 @@ async def search_ozon_product(
     raise HTTPException(status_code=404, detail="Товар не найден в Ozon")
 
 
-@router.get("/debug-ozon-prices")
-@limiter.limit("10/minute")
-async def debug_ozon_prices(
-    request: Request,
-    account_id: int,
-    text: str,
-    db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
-):
-    """Temporary: raw Ozon price data to understand co-investment."""
-    account = db.query(Account).filter(
-        Account.id == account_id, Account.user_id == current_user.id
-    ).first()
-    if not account or account.marketplace != "ozon":
-        raise HTTPException(status_code=404, detail="Ozon account not found")
-    text = text.strip()
-    async with create_ozon_client(account.ozon_client_id, account.ozon_api_key) as client:
-        data = await client._make_request("/v5/product/info/prices", {
-            "filter": {"offer_id": [text], "visibility": "ALL"}, "limit": 1
-        })
-        return data
-
 
 
 
@@ -1150,6 +1128,30 @@ async def get_product_detail(
             "updated_at": product.config.updated_at.isoformat() if product.config.updated_at else None,
         }
 
+    ozon_live = None
+    is_ozon = product.account and product.account.marketplace == "ozon"
+    if is_ozon:
+        try:
+            async with create_ozon_client(product.account.ozon_client_id, product.account.ozon_api_key) as ozon_client:
+                prices = await ozon_client.get_prices(
+                    product_ids=[product.nm_id] if product.nm_id else None,
+                    offer_ids=[product.seller_sku] if product.seller_sku else None,
+                )
+                if prices:
+                    pd = prices[0]
+                    ozon_live = {
+                        "seller_price": float(pd.price),
+                        "marketing_seller_price": float(pd.marketing_seller_price),
+                        "old_price": float(pd.old_price),
+                        "min_price": float(pd.min_price),
+                        "price_index": float(pd.price_index),
+                        "ozon_min_price": float(pd.ozon_min_price),
+                        "external_min_price": float(pd.external_min_price),
+                        "color_index": pd.color_index,
+                    }
+        except Exception as e:
+            logger.warning("Failed to fetch live Ozon prices for product %s: %s", product.nm_id, e)
+
     return {
         "product": {
             "id": product.id,
@@ -1165,6 +1167,7 @@ async def get_product_detail(
             "updated_at": product.updated_at.isoformat(),
         },
         "config": config_data,
+        "ozon_live": ozon_live,
         "current_price": {
             "seller_price": float(latest_snap.seller_price) if latest_snap else None,
             "final_price": float(latest_snap.final_price) if latest_snap else None,

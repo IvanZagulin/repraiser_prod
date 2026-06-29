@@ -157,7 +157,7 @@ export default function ProductDetailPage() {
 
   if (!data) return null;
 
-  const { product, config, current_price, margin, stats, snapshots, changes } = data;
+  const { product, config, current_price, margin, stats, snapshots, changes, ozon_live } = data;
   const isOzon = product.account_marketplace === 'ozon';
   const imgUrl = product.image_url || (isOzon ? null : getWBImageUrl(product.nm_id));
 
@@ -293,18 +293,29 @@ export default function ProductDetailPage() {
 
           {/* Final price */}
           <div className="card">
-            <p className="text-xs mb-1" style={{ color: 'var(--text-3)' }}>Цена СПП</p>
+            <p className="text-xs mb-1" style={{ color: 'var(--text-3)' }}>
+              {isOzon ? 'Маркетинговая цена' : 'Цена СПП'}
+            </p>
             <p className="text-2xl font-bold" style={{ color: '#7c3aed' }}>
               {current_price ? `${fmt(current_price.final_price)}₽` : '—'}
             </p>
             {current_price?.discount > 0 && (
               <p className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
-                Скидка прод.: {Math.round(current_price.discount)}%
+                {isOzon ? 'Соинвест.:' : 'Скидка прод.:'} {Math.round(current_price.discount)}%
               </p>
             )}
-            {current_price?.spp > 0 && (
+            {!isOzon && current_price?.spp > 0 && (
               <p className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
                 СПП: {Math.round(current_price.spp)}%
+              </p>
+            )}
+            {isOzon && current_price?.ozon_price_index > 0 && (
+              <p className="text-xs mt-1" style={{
+                color: current_price.ozon_color_index === 'COLOR_INDEX_GREEN' ? '#16a34a'
+                  : current_price.ozon_color_index === 'COLOR_INDEX_RED' ? '#ef4444'
+                  : 'var(--text-3)'
+              }}>
+                Индекс: {current_price.ozon_price_index.toFixed(2)}
               </p>
             )}
           </div>
@@ -371,6 +382,61 @@ export default function ProductDetailPage() {
               </p>
             )}
           </div>
+
+          {/* Ozon live pricing */}
+          {isOzon && ozon_live && (
+            <div className="card col-span-3">
+              <p className="text-xs font-medium mb-2" style={{ color: 'var(--text-3)' }}>Ozon ценообразование (live)</p>
+              <div className="grid grid-cols-4 gap-3 text-sm">
+                <div>
+                  <p className="text-xs" style={{ color: 'var(--text-3)' }}>Ваша цена</p>
+                  <p className="font-semibold">{fmt(ozon_live.seller_price)}₽</p>
+                </div>
+                <div>
+                  <p className="text-xs" style={{ color: 'var(--text-3)' }}>Маркетинговая</p>
+                  <p className="font-semibold" style={{ color: ozon_live.marketing_seller_price < ozon_live.seller_price ? '#f97316' : 'var(--text)' }}>
+                    {fmt(ozon_live.marketing_seller_price)}₽
+                    {ozon_live.marketing_seller_price < ozon_live.seller_price && (
+                      <span className="text-xs ml-1">(-{Math.round((1 - ozon_live.marketing_seller_price / ozon_live.seller_price) * 100)}%)</span>
+                    )}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs" style={{ color: 'var(--text-3)' }}>Цена до скидки</p>
+                  <p className="font-semibold">{fmt(ozon_live.old_price)}₽</p>
+                </div>
+                <div>
+                  <p className="text-xs" style={{ color: 'var(--text-3)' }}>Мин. цена</p>
+                  <p className="font-semibold">{fmt(ozon_live.min_price)}₽</p>
+                </div>
+              </div>
+              {ozon_live.price_index > 0 && (
+                <div className="mt-2 flex items-center gap-2">
+                  <span className="text-xs" style={{ color: 'var(--text-3)' }}>Индекс цены:</span>
+                  <span className="text-xs font-bold px-1.5 py-0.5 rounded" style={{
+                    background: ozon_live.color_index === 'COLOR_INDEX_GREEN' ? '#dcfce7'
+                      : ozon_live.color_index === 'COLOR_INDEX_RED' ? '#fee2e2'
+                      : '#fef9c3',
+                    color: ozon_live.color_index === 'COLOR_INDEX_GREEN' ? '#16a34a'
+                      : ozon_live.color_index === 'COLOR_INDEX_RED' ? '#ef4444'
+                      : '#ca8a04',
+                  }}>
+                    {ozon_live.price_index.toFixed(2)}
+                  </span>
+                  {ozon_live.ozon_min_price > 0 && (
+                    <span className="text-xs" style={{ color: 'var(--text-3)' }}>
+                      Мин. на Ozon: {fmt(ozon_live.ozon_min_price)}₽
+                    </span>
+                  )}
+                  {ozon_live.external_min_price > 0 && (
+                    <span className="text-xs" style={{ color: 'var(--text-3)' }}>
+                      Мин. внешн.: {fmt(ozon_live.external_min_price)}₽
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Competitor price — only for competitor strategy */}
           {config?.strategy === 'competitor' && (
