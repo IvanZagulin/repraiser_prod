@@ -560,6 +560,66 @@ async def search_ozon_product(
     raise HTTPException(status_code=404, detail="Товар не найден в Ozon")
 
 
+@router.get("/debug-ozon")
+@limiter.limit("10/minute")
+async def debug_ozon_product(
+    request: Request,
+    account_id: int,
+    text: str,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Temporary debug endpoint to inspect raw Ozon API responses."""
+    account = db.query(Account).filter(
+        Account.id == account_id, Account.user_id == current_user.id
+    ).first()
+    if not account or account.marketplace != "ozon":
+        raise HTTPException(status_code=404, detail="Ozon account not found")
+
+    results = {}
+    text = text.strip()
+    async with create_ozon_client(account.ozon_client_id, account.ozon_api_key) as client:
+        # 1. /v3/product/info by offer_id
+        try:
+            data = await client._make_request("/v3/product/info", {"offer_id": text})
+            results["v3_info_by_offer"] = data
+        except Exception as e:
+            results["v3_info_by_offer_error"] = str(e)
+
+        # 2. /v3/product/info by product_id (if numeric)
+        if text.isdigit():
+            try:
+                data = await client._make_request("/v3/product/info", {"product_id": int(text)})
+                results["v3_info_by_product_id"] = data
+            except Exception as e:
+                results["v3_info_by_product_id_error"] = str(e)
+
+        # 3. /v3/product/info/list by offer_id
+        try:
+            data = await client._make_request("/v3/product/info/list", {"offer_id": [text]})
+            results["v3_info_list_by_offer"] = data
+        except Exception as e:
+            results["v3_info_list_by_offer_error"] = str(e)
+
+        # 4. /v5/product/info/prices
+        try:
+            payload = {"filter": {"offer_id": [text], "visibility": "ALL"}, "limit": 10}
+            data = await client._make_request("/v5/product/info/prices", payload)
+            results["v5_prices"] = data
+        except Exception as e:
+            results["v5_prices_error"] = str(e)
+
+        # 5. /v4/product/info/attributes
+        try:
+            payload = {"filter": {"offer_id": [text], "visibility": "ALL"}, "limit": 1}
+            data = await client._make_request("/v4/product/info/attributes", payload)
+            results["v4_attributes"] = data
+        except Exception as e:
+            results["v4_attributes_error"] = str(e)
+
+    return results
+
+
 
 @router.get("/stats")
 @limiter.limit("30/minute")
