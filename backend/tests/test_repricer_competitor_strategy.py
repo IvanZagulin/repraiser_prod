@@ -372,6 +372,55 @@ class TestStrategyRRPTarget:
         assert new_seller == Decimal("1000")
         assert "целевая финальная 1000" in reason_msg
 
+    def test_ozon_rrp_targets_seller_price_directly(self):
+        engine = _make_engine_with_settings()
+        config = SimpleNamespace(
+            rrp_price=Decimal("1400"),
+            rrp_tolerance=Decimal("1"),
+            rrp_consider_wallet=False,
+            rrp_spp_tiers=[],
+        )
+        current_data = {
+            "seller_price": Decimal("1300"),
+            "final_price": Decimal("1200"),
+            "discount": Decimal("7"),
+            "spp": Decimal("0"),
+        }
+        ozon_account = SimpleNamespace(marketplace="ozon")
+        product = SimpleNamespace(nm_id=111, seller_sku="SKU", account=ozon_account)
+
+        new_seller, reason_code, reason_msg = asyncio.run(
+            engine._strategy_rrp(product, config, current_data)
+        )
+
+        assert reason_code == "CALCULATED"
+        assert new_seller == Decimal("1400")
+        assert "целевая цена продавца 1400" in reason_msg
+
+    def test_ozon_rrp_no_change_when_price_matches(self):
+        engine = _make_engine_with_settings()
+        config = SimpleNamespace(
+            rrp_price=Decimal("1400"),
+            rrp_tolerance=Decimal("1"),
+            rrp_consider_wallet=False,
+            rrp_spp_tiers=[],
+        )
+        current_data = {
+            "seller_price": Decimal("1400"),
+            "final_price": Decimal("1300"),
+            "discount": Decimal("7"),
+            "spp": Decimal("0"),
+        }
+        ozon_account = SimpleNamespace(marketplace="ozon")
+        product = SimpleNamespace(nm_id=111, seller_sku="SKU", account=ozon_account)
+
+        new_seller, reason_code, reason_msg = asyncio.run(
+            engine._strategy_rrp(product, config, current_data)
+        )
+
+        assert reason_code == "NO_CHANGE"
+        assert new_seller is None
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # _verify_and_correct_competitor — closed-loop verify+correct
