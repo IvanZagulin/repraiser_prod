@@ -530,11 +530,27 @@ async def search_ozon_product(
 
             if prices:
                 price_data = prices[0]
+                name = price_data.name
+                image_url = None
+                # Prices endpoint often has no name — try product info
+                if not name and price_data.product_id:
+                    try:
+                        info = await ozon_client.get_product_info(product_id=price_data.product_id)
+                        if info:
+                            name = info.get("name") or ""
+                            image_url = info.get("primary_image") or ""
+                            if not image_url:
+                                imgs = info.get("images") or []
+                                if imgs:
+                                    image_url = imgs[0] if isinstance(imgs[0], str) else ""
+                    except Exception as e:
+                        logger.warning("Failed to get product info for Ozon product_id=%s: %s", price_data.product_id, e)
                 return {
                     "nm_id": price_data.product_id,
                     "seller_sku": price_data.offer_id,
-                    "name": price_data.name or f"Ozon product {price_data.product_id}",
+                    "name": name or f"Ozon product {price_data.product_id}",
                     "current_price": price_data.price,
+                    "image_url": image_url,
                 }
 
     except OzonAPIError as e:
