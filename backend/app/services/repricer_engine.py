@@ -513,7 +513,7 @@ class RepricerEngine:
         if not rrp:
             return None, "SKIPPED_INACTIVE", "РРЦ не настроен"
 
-        is_ozon = self._marketplace(product.account) == "ozon"
+        is_ozon = getattr(product, 'account', None) and self._marketplace(product.account) == "ozon"
         if is_ozon:
             current_seller = current_data.get('seller_price') or Decimal(0)
             if abs(current_seller - rrp) <= self._TARGET_EPSILON_RUB:
