@@ -51,26 +51,41 @@ class RepricerEngine:
                     product_ids=[product.nm_id] if product.nm_id else None,
                     offer_ids=[product.seller_sku] if product.seller_sku else None,
                 )
-            if not prices:
-                logger.warning("Ozon product product_id=%s offer_id=%s not found", product.nm_id, product.seller_sku)
-                return None
-            price_data = prices[0]
-            if price_data.price <= 0:
-                logger.warning("Ozon product product_id=%s has empty price", product.nm_id)
-                return None
-            return {
-                "seller_price": price_data.seller_price,
-                "discounted_price": price_data.seller_price,
-                "discount": Decimal(0),
-                "final_price": price_data.final_price,
-                "spp": Decimal(0),
-                "is_in_promo": False,
-                "total_quantity": 1,
-                "name": price_data.name,
-                "ozon_offer_id": price_data.offer_id,
-                "ozon_marketing_price": price_data.marketing_price,
-                "ozon_marketing_seller_price": price_data.marketing_seller_price,
-            }
+                if not prices:
+                    logger.warning("Ozon product product_id=%s offer_id=%s not found", product.nm_id, product.seller_sku)
+                    return None
+                price_data = prices[0]
+                if price_data.price <= 0:
+                    logger.warning("Ozon product product_id=%s has empty price", product.nm_id)
+                    return None
+
+                # Prices endpoint doesn't return product name/images — fetch via product info
+                name = price_data.name
+                image_url = None
+                if not name or name.startswith("Ozon product"):
+                    info = await client.get_product_info(product_id=product.nm_id)
+                    if info:
+                        name = info.get("name") or name
+                        image_url = info.get("primary_image") or ""
+                        if not image_url:
+                            images = info.get("images") or []
+                            if images:
+                                image_url = images[0] if isinstance(images[0], str) else ""
+
+                return {
+                    "seller_price": price_data.seller_price,
+                    "discounted_price": price_data.seller_price,
+                    "discount": Decimal(0),
+                    "final_price": price_data.final_price,
+                    "spp": Decimal(0),
+                    "is_in_promo": False,
+                    "total_quantity": 1,
+                    "name": name,
+                    "image_url": image_url,
+                    "ozon_offer_id": price_data.offer_id,
+                    "ozon_marketing_price": price_data.marketing_price,
+                    "ozon_marketing_seller_price": price_data.marketing_seller_price,
+                }
         except Exception as e:
             logger.error("Ошибка получения данных Ozon для product_id=%s: %s", product.nm_id, e)
             return None
@@ -1143,8 +1158,11 @@ class RepricerEngine:
                 self._save_price_snapshot(product, current_data)
                 # Обновляем название товара если оно ещё не подтянулось (fallback Товар {nm_id})
                 real_name = current_data.get('name', '')
-                if real_name and (not product.name or product.name.startswith('Товар ') or product.name == product.seller_sku):
+                if real_name and (not product.name or product.name.startswith('Товар ') or product.name.startswith('Ozon product ') or product.name == product.seller_sku):
                     product.name = real_name
+                ozon_image = current_data.get('image_url', '')
+                if ozon_image and not product.image_url:
+                    product.image_url = ozon_image
                 results['updated'] += 1
                 if results['updated'] % 50 == 0:
                     self.db.commit()

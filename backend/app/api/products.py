@@ -333,6 +333,13 @@ async def create_product(
                 if info:
                     seller_sku = seller_sku or info.get("offer_id") or str(product_data.nm_id)
                     name = name or info.get("name") or f"Ozon product {product_data.nm_id}"
+                    # Extract primary image from Ozon product info
+                    if not image_url:
+                        image_url = info.get("primary_image") or ""
+                        if not image_url:
+                            images = info.get("images") or []
+                            if images:
+                                image_url = images[0] if isinstance(images[0], str) else images[0].get("file_name", "")
                 else:
                     # Fallback to prices endpoint
                     prices = await ozon_client.get_prices(
