@@ -77,11 +77,18 @@ async def test_repricer_reads_ozon_price_without_wb_catalog():
     ozon_price = SimpleNamespace(
         price=999,
         seller_price=999,
-        final_price=999,
+        final_price=949,
         name="Ozon item",
         offer_id="SKU-123",
         marketing_price=949,
         marketing_seller_price=949,
+        ozon_discount_pct=5,
+        price_index=0,
+        ozon_min_price=0,
+        external_min_price=0,
+        color_index="",
+        old_price=1998,
+        min_price=800,
     )
     ozon = MagicMock()
     ozon.get_prices = AsyncMock(return_value=[ozon_price])
@@ -94,6 +101,6 @@ async def test_repricer_reads_ozon_price_without_wb_catalog():
         current = await engine._get_current_price_data(product, account)
 
     assert current["seller_price"] == 999
-    assert current["final_price"] == 999
+    assert current["final_price"] == 949
     assert current["spp"] == 0
     parse_product.assert_not_called()
