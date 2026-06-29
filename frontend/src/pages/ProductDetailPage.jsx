@@ -414,11 +414,11 @@ export default function ProductDetailPage() {
                 <div className="mt-2 flex items-center gap-2">
                   <span className="text-xs" style={{ color: 'var(--text-3)' }}>Индекс цены:</span>
                   <span className="text-xs font-bold px-1.5 py-0.5 rounded" style={{
-                    background: ozon_live.color_index === 'GREEN' ? '#dcfce7'
-                      : ozon_live.color_index === 'RED' ? '#fee2e2'
+                    background: (ozon_live.color_index || '').includes('GREEN') ? '#dcfce7'
+                      : (ozon_live.color_index || '').includes('RED') ? '#fee2e2'
                       : '#fef9c3',
-                    color: ozon_live.color_index === 'GREEN' ? '#16a34a'
-                      : ozon_live.color_index === 'RED' ? '#ef4444'
+                    color: (ozon_live.color_index || '').includes('GREEN') ? '#16a34a'
+                      : (ozon_live.color_index || '').includes('RED') ? '#ef4444'
                       : '#ca8a04',
                   }}>
                     {ozon_live.price_index.toFixed(2)}
