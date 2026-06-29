@@ -326,14 +326,23 @@ async def create_product(
     if account.marketplace == "ozon":
         try:
             async with create_ozon_client(account.ozon_client_id, account.ozon_api_key) as ozon_client:
-                prices = await ozon_client.get_prices(
-                    product_ids=[product_data.nm_id],
-                    offer_ids=[seller_sku] if seller_sku else None,
-                )
-            if prices:
-                price_data = prices[0]
-                seller_sku = seller_sku or price_data.offer_id or str(product_data.nm_id)
-                name = name or price_data.name or f"Ozon product {product_data.nm_id}"
+                # Try product info endpoint first for richer data
+                info = await ozon_client.get_product_info(product_id=product_data.nm_id)
+                if not info and seller_sku:
+                    info = await ozon_client.get_product_info(offer_id=seller_sku)
+                if info:
+                    seller_sku = seller_sku or info.get("offer_id") or str(product_data.nm_id)
+                    name = name or info.get("name") or f"Ozon product {product_data.nm_id}"
+                else:
+                    # Fallback to prices endpoint
+                    prices = await ozon_client.get_prices(
+                        product_ids=[product_data.nm_id],
+                        offer_ids=[seller_sku] if seller_sku else None,
+                    )
+                    if prices:
+                        price_data = prices[0]
+                        seller_sku = seller_sku or price_data.offer_id or str(product_data.nm_id)
+                        name = name or price_data.name or f"Ozon product {product_data.nm_id}"
         except OzonAPIError as e:
             logger.warning("Failed to get Ozon product info for product_id %s: %s", product_data.nm_id, e)
         if not seller_sku:
@@ -469,30 +478,63 @@ async def search_ozon_product(
         raise HTTPException(status_code=400, detail="Account is not an Ozon account")
 
     text = text.strip()
-    product_ids = None
-    offer_ids = None
-    if text.isdigit():
-        product_ids = [int(text)]
-    else:
-        offer_ids = [text]
 
     try:
         async with create_ozon_client(account.ozon_client_id, account.ozon_api_key) as ozon_client:
-            prices = await ozon_client.get_prices(product_ids=product_ids, offer_ids=offer_ids)
+            product_info = None
+
+            # 1) Try by offer_id first (seller's article / SKU) — most common user input
+            product_info = await ozon_client.get_product_info(offer_id=text)
+
+            # 2) If numeric and not found by offer_id, also try by product_id
+            if not product_info and text.isdigit():
+                product_info = await ozon_client.get_product_info(product_id=int(text))
+
+            if product_info:
+                ozon_product_id = product_info.get("id") or product_info.get("product_id", 0)
+                offer_id = product_info.get("offer_id") or text
+                name = product_info.get("name") or f"Ozon product {ozon_product_id}"
+
+                current_price = None
+                try:
+                    prices = await ozon_client.get_prices(product_ids=[ozon_product_id])
+                    if prices:
+                        current_price = prices[0].price
+                except Exception:
+                    pass
+
+                return {
+                    "nm_id": ozon_product_id,
+                    "seller_sku": offer_id,
+                    "name": name,
+                    "current_price": current_price,
+                }
+
+            # 3) Fallback: try prices endpoint directly
+            product_ids = [int(text)] if text.isdigit() else None
+            offer_ids = None if text.isdigit() else [text]
+            prices = await ozon_client.get_prices(
+                product_ids=product_ids, offer_ids=offer_ids,
+            )
+            if not prices:
+                # Last attempt: if numeric, also try as offer_id in prices
+                if text.isdigit():
+                    prices = await ozon_client.get_prices(offer_ids=[text])
+
+            if prices:
+                price_data = prices[0]
+                return {
+                    "nm_id": price_data.product_id,
+                    "seller_sku": price_data.offer_id,
+                    "name": price_data.name or f"Ozon product {price_data.product_id}",
+                    "current_price": price_data.price,
+                }
+
     except OzonAPIError as e:
         logger.error("Ozon API search error: %s", e)
         raise HTTPException(status_code=502, detail="Ошибка при обращении к Ozon API")
 
-    if not prices:
-        raise HTTPException(status_code=404, detail="Товар не найден в Ozon")
-
-    price_data = prices[0]
-    return {
-        "nm_id": price_data.product_id,
-        "seller_sku": price_data.offer_id,
-        "name": price_data.name or f"Ozon product {price_data.product_id}",
-        "current_price": price_data.price,
-    }
+    raise HTTPException(status_code=404, detail="Товар не найден в Ozon")
 
 
 

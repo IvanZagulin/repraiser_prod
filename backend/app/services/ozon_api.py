@@ -129,6 +129,51 @@ class OzonAPIClient:
 
         raise OzonAPIError(f"Ozon API request failed after retries: {endpoint}")
 
+    async def get_product_info(
+        self,
+        *,
+        product_id: Optional[int] = None,
+        offer_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Look up a single product via /v3/product/info (by product_id or offer_id)."""
+        payload: Dict[str, Any] = {}
+        if product_id:
+            payload["product_id"] = int(product_id)
+        if offer_id:
+            payload["offer_id"] = str(offer_id)
+        if not payload:
+            raise ValueError("product_id or offer_id is required")
+        try:
+            data = await self._make_request("/v3/product/info", payload)
+            result = data.get("result") or data
+            if result and result.get("id"):
+                return result
+        except OzonAPIError:
+            pass
+        return None
+
+    async def get_product_list(
+        self,
+        *,
+        product_ids: Optional[List[int]] = None,
+        offer_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Look up products via /v3/product/info/list."""
+        payload: Dict[str, Any] = {}
+        if product_ids:
+            payload["product_id"] = [int(v) for v in product_ids]
+        if offer_ids:
+            payload["offer_id"] = [str(v) for v in offer_ids]
+        if not payload:
+            raise ValueError("product_ids or offer_ids is required")
+        try:
+            data = await self._make_request("/v3/product/info/list", payload)
+            result = data.get("result") or data
+            items = result.get("items") or []
+            return items
+        except OzonAPIError:
+            return []
+
     async def get_prices(
         self,
         *,
