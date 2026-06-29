@@ -513,6 +513,17 @@ class RepricerEngine:
         if not rrp:
             return None, "SKIPPED_INACTIVE", "РРЦ не настроен"
 
+        is_ozon = self._marketplace(product.account) == "ozon"
+        if is_ozon:
+            current_seller = current_data.get('seller_price') or Decimal(0)
+            if abs(current_seller - rrp) <= self._TARGET_EPSILON_RUB:
+                return None, "NO_CHANGE", f"Цена продавца уже равна РРЦ ({current_seller}₽)"
+            return (
+                rrp,
+                "CALCULATED",
+                f"РРЦ стратегия: целевая цена продавца {rrp}₽, текущая {current_seller}₽",
+            )
+
         current_final = current_data['final_price']
         seller_discount = current_data.get('discount') or Decimal(0)
 
