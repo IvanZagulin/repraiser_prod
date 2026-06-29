@@ -560,6 +560,29 @@ async def search_ozon_product(
     raise HTTPException(status_code=404, detail="Товар не найден в Ozon")
 
 
+@router.get("/debug-ozon-prices")
+@limiter.limit("10/minute")
+async def debug_ozon_prices(
+    request: Request,
+    account_id: int,
+    text: str,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Temporary: raw Ozon price data to understand co-investment."""
+    account = db.query(Account).filter(
+        Account.id == account_id, Account.user_id == current_user.id
+    ).first()
+    if not account or account.marketplace != "ozon":
+        raise HTTPException(status_code=404, detail="Ozon account not found")
+    text = text.strip()
+    async with create_ozon_client(account.ozon_client_id, account.ozon_api_key) as client:
+        data = await client._make_request("/v5/product/info/prices", {
+            "filter": {"offer_id": [text], "visibility": "ALL"}, "limit": 1
+        })
+        return data
+
+
 
 
 @router.get("/stats")
