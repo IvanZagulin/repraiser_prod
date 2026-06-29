@@ -60,17 +60,14 @@ class RepricerEngine:
                     return None
 
                 # Prices endpoint doesn't return product name/images — fetch via product info
+                from app.services.ozon_api import OzonAPIClient as _OzClient
                 name = price_data.name
                 image_url = None
                 if not name or name.startswith("Ozon product"):
                     info = await client.get_product_info(product_id=product.nm_id)
                     if info:
                         name = info.get("name") or name
-                        image_url = info.get("primary_image") or ""
-                        if not image_url:
-                            images = info.get("images") or []
-                            if images:
-                                image_url = images[0] if isinstance(images[0], str) else ""
+                        image_url = _OzClient.extract_primary_image(info)
 
                 return {
                     "seller_price": price_data.seller_price,

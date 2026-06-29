@@ -144,15 +144,26 @@ export default function ProductModal({ onClose }) {
                 <CheckCircle className="w-4 h-4" />
                 Товар найден
               </div>
-              <p className="text-sm" style={{ color: 'var(--text-2)' }}>
-                <span style={{ color: 'var(--text-2)' }}>{isOzon ? 'Ozon product_id:' : 'Артикул WB:'}</span> {found.nm_id}
-              </p>
-              <p className="text-sm" style={{ color: 'var(--text-2)' }}>
-                <span style={{ color: 'var(--text-2)' }}>Артикул продавца:</span> {found.seller_sku}
-              </p>
-              <p className="text-sm" style={{ color: 'var(--text-2)' }}>
-                <span style={{ color: 'var(--text-2)' }}>Название:</span> {found.name}
-              </p>
+              <div className="flex gap-3">
+                {found.image_url && (
+                  <img
+                    src={found.image_url}
+                    alt={found.name}
+                    className="w-16 h-16 rounded-md object-cover flex-shrink-0"
+                  />
+                )}
+                <div className="space-y-1">
+                  <p className="text-sm font-medium" style={{ color: 'var(--text-1)' }}>{found.name}</p>
+                  <p className="text-xs" style={{ color: 'var(--text-3)' }}>
+                    {isOzon ? 'Product ID' : 'Артикул WB'}: {found.nm_id} · Артикул: {found.seller_sku}
+                  </p>
+                  {found.current_price != null && (
+                    <p className="text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
+                      {Number(found.current_price).toLocaleString('ru-RU')} ₽
+                    </p>
+                  )}
+                </div>
+              </div>
             </div>
           )}
 

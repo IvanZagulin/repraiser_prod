@@ -22,7 +22,7 @@ from app.api.auth import get_current_user
 from app.services.activity_logger import log_activity
 from app.api.settings import _get_setting
 from app.services.wb_api import create_wb_client, WBAPIError
-from app.services.ozon_api import create_ozon_client, OzonAPIError
+from app.services.ozon_api import create_ozon_client, OzonAPIError, OzonAPIClient
 from app.utils import get_real_ip
 
 logger = logging.getLogger(__name__)
@@ -333,13 +333,8 @@ async def create_product(
                 if info:
                     seller_sku = seller_sku or info.get("offer_id") or str(product_data.nm_id)
                     name = name or info.get("name") or f"Ozon product {product_data.nm_id}"
-                    # Extract primary image from Ozon product info
                     if not image_url:
-                        image_url = info.get("primary_image") or ""
-                        if not image_url:
-                            images = info.get("images") or []
-                            if images:
-                                image_url = images[0] if isinstance(images[0], str) else images[0].get("file_name", "")
+                        image_url = OzonAPIClient.extract_primary_image(info)
                 else:
                     # Fallback to prices endpoint
                     prices = await ozon_client.get_prices(
@@ -501,20 +496,29 @@ async def search_ozon_product(
                 ozon_product_id = product_info.get("id") or product_info.get("product_id", 0)
                 offer_id = product_info.get("offer_id") or text
                 name = product_info.get("name") or f"Ozon product {ozon_product_id}"
+                image_url = OzonAPIClient.extract_primary_image(product_info)
 
                 current_price = None
-                try:
-                    prices = await ozon_client.get_prices(product_ids=[ozon_product_id])
-                    if prices:
-                        current_price = prices[0].price
-                except Exception:
-                    pass
+                price_str = product_info.get("price")
+                if price_str:
+                    try:
+                        current_price = float(price_str)
+                    except (ValueError, TypeError):
+                        pass
+                if not current_price:
+                    try:
+                        prices = await ozon_client.get_prices(product_ids=[ozon_product_id])
+                        if prices:
+                            current_price = prices[0].price
+                    except Exception:
+                        pass
 
                 return {
                     "nm_id": ozon_product_id,
                     "seller_sku": offer_id,
                     "name": name,
                     "current_price": current_price,
+                    "image_url": image_url,
                 }
 
             # 3) Fallback: try prices endpoint directly
@@ -532,17 +536,13 @@ async def search_ozon_product(
                 price_data = prices[0]
                 name = price_data.name
                 image_url = None
-                # Prices endpoint often has no name — try product info
+                # Prices endpoint has no name — get it from product info
                 if not name and price_data.product_id:
                     try:
                         info = await ozon_client.get_product_info(product_id=price_data.product_id)
                         if info:
                             name = info.get("name") or ""
-                            image_url = info.get("primary_image") or ""
-                            if not image_url:
-                                imgs = info.get("images") or []
-                                if imgs:
-                                    image_url = imgs[0] if isinstance(imgs[0], str) else ""
+                            image_url = OzonAPIClient.extract_primary_image(info)
                     except Exception as e:
                         logger.warning("Failed to get product info for Ozon product_id=%s: %s", price_data.product_id, e)
                 return {
@@ -559,65 +559,6 @@ async def search_ozon_product(
 
     raise HTTPException(status_code=404, detail="Товар не найден в Ozon")
 
-
-@router.get("/debug-ozon")
-@limiter.limit("10/minute")
-async def debug_ozon_product(
-    request: Request,
-    account_id: int,
-    text: str,
-    db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
-):
-    """Temporary debug endpoint to inspect raw Ozon API responses."""
-    account = db.query(Account).filter(
-        Account.id == account_id, Account.user_id == current_user.id
-    ).first()
-    if not account or account.marketplace != "ozon":
-        raise HTTPException(status_code=404, detail="Ozon account not found")
-
-    results = {}
-    text = text.strip()
-    async with create_ozon_client(account.ozon_client_id, account.ozon_api_key) as client:
-        # 1. /v3/product/info by offer_id
-        try:
-            data = await client._make_request("/v3/product/info", {"offer_id": text})
-            results["v3_info_by_offer"] = data
-        except Exception as e:
-            results["v3_info_by_offer_error"] = str(e)
-
-        # 2. /v3/product/info by product_id (if numeric)
-        if text.isdigit():
-            try:
-                data = await client._make_request("/v3/product/info", {"product_id": int(text)})
-                results["v3_info_by_product_id"] = data
-            except Exception as e:
-                results["v3_info_by_product_id_error"] = str(e)
-
-        # 3. /v3/product/info/list by offer_id
-        try:
-            data = await client._make_request("/v3/product/info/list", {"offer_id": [text]})
-            results["v3_info_list_by_offer"] = data
-        except Exception as e:
-            results["v3_info_list_by_offer_error"] = str(e)
-
-        # 4. /v5/product/info/prices
-        try:
-            payload = {"filter": {"offer_id": [text], "visibility": "ALL"}, "limit": 10}
-            data = await client._make_request("/v5/product/info/prices", payload)
-            results["v5_prices"] = data
-        except Exception as e:
-            results["v5_prices_error"] = str(e)
-
-        # 5. /v4/product/info/attributes
-        try:
-            payload = {"filter": {"offer_id": [text], "visibility": "ALL"}, "limit": 1}
-            data = await client._make_request("/v4/product/info/attributes", payload)
-            results["v4_attributes"] = data
-        except Exception as e:
-            results["v4_attributes_error"] = str(e)
-
-    return results
 
 
 

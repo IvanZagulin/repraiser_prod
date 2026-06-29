@@ -135,59 +135,44 @@ class OzonAPIClient:
         product_id: Optional[int] = None,
         offer_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Look up a single product via /v3/product/info, fallback to /v3/product/info/list."""
-        payload: Dict[str, Any] = {}
+        """Look up a single product via /v3/product/info/list.
+
+        Returns a dict with at least: id, name, offer_id, primary_image, images.
+        primary_image from Ozon is a list of URLs (not a string).
+        """
+        list_payload: Dict[str, Any] = {}
         if product_id:
-            payload["product_id"] = int(product_id)
+            list_payload["product_id"] = [int(product_id)]
         if offer_id:
-            payload["offer_id"] = str(offer_id)
-        if not payload:
+            list_payload["offer_id"] = [str(offer_id)]
+        if not list_payload:
             raise ValueError("product_id or offer_id is required")
 
-        # Try /v3/product/info first
         try:
-            data = await self._make_request("/v3/product/info", payload)
-            result = data.get("result") or data
-            logger.info("Ozon /v3/product/info response keys: %s", list(result.keys()) if isinstance(result, dict) else type(result))
-            if result and result.get("id"):
-                return result
-        except OzonAPIError as e:
-            logger.warning("Ozon /v3/product/info failed for %s: %s", payload, e)
-
-        # Fallback: try /v3/product/info/list
-        try:
-            list_payload: Dict[str, Any] = {}
-            if product_id:
-                list_payload["product_id"] = [int(product_id)]
-            if offer_id:
-                list_payload["offer_id"] = [str(offer_id)]
             data = await self._make_request("/v3/product/info/list", list_payload)
             result = data.get("result") or data
             items = result.get("items") or []
-            logger.info("Ozon /v3/product/info/list returned %d items", len(items))
             if items:
-                item = items[0]
-                logger.info("Ozon product/info/list item keys: %s, name=%s", list(item.keys()), item.get("name"))
-                return item
+                return items[0]
         except OzonAPIError as e:
-            logger.warning("Ozon /v3/product/info/list failed for %s: %s", payload, e)
+            logger.warning("Ozon /v3/product/info/list failed for %s: %s", list_payload, e)
 
-        # Fallback: try /v4/product/info/attributes for name
-        try:
-            attr_payload: Dict[str, Any] = {"filter": {"visibility": "ALL"}, "limit": 1}
-            if product_id:
-                attr_payload["filter"]["product_id"] = [int(product_id)]
-            if offer_id:
-                attr_payload["filter"]["offer_id"] = [str(offer_id)]
-            data = await self._make_request("/v4/product/info/attributes", attr_payload)
-            items = data.get("result") or []
-            if items:
-                item = items[0] if isinstance(items, list) else items
-                logger.info("Ozon /v4/product/info/attributes keys: %s", list(item.keys()) if isinstance(item, dict) else type(item))
-                return item
-        except OzonAPIError as e:
-            logger.warning("Ozon /v4/product/info/attributes failed: %s", e)
+        return None
 
+    @staticmethod
+    def extract_primary_image(product_info: Dict[str, Any]) -> Optional[str]:
+        """Extract the first image URL from Ozon product info.
+
+        Ozon returns primary_image as a list of URLs, not a single string.
+        """
+        primary = product_info.get("primary_image")
+        if isinstance(primary, list) and primary:
+            return primary[0]
+        if isinstance(primary, str) and primary:
+            return primary
+        images = product_info.get("images") or []
+        if images:
+            return images[0] if isinstance(images[0], str) else None
         return None
 
     async def get_product_list(
