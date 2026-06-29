@@ -1,0 +1,222 @@
+import asyncio
+import logging
+from decimal import Decimal
+from typing import Any, Dict, List, Optional
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+
+class OzonAPIError(Exception):
+    """Base Ozon Seller API error."""
+
+
+class OzonAuthError(OzonAPIError):
+    """Ozon Seller API auth error."""
+
+
+class OzonRateLimitError(OzonAPIError):
+    """Ozon Seller API rate limit error."""
+
+
+def _to_decimal(value: Any, default: str = "0") -> Decimal:
+    if value is None or value == "":
+        return Decimal(default)
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return Decimal(default)
+
+
+class OzonPriceData:
+    """Normalized Ozon price response used by the repricer."""
+
+    def __init__(self, raw_data: Dict[str, Any]):
+        self.raw_data = raw_data
+        price = raw_data.get("price") or {}
+
+        self.product_id = int(raw_data.get("product_id") or 0)
+        self.offer_id = raw_data.get("offer_id") or ""
+        self.name = raw_data.get("name") or raw_data.get("product_name") or ""
+
+        self.price = _to_decimal(price.get("price"))
+        self.old_price = _to_decimal(price.get("old_price"))
+        self.min_price = _to_decimal(price.get("min_price"))
+        self.marketing_price = _to_decimal(price.get("marketing_price"))
+        self.marketing_seller_price = _to_decimal(price.get("marketing_seller_price"))
+        self.currency_code = price.get("currency_code") or "RUB"
+
+    @property
+    def seller_price(self) -> Decimal:
+        return self.price
+
+    @property
+    def final_price(self) -> Decimal:
+        # Ozon marketing prices are not an SPP-equivalent reverse formula.
+        # The repricer controls seller price, so use it as the target surface.
+        return self.price
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "product_id": self.product_id,
+            "offer_id": self.offer_id,
+            "name": self.name,
+            "price": float(self.price),
+            "old_price": float(self.old_price),
+            "min_price": float(self.min_price),
+            "marketing_price": float(self.marketing_price),
+            "marketing_seller_price": float(self.marketing_seller_price),
+            "currency_code": self.currency_code,
+        }
+
+
+class OzonAPIClient:
+    """Client for Ozon Seller API price operations."""
+
+    base_url = "https://api-seller.ozon.ru"
+
+    def __init__(self, client_id: str, api_key: str):
+        self.client_id = client_id
+        self.api_key = api_key
+
+    def _headers(self) -> Dict[str, str]:
+        return {
+            "Client-Id": str(self.client_id),
+            "Api-Key": str(self.api_key),
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+    async def _make_request(
+        self,
+        endpoint: str,
+        payload: Dict[str, Any],
+        *,
+        max_retries: int = 3,
+    ) -> Dict[str, Any]:
+        delay = 1.0
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._headers(),
+            timeout=30.0,
+        ) as client:
+            for attempt in range(max_retries + 1):
+                try:
+                    response = await client.post(endpoint, json=payload)
+                except httpx.TimeoutException as exc:
+                    raise OzonAPIError(f"Timeout while calling Ozon API {endpoint}") from exc
+                except httpx.RequestError as exc:
+                    raise OzonAPIError(f"Ozon API connection error: {exc}") from exc
+
+                if response.status_code == 200:
+                    return response.json()
+                if response.status_code in (401, 403):
+                    raise OzonAuthError(f"Ozon auth error {response.status_code}: {response.text}")
+                if response.status_code == 429:
+                    if attempt >= max_retries:
+                        raise OzonRateLimitError("Ozon rate limit exceeded")
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 8.0)
+                    continue
+                if response.status_code in (500, 502, 503, 504):
+                    if attempt >= max_retries:
+                        raise OzonAPIError(f"Ozon API {response.status_code}: {response.text}")
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 8.0)
+                    continue
+                raise OzonAPIError(f"Ozon API {response.status_code}: {response.text}")
+
+        raise OzonAPIError(f"Ozon API request failed after retries: {endpoint}")
+
+    async def get_prices(
+        self,
+        *,
+        product_ids: Optional[List[int]] = None,
+        offer_ids: Optional[List[str]] = None,
+        limit: int = 1000,
+    ) -> List[OzonPriceData]:
+        product_ids = [int(v) for v in (product_ids or []) if v]
+        offer_ids = [str(v) for v in (offer_ids or []) if v]
+        if not product_ids and not offer_ids:
+            raise ValueError("product_ids or offer_ids are required")
+
+        payload = {
+            "filter": {
+                "visibility": "ALL",
+            },
+            "limit": min(max(limit, 1), 1000),
+        }
+        if product_ids:
+            payload["filter"]["product_id"] = product_ids
+        if offer_ids:
+            payload["filter"]["offer_id"] = offer_ids
+
+        data = await self._make_request("/v5/product/info/prices", payload)
+        result = data.get("result") or data
+        items = result.get("items") or []
+        return [OzonPriceData(item) for item in items]
+
+    async def update_prices(self, price_updates: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not price_updates:
+            raise ValueError("price_updates must not be empty")
+
+        prices = []
+        for update in price_updates:
+            item: Dict[str, Any] = {
+                "currency_code": update.get("currency_code") or "RUB",
+                "price": str(int(Decimal(str(update["price"])))),
+            }
+            if update.get("product_id"):
+                item["product_id"] = int(update["product_id"])
+            elif update.get("offer_id"):
+                item["offer_id"] = str(update["offer_id"])
+            if update.get("old_price") is not None:
+                item["old_price"] = str(update["old_price"])
+            if update.get("min_price") is not None:
+                item["min_price"] = str(update["min_price"])
+            prices.append(item)
+
+        data = await self._make_request("/v1/product/import/prices", {"prices": prices})
+        return data
+
+    @staticmethod
+    def parse_update_statuses(response: Dict[str, Any], updates: List[Dict[str, Any]]) -> Dict[str, tuple[bool, str]]:
+        result = response.get("result") or response
+        items = result if isinstance(result, list) else result.get("items") or result.get("prices") or []
+        statuses: Dict[str, tuple[bool, str]] = {}
+
+        if isinstance(items, list):
+            for item in items:
+                product_id = item.get("product_id")
+                offer_id = item.get("offer_id")
+                key = str(product_id or offer_id or "")
+                errors = item.get("errors") or []
+                updated = item.get("updated")
+                if errors:
+                    messages = []
+                    for error in errors:
+                        if isinstance(error, dict):
+                            messages.append(str(error.get("message") or error.get("code") or error))
+                        else:
+                            messages.append(str(error))
+                    statuses[key] = (False, "; ".join(messages))
+                elif updated is False:
+                    statuses[key] = (False, item.get("error") or "Ozon rejected price update")
+                elif key:
+                    statuses[key] = (True, "")
+
+        for update in updates:
+            key = str(update.get("product_id") or update.get("offer_id") or "")
+            statuses.setdefault(key, (True, ""))
+        return statuses
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        return None
+
+
+def create_ozon_client(client_id: str, api_key: str) -> OzonAPIClient:
+    return OzonAPIClient(client_id, api_key)

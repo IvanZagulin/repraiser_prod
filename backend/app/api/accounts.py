@@ -31,11 +31,12 @@ def _build_response(account: Account) -> AccountResponse:
     return AccountResponse(**{
         'id': account.id,
         'name': account.name,
+        'marketplace': account.marketplace,
         'is_active': account.is_active,
         'token_expires_at': account.token_expires_at,
         'created_at': account.created_at,
         'updated_at': account.updated_at,
-        'token_ttl_days': get_token_ttl_days(account.wb_api_token),
+        'token_ttl_days': get_token_ttl_days(account.wb_api_token) if account.marketplace == "wb" and account.wb_api_token else None,
     })
 
 
@@ -71,11 +72,18 @@ async def create_account(
     from app.api.plan_guard import check_account_limit
     check_account_limit(db, current_user)
 
-    token_expires_at = get_token_expiration(account_data.wb_api_token)
+    token_expires_at = (
+        get_token_expiration(account_data.wb_api_token)
+        if account_data.marketplace == "wb" and account_data.wb_api_token
+        else None
+    )
     account = Account(
         user_id=current_user.id,
         name=account_data.name,
+        marketplace=account_data.marketplace,
         wb_api_token=account_data.wb_api_token,
+        ozon_client_id=account_data.ozon_client_id,
+        ozon_api_key=account_data.ozon_api_key,
         token_expires_at=token_expires_at,
     )
     db.add(account)
@@ -89,11 +97,12 @@ async def create_account(
         logger.warning(f"Failed to log activity 'account_created': {e}")
 
     # Фоновая синхронизация каталога WB (все карточки аккаунта)
-    try:
-        from app.tasks.catalog_sync import sync_wb_catalog_task
-        sync_wb_catalog_task.delay(account.id)
-    except Exception as e:
-        logger.warning(f"Failed to start catalog sync for account {account.id}: {e}")
+    if account.marketplace == "wb":
+        try:
+            from app.tasks.catalog_sync import sync_wb_catalog_task
+            sync_wb_catalog_task.delay(account.id)
+        except Exception as e:
+            logger.warning(f"Failed to start catalog sync for account {account.id}: {e}")
 
     return _build_response(account)
 
@@ -126,17 +135,27 @@ async def update_account(
         raise HTTPException(status_code=404, detail="Account not found")
 
     update_data = account_data.model_dump(exclude_unset=True)
+    old_marketplace = account.marketplace
     token_changed = "wb_api_token" in update_data
     for field, value in update_data.items():
         setattr(account, field, value)
-    if token_changed:
-        account.token_expires_at = get_token_expiration(account.wb_api_token)
+    if account.marketplace == "wb":
+        if not account.wb_api_token:
+            raise HTTPException(status_code=400, detail="wb_api_token is required for WB accounts")
+        if token_changed or old_marketplace != account.marketplace:
+            account.token_expires_at = get_token_expiration(account.wb_api_token)
+    elif account.marketplace == "ozon":
+        if not account.ozon_client_id or not account.ozon_api_key:
+            raise HTTPException(status_code=400, detail="ozon_client_id and ozon_api_key are required for Ozon accounts")
+        account.token_expires_at = None
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported marketplace")
 
     db.commit()
     db.refresh(account)
 
     # При смене токена — перекачиваем каталог с новым ключом
-    if token_changed:
+    if account.marketplace == "wb" and (token_changed or old_marketplace != account.marketplace):
         try:
             from app.tasks.catalog_sync import sync_wb_catalog_task
             sync_wb_catalog_task.delay(account.id)
@@ -158,6 +177,8 @@ async def sync_catalog(
     ).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+    if account.marketplace != "wb":
+        raise HTTPException(status_code=400, detail="Catalog sync is available for WB accounts only")
 
     try:
         from app.tasks.catalog_sync import sync_wb_catalog_task
@@ -182,6 +203,8 @@ async def sync_products(
     ).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+    if account.marketplace != "wb":
+        raise HTTPException(status_code=400, detail="Product sync is available for WB accounts only")
 
     try:
         from app.tasks.products_sync import sync_products_from_catalog_task

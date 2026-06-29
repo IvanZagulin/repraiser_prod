@@ -88,6 +88,9 @@ export const getProductBrands = () =>
 export const searchWBProduct = (accountId, text) =>
   api.get('/api/products/search-wb', { params: { account_id: accountId, text } });
 
+export const searchOzonProduct = (accountId, text) =>
+  api.get('/api/products/search-ozon', { params: { account_id: accountId, text } });
+
 export const createProduct = (data) =>
   api.post('/api/products', data);
 

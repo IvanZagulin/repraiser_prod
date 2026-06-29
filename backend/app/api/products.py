@@ -22,6 +22,7 @@ from app.api.auth import get_current_user
 from app.services.activity_logger import log_activity
 from app.api.settings import _get_setting
 from app.services.wb_api import create_wb_client, WBAPIError
+from app.services.ozon_api import create_ozon_client, OzonAPIError
 from app.utils import get_real_ip
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,10 @@ def _user_product(db: Session, product_id: int, user: User) -> Product:
         db.query(Product)
         .join(Account, Product.account_id == Account.id)
         .filter(Product.id == product_id, Account.user_id == user.id)
-        .options(joinedload(Product.config).selectinload(ProductConfig.competitors))
+        .options(
+            joinedload(Product.account),
+            joinedload(Product.config).selectinload(ProductConfig.competitors),
+        )
         .first()
     )
     if not product:
@@ -203,9 +207,12 @@ async def list_products(
         )
         last_snapshots = {s.product_id: s for s in snap_rows}
 
-    # Batch-load account names
+    # Batch-load account info
     _acc_ids = {p.account_id for p in products}
-    _accounts_map = {a.id: a.name for a in db.query(Account).filter(Account.id.in_(_acc_ids)).all()} if _acc_ids else {}
+    _accounts_map = {
+        a.id: {"name": a.name, "marketplace": a.marketplace}
+        for a in db.query(Account).filter(Account.id.in_(_acc_ids)).all()
+    } if _acc_ids else {}
 
     response_products = []
     for product in products:
@@ -225,7 +232,8 @@ async def list_products(
             'cost_price': product.cost_price,
             'brand': product.brand,
             'margin': None,
-            'account_name': _accounts_map.get(product.account_id, ""),
+            'account_name': _accounts_map.get(product.account_id, {}).get("name", ""),
+            'account_marketplace': _accounts_map.get(product.account_id, {}).get("marketplace", "wb"),
             'total_quantity': None,
         }
 
@@ -315,7 +323,24 @@ async def create_product(
     name = product_data.name
     image_url = None
 
-    if not seller_sku or not name:
+    if account.marketplace == "ozon":
+        try:
+            async with create_ozon_client(account.ozon_client_id, account.ozon_api_key) as ozon_client:
+                prices = await ozon_client.get_prices(
+                    product_ids=[product_data.nm_id],
+                    offer_ids=[seller_sku] if seller_sku else None,
+                )
+            if prices:
+                price_data = prices[0]
+                seller_sku = seller_sku or price_data.offer_id or str(product_data.nm_id)
+                name = name or price_data.name or f"Ozon product {product_data.nm_id}"
+        except OzonAPIError as e:
+            logger.warning("Failed to get Ozon product info for product_id %s: %s", product_data.nm_id, e)
+        if not seller_sku:
+            seller_sku = str(product_data.nm_id)
+        if not name:
+            name = f"Ozon product {product_data.nm_id}"
+    elif not seller_sku or not name:
         try:
             wb_client = create_wb_client(account.wb_api_token)
             card_info = await wb_client.get_card_info(product_data.nm_id)
@@ -344,7 +369,7 @@ async def create_product(
     db.commit()
     db.refresh(product)
 
-    if not image_url:
+    if account.marketplace == "wb" and not image_url:
         try:
             wb_client = create_wb_client(account.wb_api_token)
             fetched_url = await wb_client.get_card_photo(product_data.nm_id)
@@ -423,6 +448,50 @@ async def search_wb_product(
         "nm_id": price_data.nm_id,
         "seller_sku": price_data.vendor_code,
         "name": name,
+    }
+
+
+@router.get("/search-ozon")
+@limiter.limit("30/minute")
+async def search_ozon_product(
+    request: Request,
+    account_id: int,
+    text: str,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    account = db.query(Account).filter(
+        Account.id == account_id, Account.user_id == current_user.id
+    ).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if account.marketplace != "ozon":
+        raise HTTPException(status_code=400, detail="Account is not an Ozon account")
+
+    text = text.strip()
+    product_ids = None
+    offer_ids = None
+    if text.isdigit():
+        product_ids = [int(text)]
+    else:
+        offer_ids = [text]
+
+    try:
+        async with create_ozon_client(account.ozon_client_id, account.ozon_api_key) as ozon_client:
+            prices = await ozon_client.get_prices(product_ids=product_ids, offer_ids=offer_ids)
+    except OzonAPIError as e:
+        logger.error("Ozon API search error: %s", e)
+        raise HTTPException(status_code=502, detail="Ошибка при обращении к Ozon API")
+
+    if not prices:
+        raise HTTPException(status_code=404, detail="Товар не найден в Ozon")
+
+    price_data = prices[0]
+    return {
+        "nm_id": price_data.product_id,
+        "seller_sku": price_data.offer_id,
+        "name": price_data.name or f"Ozon product {price_data.product_id}",
+        "current_price": price_data.price,
     }
 
 
@@ -658,6 +727,8 @@ async def create_product_config(
 
     if product.config:
         raise HTTPException(status_code=400, detail=f"Config already exists for product {product_id}")
+    if product.account and product.account.marketplace == "ozon" and config_data.strategy == "competitor":
+        raise HTTPException(status_code=400, detail="Ozon competitor strategy is not supported yet")
 
     config = ProductConfig(product_id=product_id, **config_data.model_dump(exclude={"competitors"}))
     db.add(config)
@@ -689,6 +760,8 @@ async def update_product_config(
 
     if not product.config:
         raise HTTPException(status_code=404, detail=f"Config not found for product {product_id}")
+    if product.account and product.account.marketplace == "ozon" and config_data.strategy == "competitor":
+        raise HTTPException(status_code=400, detail="Ozon competitor strategy is not supported yet")
 
     update_data = config_data.model_dump(exclude_unset=True, exclude={"competitors"})
     for field, value in update_data.items():
@@ -998,6 +1071,7 @@ async def get_product_detail(
             "image_url": product.image_url,
             "cost_price": float(product.cost_price) if product.cost_price else None,
             "account_id": product.account_id,
+            "account_marketplace": product.account.marketplace if product.account else "wb",
             "created_at": product.created_at.isoformat(),
             "updated_at": product.updated_at.isoformat(),
         },

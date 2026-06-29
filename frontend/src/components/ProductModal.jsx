@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { X, Search, Loader2, CheckCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { createProduct, getAccounts, searchWBProduct } from '../api/client';
+import { createProduct, getAccounts, searchOzonProduct, searchWBProduct } from '../api/client';
 
 export default function ProductModal({ onClose }) {
   const [accounts, setAccounts] = useState([]);
@@ -10,6 +10,8 @@ export default function ProductModal({ onClose }) {
   const [searching, setSearching] = useState(false);
   const [found, setFound] = useState(null);
   const [loading, setLoading] = useState(false);
+  const selectedAccount = accounts.find((acc) => String(acc.id) === String(accountId));
+  const isOzon = selectedAccount?.marketplace === 'ozon';
 
   // Close on Escape
   const handleEsc = useCallback((e) => { if (e.key === 'Escape') onClose(); }, [onClose]);
@@ -35,11 +37,13 @@ export default function ProductModal({ onClose }) {
 
   const handleSearch = async () => {
     if (!accountId) { toast.error('Выберите аккаунт'); return; }
-    if (!searchText.trim()) { toast.error('Введите артикул WB или артикул продавца'); return; }
+    if (!searchText.trim()) { toast.error(isOzon ? 'Введите product_id или offer_id Ozon' : 'Введите артикул WB или артикул продавца'); return; }
     setSearching(true);
     setFound(null);
     try {
-      const res = await searchWBProduct(accountId, searchText.trim());
+      const res = isOzon
+        ? await searchOzonProduct(accountId, searchText.trim())
+        : await searchWBProduct(accountId, searchText.trim());
       setFound(res.data);
       toast.success('Товар найден');
     } catch (error) {
@@ -96,14 +100,16 @@ export default function ProductModal({ onClose }) {
             >
               <option value="">Выберите аккаунт</option>
               {accounts.map((acc) => (
-                <option key={acc.id} value={acc.id}>{acc.name}</option>
+                <option key={acc.id} value={acc.id}>
+                  {acc.name} · {acc.marketplace === 'ozon' ? 'Ozon' : 'WB'}
+                </option>
               ))}
             </select>
           </div>
 
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-2)' }}>
-              Артикул WB или артикул продавца
+              {isOzon ? 'Ozon product_id или offer_id' : 'Артикул WB или артикул продавца'}
             </label>
             <div className="flex gap-2">
               <input
@@ -112,7 +118,7 @@ export default function ProductModal({ onClose }) {
                 onChange={(e) => { setSearchText(e.target.value); setFound(null); }}
                 onKeyDown={handleKeyDown}
                 className="input flex-1"
-                placeholder="12345678 или МОЙ-АРТИКУЛ"
+                placeholder={isOzon ? '123456789 или OFFER-123' : '12345678 или МОЙ-АРТИКУЛ'}
               />
               <button
                 type="button"
@@ -125,7 +131,7 @@ export default function ProductModal({ onClose }) {
               </button>
             </div>
             <p className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
-              Артикул WB (цифровой) или артикул продавца
+              {isOzon ? 'Ozon product_id (цифровой) или offer_id продавца' : 'Артикул WB (цифровой) или артикул продавца'}
             </p>
           </div>
 
@@ -139,7 +145,7 @@ export default function ProductModal({ onClose }) {
                 Товар найден
               </div>
               <p className="text-sm" style={{ color: 'var(--text-2)' }}>
-                <span style={{ color: 'var(--text-2)' }}>Артикул WB:</span> {found.nm_id}
+                <span style={{ color: 'var(--text-2)' }}>{isOzon ? 'Ozon product_id:' : 'Артикул WB:'}</span> {found.nm_id}
               </p>
               <p className="text-sm" style={{ color: 'var(--text-2)' }}>
                 <span style={{ color: 'var(--text-2)' }}>Артикул продавца:</span> {found.seller_sku}

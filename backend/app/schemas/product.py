@@ -86,7 +86,7 @@ class ProductBase(BaseModel):
 
 class ProductCreate(ProductBase):
     """Схема создания товара"""
-    nm_id: int = Field(..., gt=0, description="nmID WB")
+    nm_id: int = Field(..., gt=0, description="WB nmID or Ozon product_id")
     account_id: int = Field(..., gt=0, description="ID аккаунта")
 
 
@@ -113,6 +113,7 @@ class ProductWithPriceResponse(ProductResponse):
     cost_price: Optional[Decimal] = None
     margin: Optional[float] = None
     account_name: Optional[str] = None
+    account_marketplace: Optional[str] = None
     total_quantity: Optional[int] = None
 
 

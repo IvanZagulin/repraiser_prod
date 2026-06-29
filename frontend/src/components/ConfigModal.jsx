@@ -26,7 +26,8 @@ function initTiers(config) {
 }
 
 export default function ConfigModal({ product, onClose }) {
-  const [strategy, setStrategy] = useState(product.config?.strategy || 'rrp');
+  const isOzon = product.account_marketplace === 'ozon';
+  const [strategy, setStrategy] = useState(isOzon ? 'rrp' : (product.config?.strategy || 'rrp'));
   const [formData, setFormData] = useState({
     is_active: product.config?.is_active ?? true,
     min_price: product.config?.min_price || '',
@@ -70,7 +71,7 @@ export default function ConfigModal({ product, onClose }) {
     if (formData.min_price && formData.max_price && maxP <= minP) errs.max_price = 'Макс. цена должна быть больше мин. цены';
     if (strategy === 'rrp') {
       if (!formData.rrp_price || parseFloat(formData.rrp_price) <= 0)
-        errs.rrp_price = 'Укажите базовый РРЦ (запасная цена если нет подходящей ступени СПП)';
+        errs.rrp_price = isOzon ? 'Укажите целевую цену' : 'Укажите базовый РРЦ (запасная цена если нет подходящей ступени СПП)';
       if (formData.rrp_tolerance && parseFloat(formData.rrp_tolerance) < 0)
         errs.rrp_tolerance = 'Допуск не может быть отрицательным';
     } else {
@@ -100,7 +101,7 @@ export default function ConfigModal({ product, onClose }) {
       if (strategy === 'rrp') {
         payload.rrp_price = parseFloat(formData.rrp_price);
         payload.rrp_tolerance = parseFloat(formData.rrp_tolerance);
-        payload.rrp_consider_wallet = formData.rrp_consider_wallet;
+        payload.rrp_consider_wallet = isOzon ? false : formData.rrp_consider_wallet;
       } else {
         payload.competitors = competitors
           .filter(c => c.nm_id && parseInt(c.nm_id) > 0)
@@ -118,7 +119,7 @@ export default function ConfigModal({ product, onClose }) {
       }
 
       // Save SPP tiers (only for RRP strategy)
-      if (strategy === 'rrp') {
+      if (strategy === 'rrp' && !isOzon) {
         const tierPayload = tiers
           .filter(t => t.spp_min !== '')
           .map(t => ({
@@ -168,8 +169,8 @@ export default function ConfigModal({ product, onClose }) {
             <div className="grid grid-cols-2 gap-3">
               {[
                 { id: 'rrp', label: 'РРЦ', desc: 'Диапазон вокруг рекомендованной розничной цены' },
-                { id: 'competitor', label: 'Конкурент', desc: 'Привязка к цене конкурента по артикулу WB' },
-              ].map((s) => (
+                !isOzon && { id: 'competitor', label: 'Конкурент', desc: 'Привязка к цене конкурента по артикулу WB' },
+              ].filter(Boolean).map((s) => (
                 <button key={s.id} type="button" onClick={() => setStrategy(s.id)}
                   className={`p-3.5 rounded-lg text-left transition-all ${strategy === s.id ? 'border border-primary/40 bg-primary/5' : 'border border-border bg-muted/30'}`}>
                   <div className="font-medium text-sm text-foreground">{s.label}</div>
@@ -207,9 +208,9 @@ export default function ConfigModal({ product, onClose }) {
               <div className="p-4 rounded-lg space-y-4 bg-muted/30 border border-border">
                 <p className="text-sm font-medium text-foreground">
                   Базовый РРЦ
-                  <span className="text-xs font-normal ml-1" style={{ color: 'var(--text-3)' }}>
+                  {!isOzon && <span className="text-xs font-normal ml-1" style={{ color: 'var(--text-3)' }}>
                     — используется если нет подходящей ступени СПП
-                  </span>
+                  </span>}
                 </p>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
@@ -228,7 +229,7 @@ export default function ConfigModal({ product, onClose }) {
                     <p className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>Диапазон: {formData.rrp_price && formData.rrp_tolerance ? `${parseFloat(formData.rrp_price) - parseFloat(formData.rrp_tolerance)}₽ — ${parseFloat(formData.rrp_price) + parseFloat(formData.rrp_tolerance)}₽` : '—'}</p>
                   </div>
                 </div>
-                <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                {!isOzon && <label className="flex items-start gap-2.5 cursor-pointer select-none">
                   <input type="checkbox" checked={formData.rrp_consider_wallet}
                     onChange={(e) => setFormData({ ...formData, rrp_consider_wallet: e.target.checked })}
                     className="w-4 h-4 mt-0.5 accent-violet-500 flex-shrink-0" />
@@ -236,8 +237,8 @@ export default function ConfigModal({ product, onClose }) {
                     <span className="text-sm font-medium text-foreground">Учитывать скидку кошелька WB ({walletPct}%)</span>
                     <p className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>РРЦ будет ценой после СПП <strong>и</strong> кошелька</p>
                   </div>
-                </label>
-                {formData.rrp_price && (
+                </label>}
+                {!isOzon && formData.rrp_price && (
                   <div className="text-xs p-3 rounded bg-primary/5 border border-primary/20 text-muted-foreground">
                     {formData.rrp_consider_wallet ? (
                       <>Целевая цена до кошелька:{' '}
@@ -253,7 +254,7 @@ export default function ConfigModal({ product, onClose }) {
               </div>
 
               {/* SPP Tiers inline editor */}
-              <div className="rounded-lg border border-amber-200 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/20 overflow-hidden">
+              {!isOzon && <div className="rounded-lg border border-amber-200 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/20 overflow-hidden">
                 <div className="flex items-center justify-between px-4 py-3 border-b border-amber-200 dark:border-amber-800">
                   <div className="flex items-center gap-2">
                     <TrendingUp className="w-4 h-4 text-amber-500" />
@@ -305,7 +306,7 @@ export default function ConfigModal({ product, onClose }) {
                     </p>
                   </div>
                 )}
-              </div>
+              </div>}
             </>
           )}
 

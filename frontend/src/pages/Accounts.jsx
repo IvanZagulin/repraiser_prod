@@ -113,6 +113,7 @@ export default function Accounts() {
                     {account.is_active
                       ? <span className="badge badge-success">Активен</span>
                       : <span className="badge">Отключен</span>}
+                    <span className="badge">{account.marketplace === 'ozon' ? 'Ozon' : 'WB'}</span>
                   </div>
 
                   <div className="mt-4 flex items-center gap-6 pl-12">
@@ -142,23 +143,27 @@ export default function Accounts() {
                 </div>
 
                 <div className="flex items-center gap-2 ml-4">
-                  <button
-                    onClick={() => handleSyncProducts(account.id, account.name)}
-                    disabled={syncingProductsId === account.id}
-                    className="btn btn-sm btn-secondary"
-                    title="Синхронизировать товары из каталога"
-                  >
-                    <RefreshCw className={`w-4 h-4 ${syncingProductsId === account.id ? 'animate-spin' : ''}`} />
-                    <span className="hidden sm:inline text-xs">Товары</span>
-                  </button>
-                  <button
-                    onClick={() => handleSyncCatalog(account.id, account.name)}
-                    disabled={syncingId === account.id}
-                    className="btn btn-sm btn-secondary"
-                    title="Синхронизировать каталог (обновить фото товаров)"
-                  >
-                    <RefreshCw className={`w-4 h-4 ${syncingId === account.id ? 'animate-spin' : ''}`} />
-                  </button>
+                  {account.marketplace !== 'ozon' && (
+                    <>
+                      <button
+                        onClick={() => handleSyncProducts(account.id, account.name)}
+                        disabled={syncingProductsId === account.id}
+                        className="btn btn-sm btn-secondary"
+                        title="Синхронизировать товары из каталога"
+                      >
+                        <RefreshCw className={`w-4 h-4 ${syncingProductsId === account.id ? 'animate-spin' : ''}`} />
+                        <span className="hidden sm:inline text-xs">Товары</span>
+                      </button>
+                      <button
+                        onClick={() => handleSyncCatalog(account.id, account.name)}
+                        disabled={syncingId === account.id}
+                        className="btn btn-sm btn-secondary"
+                        title="Синхронизировать каталог (обновить фото товаров)"
+                      >
+                        <RefreshCw className={`w-4 h-4 ${syncingId === account.id ? 'animate-spin' : ''}`} />
+                      </button>
+                    </>
+                  )}
                   <button
                     onClick={() => setEditAccount(account)}
                     className="btn btn-sm btn-secondary"
@@ -193,7 +198,10 @@ export default function Accounts() {
 function EditAccountModal({ account, onClose }) {
   const [formData, setFormData] = useState({
     name: account.name,
+    marketplace: account.marketplace || 'wb',
     wb_api_token: '',
+    ozon_client_id: '',
+    ozon_api_key: '',
     is_active: account.is_active,
   });
   const [loading, setLoading] = useState(false);
@@ -202,9 +210,13 @@ function EditAccountModal({ account, onClose }) {
     e.preventDefault();
     setLoading(true);
     try {
-      const payload = { name: formData.name, is_active: formData.is_active };
-      if (formData.wb_api_token.trim()) {
+      const payload = { name: formData.name, marketplace: formData.marketplace, is_active: formData.is_active };
+      if (formData.marketplace === 'wb' && formData.wb_api_token.trim()) {
         payload.wb_api_token = formData.wb_api_token.trim();
+      }
+      if (formData.marketplace === 'ozon') {
+        if (formData.ozon_client_id.trim()) payload.ozon_client_id = formData.ozon_client_id.trim();
+        if (formData.ozon_api_key.trim()) payload.ozon_api_key = formData.ozon_api_key.trim();
       }
       await updateAccount(account.id, payload);
       toast.success(
@@ -247,19 +259,61 @@ function EditAccountModal({ account, onClose }) {
 
           <div>
             <label className="block text-sm font-medium mb-1.5 text-muted-foreground">
-              Новый WB API Токен (JWT)
+              Маркетплейс
             </label>
-            <textarea
-              value={formData.wb_api_token}
-              onChange={(e) => setFormData({ ...formData, wb_api_token: e.target.value })}
-              className="input font-mono text-xs"
-              rows="4"
-              placeholder="Оставьте пустым, чтобы не менять токен"
-            />
-            <p className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
-              Токен из личного кабинета WB → Настройки → Доступ к API. Если не заполнять — токен останется прежним.
-            </p>
+            <select
+              value={formData.marketplace}
+              onChange={(e) => setFormData({ ...formData, marketplace: e.target.value })}
+              className="input"
+            >
+              <option value="wb">Wildberries</option>
+              <option value="ozon">Ozon</option>
+            </select>
           </div>
+
+          {formData.marketplace === 'wb' ? (
+            <div>
+              <label className="block text-sm font-medium mb-1.5 text-muted-foreground">
+                Новый WB API Токен (JWT)
+              </label>
+              <textarea
+                value={formData.wb_api_token}
+                onChange={(e) => setFormData({ ...formData, wb_api_token: e.target.value })}
+                className="input font-mono text-xs"
+                rows="4"
+                placeholder="Оставьте пустым, чтобы не менять токен"
+              />
+              <p className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
+                Токен из личного кабинета WB → Настройки → Доступ к API. Если не заполнять — токен останется прежним.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div>
+                <label className="block text-sm font-medium mb-1.5 text-muted-foreground">
+                  Новый Ozon Client-Id
+                </label>
+                <input
+                  value={formData.ozon_client_id}
+                  onChange={(e) => setFormData({ ...formData, ozon_client_id: e.target.value })}
+                  className="input font-mono text-xs"
+                  placeholder="Оставьте пустым, чтобы не менять"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1.5 text-muted-foreground">
+                  Новый Ozon Api-Key
+                </label>
+                <textarea
+                  value={formData.ozon_api_key}
+                  onChange={(e) => setFormData({ ...formData, ozon_api_key: e.target.value })}
+                  className="input font-mono text-xs"
+                  rows="3"
+                  placeholder="Оставьте пустым, чтобы не менять"
+                />
+              </div>
+            </>
+          )}
 
           <div className="flex items-center gap-3">
             <input
@@ -289,14 +343,27 @@ function EditAccountModal({ account, onClose }) {
 }
 
 function AccountModal({ onClose }) {
-  const [formData, setFormData] = useState({ name: '', wb_api_token: '' });
+  const [formData, setFormData] = useState({
+    name: '',
+    marketplace: 'wb',
+    wb_api_token: '',
+    ozon_client_id: '',
+    ozon_api_key: '',
+  });
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     try {
-      await createAccount(formData);
+      const payload = { name: formData.name, marketplace: formData.marketplace };
+      if (formData.marketplace === 'wb') {
+        payload.wb_api_token = formData.wb_api_token.trim();
+      } else {
+        payload.ozon_client_id = formData.ozon_client_id.trim();
+        payload.ozon_api_key = formData.ozon_api_key.trim();
+      }
+      await createAccount(payload);
       toast.success('Аккаунт создан');
       onClose();
     } catch (error) {
@@ -333,20 +400,63 @@ function AccountModal({ onClose }) {
 
           <div>
             <label className="block text-sm font-medium mb-1.5 text-muted-foreground">
-              WB API Токен (JWT)
+              Маркетплейс
             </label>
-            <textarea
-              value={formData.wb_api_token}
-              onChange={(e) => setFormData({ ...formData, wb_api_token: e.target.value })}
-              className="input font-mono text-xs"
-              rows="4"
-              placeholder="eyJ..."
+            <select
+              value={formData.marketplace}
+              onChange={(e) => setFormData({ ...formData, marketplace: e.target.value })}
+              className="input"
               required
-            />
-            <p className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
-              Токен из личного кабинета WB → Настройки → Доступ к API
-            </p>
+            >
+              <option value="wb">Wildberries</option>
+              <option value="ozon">Ozon</option>
+            </select>
           </div>
+
+          {formData.marketplace === 'wb' ? (
+            <div>
+              <label className="block text-sm font-medium mb-1.5 text-muted-foreground">
+                WB API Токен (JWT)
+              </label>
+              <textarea
+                value={formData.wb_api_token}
+                onChange={(e) => setFormData({ ...formData, wb_api_token: e.target.value })}
+                className="input font-mono text-xs"
+                rows="4"
+                placeholder="eyJ..."
+                required
+              />
+              <p className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
+                Токен из личного кабинета WB → Настройки → Доступ к API
+              </p>
+            </div>
+          ) : (
+            <>
+              <div>
+                <label className="block text-sm font-medium mb-1.5 text-muted-foreground">
+                  Ozon Client-Id
+                </label>
+                <input
+                  value={formData.ozon_client_id}
+                  onChange={(e) => setFormData({ ...formData, ozon_client_id: e.target.value })}
+                  className="input font-mono text-xs"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1.5 text-muted-foreground">
+                  Ozon Api-Key
+                </label>
+                <textarea
+                  value={formData.ozon_api_key}
+                  onChange={(e) => setFormData({ ...formData, ozon_api_key: e.target.value })}
+                  className="input font-mono text-xs"
+                  rows="3"
+                  required
+                />
+              </div>
+            </>
+          )}
 
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={onClose} className="btn btn-secondary">

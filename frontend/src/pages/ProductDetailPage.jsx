@@ -133,7 +133,7 @@ export default function ProductDetailPage() {
 
   const copyNmId = () => {
     navigator.clipboard.writeText(String(data.product.nm_id));
-    toast.success('Артикул WB скопирован');
+    toast.success(data.product.account_marketplace === 'ozon' ? 'Ozon product_id скопирован' : 'Артикул WB скопирован');
   };
 
   const handleDelete = async () => {
@@ -158,7 +158,8 @@ export default function ProductDetailPage() {
   if (!data) return null;
 
   const { product, config, current_price, margin, stats, snapshots, changes } = data;
-  const imgUrl = product.image_url || getWBImageUrl(product.nm_id);
+  const isOzon = product.account_marketplace === 'ozon';
+  const imgUrl = product.image_url || (isOzon ? null : getWBImageUrl(product.nm_id));
 
   // Chart data
   const chartData = snapshots.map((s) => ({
@@ -189,6 +190,7 @@ export default function ProductDetailPage() {
     nm_id: product.nm_id,
     seller_sku: product.seller_sku,
     name: product.name,
+    account_marketplace: product.account_marketplace,
     config: config,
   };
 
@@ -216,17 +218,19 @@ export default function ProductDetailPage() {
               className="flex items-center gap-1 text-sm hover:text-primary transition-colors"
               style={{ color: 'var(--text-3)' }}
             >
-              Арт. WB: <strong style={{ color: 'var(--text-2)' }}>{product.nm_id}</strong>
+              {isOzon ? 'Ozon product_id' : 'Арт. WB'}: <strong style={{ color: 'var(--text-2)' }}>{product.nm_id}</strong>
               <Copy className="w-3 h-3" />
             </button>
-            <a
-              href={`https://www.wildberries.ru/catalog/${product.nm_id}/detail.aspx`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1 text-sm text-primary hover:underline"
-            >
-              WB <ExternalLink className="w-3 h-3" />
-            </a>
+            {!isOzon && (
+              <a
+                href={`https://www.wildberries.ru/catalog/${product.nm_id}/detail.aspx`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-sm text-primary hover:underline"
+              >
+                WB <ExternalLink className="w-3 h-3" />
+              </a>
+            )}
           </div>
         </div>
         <button

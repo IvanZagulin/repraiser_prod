@@ -46,6 +46,9 @@ def sync_wb_catalog_task(self, account_id: int):
             Account.id == account_id,
             Account.is_active == True,
         ).first()
+        if account and account.marketplace != "wb":
+            logger.info("[catalog.sync] account_id=%s: marketplace=%s skipped", account_id, account.marketplace)
+            return {"status": "skipped", "reason": "not wb"}
 
         if not account:
             logger.warning(f"[catalog.sync] account_id={account_id} не найден или неактивен")
@@ -218,7 +221,10 @@ def sync_all_wb_catalogs_task():
 
     db = SessionLocal()
     try:
-        accounts = db.query(Account).filter(Account.is_active == True).all()
+        accounts = db.query(Account).filter(
+            Account.is_active == True,
+            Account.marketplace == "wb",
+        ).all()
         account_ids = [a.id for a in accounts]
     finally:
         db.close()

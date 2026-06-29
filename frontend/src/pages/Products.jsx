@@ -378,7 +378,7 @@ export default function Products() {
               {groups.map(([groupKey, groupProds]) => {
                 const first = groupProds[0];
                 const isMulti = groupProds.length > 1;
-                const imgSrc = first.image_url || getWBImageUrl(first.nm_id);
+                const imgSrc = first.image_url || (first.account_marketplace === 'ozon' ? null : getWBImageUrl(first.nm_id));
 
                 return (
                   <div
@@ -482,7 +482,7 @@ export default function Products() {
                   <th>Артикул</th>
                   <th>Кабинет</th>
                   <th>Название</th>
-                  <th>Артикул WB</th>
+                  <th>Артикул</th>
                   <th>Стратегия</th>
                   <th>Цена (СПП)</th>
                   <th>С кошельком</th>

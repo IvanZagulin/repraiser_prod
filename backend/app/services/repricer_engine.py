@@ -15,7 +15,7 @@ from app.models import (
 )
 from app.models.app_setting import AppSetting
 from app.services import (
-    catalog_parser, create_wb_client, telegram_notifier
+    catalog_parser, create_wb_client, create_ozon_client, telegram_notifier
 )
 from app.utils.jwt import is_token_expired
 from app.redis_client import cache_get, cache_set
@@ -40,6 +40,40 @@ class RepricerEngine:
         self._prefetched_prices: Dict[int, object] = {}  # nm_id -> PriceData, cleared per chunk
         self._price_fetch_failed: set[int] = set()
         self._competitor_entries_map: Optional[Dict[int, list]] = None  # config_id -> [nm_id], прогрев на прогон
+
+    def _marketplace(self, account: Optional[Account]) -> str:
+        return getattr(account, "marketplace", "wb") or "wb"
+
+    async def _get_ozon_current_price_data(self, product: Product, account: Account) -> Optional[Dict]:
+        try:
+            async with create_ozon_client(account.ozon_client_id, account.ozon_api_key) as client:
+                prices = await client.get_prices(
+                    product_ids=[product.nm_id] if product.nm_id else None,
+                    offer_ids=[product.seller_sku] if product.seller_sku else None,
+                )
+            if not prices:
+                logger.warning("Ozon product product_id=%s offer_id=%s not found", product.nm_id, product.seller_sku)
+                return None
+            price_data = prices[0]
+            if price_data.price <= 0:
+                logger.warning("Ozon product product_id=%s has empty price", product.nm_id)
+                return None
+            return {
+                "seller_price": price_data.seller_price,
+                "discounted_price": price_data.seller_price,
+                "discount": Decimal(0),
+                "final_price": price_data.final_price,
+                "spp": Decimal(0),
+                "is_in_promo": False,
+                "total_quantity": 1,
+                "name": price_data.name,
+                "ozon_offer_id": price_data.offer_id,
+                "ozon_marketing_price": price_data.marketing_price,
+                "ozon_marketing_seller_price": price_data.marketing_seller_price,
+            }
+        except Exception as e:
+            logger.error("Ошибка получения данных Ozon для product_id=%s: %s", product.nm_id, e)
+            return None
 
     def _load_user_settings(self) -> Dict:
         """Load all repricer settings in 2 queries to avoid N+1 per product."""
@@ -208,6 +242,8 @@ class RepricerEngine:
             account = product.account
             if not account or not account.is_active:
                 continue
+            if self._marketplace(account) != "wb":
+                continue
             if is_token_expired(account.wb_api_token):
                 continue
             token = account.wb_api_token
@@ -240,6 +276,8 @@ class RepricerEngine:
         ).scalars().all()
 
         async def _fetch_account(account):
+            if self._marketplace(account) != "wb":
+                return
             if is_token_expired(account.wb_api_token):
                 return
             try:
@@ -277,7 +315,12 @@ class RepricerEngine:
             if product.nm_id in self._prefetched_prices:
                 continue
             account = product.account
-            if not account or not account.is_active or is_token_expired(account.wb_api_token):
+            if not account or not account.is_active:
+                self._price_fetch_failed.add(product.nm_id)
+                continue
+            if self._marketplace(account) != "wb":
+                continue
+            if is_token_expired(account.wb_api_token):
                 self._price_fetch_failed.add(product.nm_id)
                 continue
             entry = by_token.setdefault(
@@ -329,6 +372,9 @@ class RepricerEngine:
             dict с полями: seller_price, spp, is_in_promo или None
         """
         try:
+            if self._marketplace(account) == "ozon":
+                return await self._get_ozon_current_price_data(product, account)
+
             # Используем предзагруженные данные если есть (batch pre-fetch)
             if product.nm_id in self._prefetched_prices:
                 price_data = self._prefetched_prices[product.nm_id]
@@ -1081,7 +1127,7 @@ class RepricerEngine:
                     results['errors'] += 1
                     continue
 
-                if is_token_expired(account.wb_api_token):
+                if self._marketplace(account) == "wb" and is_token_expired(account.wb_api_token):
                     logger.warning(f"Токен истек для аккаунта {account.name}")
                     results['errors'] += 1
                     continue
@@ -1147,6 +1193,11 @@ class RepricerEngine:
             return {"product": product, "needs_update": False, "skip_code": "SKIPPED_INACTIVE",
                     "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": None, "_t0": _t0}
 
+        if self._marketplace(product.account) == "ozon" and config.strategy == "competitor":
+            return {"product": product, "needs_update": False, "skip_code": "SKIPPED_INACTIVE",
+                    "current_data": None, "new_price": None, "limit_reason": None,
+                    "reason_msg": "Ozon competitor strategy is not supported yet", "_t0": _t0}
+
         # Cooldown для competitor: не переоценивать чаще раза в N ч.
         # OVERRIDE: если СПП дрейфнул и финальная цена ушла от цели конкурента —
         # реагируем немедленно вверх или вниз.
@@ -1210,6 +1261,11 @@ class RepricerEngine:
         if not account or not account.is_active:
             return {"product": product, "needs_update": False, "skip_code": "SKIPPED_INACTIVE",
                     "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": None, "_t0": _t0}
+        marketplace = self._marketplace(account)
+        if marketplace == "ozon" and config.strategy == "competitor":
+            return {"product": product, "needs_update": False, "skip_code": "SKIPPED_INACTIVE",
+                    "current_data": None, "new_price": None, "limit_reason": None,
+                    "reason_msg": "Ozon competitor strategy is not supported yet", "_t0": _t0}
 
         if dry_run:
             # Все числовые поля должны быть Decimal — их умножает/делит дальше
@@ -1223,7 +1279,7 @@ class RepricerEngine:
                 "total_quantity": 5,
             }
         else:
-            if is_token_expired(account.wb_api_token):
+            if marketplace == "wb" and is_token_expired(account.wb_api_token):
                 logger.error("Токен истек для аккаунта %s", account.name)
                 await telegram_notifier.notify_token_expired(account.name, account.id)
                 return {"product": product, "needs_update": False, "skip_code": "WB_API_ERROR",
@@ -1244,7 +1300,7 @@ class RepricerEngine:
                         "current_data": current_data, "new_price": None, "limit_reason": None,
                         "reason_msg": "Нет остатка", "_t0": _t0}
 
-        wallet_pct = (self._user_settings or {}).get("wb_wallet_discount_pct", 0)
+        wallet_pct = (self._user_settings or {}).get("wb_wallet_discount_pct", 0) if marketplace == "wb" else 0
         try:
             wallet_pct = Decimal(str(wallet_pct))
         except Exception:
@@ -1291,7 +1347,7 @@ class RepricerEngine:
         # WB отвергает уже при ratio <= 0.5 (включительно), а при повторных
         # отказах кладёт товар в Price Quarantine. Берём порог 0.55 чтобы
         # точно остаться в безопасной зоне.
-        if _curr_sp_for_step > 0 and final_new_price < _curr_sp_for_step * Decimal("0.55"):
+        if marketplace == "wb" and _curr_sp_for_step > 0 and final_new_price < _curr_sp_for_step * Decimal("0.55"):
             stepped = Decimal(self._round_up(_curr_sp_for_step * Decimal("0.55") + Decimal("1")))
             logger.info(
                 "Ступенчатое снижение для nm_id=%s: целевая %s < половины текущей %s, отправляем %s",
@@ -1348,8 +1404,9 @@ class RepricerEngine:
 
         if failed:
             self._save_price_snapshot(product, current_data, competitor_nm_id=snap_competitor_nm_id, competitor_price=snap_competitor_price)
-            _err_detail = error_text or "Не удалось применить цену в WB API (batch)"
-            _full_msg = f"{reason_msg}. Отказ WB: {_err_detail}" if reason_msg else _err_detail
+            marketplace_label = "Ozon" if self._marketplace(product.account) == "ozon" else "WB"
+            _err_detail = error_text or f"Не удалось применить цену в {marketplace_label} API (batch)"
+            _full_msg = f"{reason_msg}. Отказ {marketplace_label}: {_err_detail}" if reason_msg else _err_detail
             self._save_price_change(run, product, current_data, new_price, None,
                                     "WB_API_ERROR", _full_msg)
             logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id,
@@ -1548,7 +1605,7 @@ class RepricerEngine:
         # Шаг 1: получаем только ID товаров + config_id (без загрузки ORM-объектов в память).
         # На 100к товаров это ~3-5 MB вместо ~800 MB при полной загрузке.
         id_query = (
-            select(Product.id, ProductConfig.id, ProductConfig.competitor_nm_id)
+            select(Product.id, ProductConfig.id, ProductConfig.competitor_nm_id, Account.marketplace)
             .join(ProductConfig)
             .join(Account, Product.account_id == Account.id)
             .filter(ProductConfig.is_active == True)
@@ -1562,7 +1619,8 @@ class RepricerEngine:
         id_rows = self.db.execute(id_query).all()
         all_product_ids              = [r[0] for r in id_rows]
         all_config_ids               = [r[1] for r in id_rows]
-        direct_competitor_nm_ids     = {r[2] for r in id_rows if r[2]}
+        wb_config_ids                = [r[1] for r in id_rows if (r[3] or "wb") == "wb"]
+        direct_competitor_nm_ids     = {r[2] for r in id_rows if r[2] and (r[3] or "wb") == "wb"}
 
         # Шаг 2: Pre-fetch цен конкурентов батчами перед основным циклом.
         # Собираем все уникальные nm_id конкурентов, исключаем уже закешированные,
@@ -1574,11 +1632,11 @@ class RepricerEngine:
             # Один запрос вместо N: строим карту config_id -> [nm_id] и заодно
             # собираем уникальные nm_id конкурентов для прогрева каталога.
             self._competitor_entries_map = {}
-            if all_config_ids:
+            if wb_config_ids:
                 rows = self.db.query(
                     CompetitorEntry.product_config_id, CompetitorEntry.nm_id
                 ).filter(
-                    CompetitorEntry.product_config_id.in_(all_config_ids)
+                    CompetitorEntry.product_config_id.in_(wb_config_ids)
                 ).all()
                 for cfg_id, nm in rows:
                     self._competitor_entries_map.setdefault(cfg_id, []).append(nm)
@@ -1700,6 +1758,7 @@ class RepricerEngine:
                     # Проверяем по prefetched_prices: если seller_price=0, товар нет на складе.
                     own_cold_ids = [
                         p.nm_id for p in chunk_products
+                        if self._marketplace(p.account) == "wb"
                         if cache_get("wb_catalog:%d" % p.nm_id) is None
                         and (
                             p.nm_id not in self._prefetched_prices
@@ -1714,7 +1773,7 @@ class RepricerEngine:
                                 cache_set("wb_catalog:%d" % nm_id, data.to_dict(), ttl=600)
 
                 # === ФАЗА 1: вычисляем решения параллельно (50 товаров одновременно) ===
-                pending_updates = {}  # token -> list of {nmID, price}
+                pending_updates = {}  # (marketplace, account_id) -> {account, updates}
                 _sem = asyncio.Semaphore(50)
 
                 async def _decide_safe(product):
@@ -1731,10 +1790,24 @@ class RepricerEngine:
 
                 for dec in decisions:
                     if dec["needs_update"] and not dry_run:
-                        token = dec["product"].account.wb_api_token
-                        if token not in pending_updates:
-                            pending_updates[token] = []
-                        pending_updates[token].append({"nmID": dec["product"].nm_id, "price": int(dec["new_price"])})
+                        product = dec["product"]
+                        account = product.account
+                        marketplace = self._marketplace(account)
+                        key = (marketplace, account.id)
+                        entry = pending_updates.setdefault(key, {"account": account, "updates": []})
+                        if marketplace == "ozon":
+                            entry["updates"].append({
+                                "_product_pk": product.id,
+                                "product_id": product.nm_id,
+                                "offer_id": product.seller_sku,
+                                "price": int(dec["new_price"]),
+                            })
+                        else:
+                            entry["updates"].append({
+                                "_product_pk": product.id,
+                                "nmID": product.nm_id,
+                                "price": int(dec["new_price"]),
+                            })
 
                 # === ФАЗА 2: батч-обновление (один POST на аккаунт) ===
                 # WB обрабатывает /upload/task асинхронно и может отклонить
@@ -1749,17 +1822,53 @@ class RepricerEngine:
                     # Импортируем тут чтобы не ломать существующие импорты в начале файла.
                     from app.services.wb_api import WBAuthError
                     from datetime import timedelta
-                    for token, updates in pending_updates.items():
+                    from app.services.ozon_api import OzonAuthError
+                    for (_marketplace, _account_id), entry in pending_updates.items():
+                        account = entry["account"]
+                        updates = entry["updates"]
                         upload_id = None
                         try:
+                            if _marketplace == "ozon":
+                                ozon_updates = [
+                                    {k: v for k, v in u.items() if k != "_product_pk"}
+                                    for u in updates
+                                ]
+                                async with create_ozon_client(account.ozon_client_id, account.ozon_api_key) as client:
+                                    resp = await client.update_prices(ozon_updates)
+                                    raw_statuses = client.parse_update_statuses(resp, ozon_updates)
+                                statuses = {
+                                    u["_product_pk"]: raw_statuses.get(
+                                        str(u.get("product_id") or u.get("offer_id")),
+                                        (True, ""),
+                                    )
+                                    for u in updates
+                                }
+                                logger.info("Ozon batch update: %d цен отправлено", len(updates))
+                                for u in updates:
+                                    st = statuses.get(u["_product_pk"])
+                                    if st is None:
+                                        update_fail.add(u["_product_pk"])
+                                        update_errors[u["_product_pk"]] = "Статус задачи Ozon не получен"
+                                    elif st[0]:
+                                        update_ok.add(u["_product_pk"])
+                                    else:
+                                        update_fail.add(u["_product_pk"])
+                                        update_errors[u["_product_pk"]] = st[1] or "Ozon отклонил цену"
+                                continue
+
+                            token = account.wb_api_token
                             async with create_wb_client(token) as client:
-                                resp = await client.update_prices(updates)
+                                wb_updates = [
+                                    {k: v for k, v in u.items() if k != "_product_pk"}
+                                    for u in updates
+                                ]
+                                resp = await client.update_prices(wb_updates)
                                 upload_id = (resp.get("data") or {}).get("id")
                                 if resp.get("_already_queued"):
                                     # Задача уже в очереди WB, статуса нет —
                                     # помечаем как ok, следующий прогон уточнит.
                                     for u in updates:
-                                        update_ok.add(u["nmID"])
+                                        update_ok.add(u["_product_pk"])
                                     logger.info(
                                         "Batch update: %d цен — задача уже в очереди WB",
                                         len(updates),
@@ -1768,7 +1877,7 @@ class RepricerEngine:
                                 # Мелкие батчи (≤3 товара): не тратить 33с на verify.
                                 # Если WB отклонит — поймаем в следующем прогоне.
                                 if len(updates) <= 3:
-                                    statuses = {u['nmID']: (True, '') for u in updates}
+                                    statuses = {u["nmID"]: (True, "") for u in updates}
                                     logger.info('Batch ≤3: skip verify (uploadID=%s)', upload_id)
                                 else:
                                     statuses = await client.verify_batch_update(upload_id)
@@ -1785,14 +1894,14 @@ class RepricerEngine:
                                 nm = u["nmID"]
                                 st = statuses.get(nm)
                                 if st is None:
-                                    update_fail.add(nm)
-                                    update_errors[nm] = "Статус задачи WB не получен (таймаут опроса)"
+                                    update_fail.add(u["_product_pk"])
+                                    update_errors[u["_product_pk"]] = "Статус задачи WB не получен (таймаут опроса)"
                                 elif st[0]:
-                                    update_ok.add(nm)
+                                    update_ok.add(u["_product_pk"])
                                 else:
-                                    update_fail.add(nm)
+                                    update_fail.add(u["_product_pk"])
                                     err_text = st[1] or "WB отклонил цену"
-                                    update_errors[nm] = err_text
+                                    update_errors[u["_product_pk"]] = err_text
                                     # Price Quarantine: помечаем wb_blocked_until=+24h.
                                     if 'quarantine' in err_text.lower() and nm in _nm_to_config:
                                         cfg = _nm_to_config[nm]
@@ -1807,7 +1916,7 @@ class RepricerEngine:
                             _acc = next(
                                 (d["product"].account for d in decisions
                                  if d.get("product") and d["product"].account
-                                 and d["product"].account.wb_api_token == token),
+                                  and d["product"].account.id == account.id),
                                 None,
                             )
                             if _acc:
@@ -1818,18 +1927,24 @@ class RepricerEngine:
                                 except Exception:
                                     pass
                             for u in updates:
-                                update_fail.add(u["nmID"])
-                                update_errors[u["nmID"]] = f"401 от WB — аккаунт деактивирован: {e}"
+                                update_fail.add(u["_product_pk"])
+                                update_errors[u["_product_pk"]] = f"401 от WB — аккаунт деактивирован: {e}"
+                        except OzonAuthError as e:
+                            logger.error("Аккаунт '%s' (id=%s): Ozon auth error — деактивируем", account.name, account.id)
+                            account.is_active = False
+                            for u in updates:
+                                update_fail.add(u["_product_pk"])
+                                update_errors[u["_product_pk"]] = f"401 от Ozon — аккаунт деактивирован: {e}"
                         except Exception as e:
                             logger.error("Ошибка batch update (uploadID=%s): %s", upload_id, e)
                             for u in updates:
-                                update_fail.add(u["nmID"])
-                                update_errors[u["nmID"]] = f"Исключение при отправке: {e}"
+                                update_fail.add(u["_product_pk"])
+                                update_errors[u["_product_pk"]] = f"Исключение при отправке: {e}"
 
                 elif dry_run:
                     for d in decisions:
                         if d["needs_update"]:
-                            update_ok.add(d["product"].nm_id)
+                            update_ok.add(d["product"].id)
 
                 # === ФАЗА 3: сохраняем результаты ===
                 pending = 0
@@ -1844,9 +1959,9 @@ class RepricerEngine:
                         product = dec["product"]
                         reason_code = self._finalize_decision(
                             run, dec,
-                            product.nm_id in update_ok,
-                            product.nm_id in update_fail,
-                            error_text=update_errors.get(product.nm_id),
+                            product.id in update_ok,
+                            product.id in update_fail,
+                            error_text=update_errors.get(product.id),
                         )
                         if reason_code in ["UPDATED", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX", "CLAMPED_TO_MARGIN"]:
                             results["updated"] += 1
