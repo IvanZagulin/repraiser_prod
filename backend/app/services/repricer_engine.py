@@ -5,7 +5,7 @@ import time
 from types import SimpleNamespace
 from typing import Optional, Dict, List, Tuple
 from decimal import Decimal, ROUND_UP
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta, time as dt_time
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select
 
@@ -155,6 +155,9 @@ class RepricerEngine:
     # cold-start: товар без истории осцилляции тоже может перелететь коридор).
     _CLOSED_LOOP_ENABLED = True
     _CLOSED_LOOP_SETTLE_SEC = 20
+    _COMPETITOR_ABOVE_NIGHT_START_MSK = "00:00"
+    _COMPETITOR_ABOVE_NIGHT_END_MSK = "06:00"
+    _COMPETITOR_ABOVE_MAX_NIGHT_DOWN_CORRECTIONS = 2
 
     def _competitor_target_final(self, config, competitor_price: Decimal) -> Decimal:
         """Return target final buyer price for competitor strategy."""
@@ -170,6 +173,103 @@ class RepricerEngine:
         if offset_direction == 'above':
             return competitor_price * (1 + offset_value / 100)
         return competitor_price * (1 - offset_value / 100)
+
+    def _parse_hhmm(self, value: str) -> dt_time:
+        hour, minute = (int(part) for part in value.split(":", 1))
+        return dt_time(hour=hour, minute=minute)
+
+    def _competitor_above_night_bounds_utc(
+        self,
+        now_utc: Optional[datetime] = None,
+    ) -> Tuple[datetime, datetime]:
+        """Return current competitor-above night window bounds as naive UTC."""
+        now_utc = now_utc or datetime.now(timezone.utc)
+        if now_utc.tzinfo is None:
+            now_utc = now_utc.replace(tzinfo=timezone.utc)
+        msk_tz = timezone(timedelta(hours=3))
+        now_msk = now_utc.astimezone(msk_tz)
+        start_t = self._parse_hhmm(self._COMPETITOR_ABOVE_NIGHT_START_MSK)
+        end_t = self._parse_hhmm(self._COMPETITOR_ABOVE_NIGHT_END_MSK)
+
+        if start_t <= end_t:
+            start_date = now_msk.date()
+            if now_msk.time() < start_t:
+                start_date -= timedelta(days=1)
+            start_msk = datetime.combine(start_date, start_t, tzinfo=msk_tz)
+            end_msk = datetime.combine(start_date, end_t, tzinfo=msk_tz)
+            if end_msk <= start_msk:
+                end_msk += timedelta(days=1)
+        else:
+            if now_msk.time() >= start_t:
+                start_date = now_msk.date()
+            else:
+                start_date = now_msk.date() - timedelta(days=1)
+            start_msk = datetime.combine(start_date, start_t, tzinfo=msk_tz)
+            end_msk = datetime.combine(start_date + timedelta(days=1), end_t, tzinfo=msk_tz)
+
+        return (
+            start_msk.astimezone(timezone.utc).replace(tzinfo=None),
+            end_msk.astimezone(timezone.utc).replace(tzinfo=None),
+        )
+
+    def _is_competitor_above_night_window(self) -> bool:
+        now_utc = datetime.now(timezone.utc)
+        start_utc, end_utc = self._competitor_above_night_bounds_utc(now_utc)
+        now_naive = now_utc.replace(tzinfo=None)
+        return start_utc <= now_naive < end_utc
+
+    def _night_down_corrections_count(self, product_id: Optional[int]) -> int:
+        if not product_id:
+            return 0
+        try:
+            start_utc, _end_utc = self._competitor_above_night_bounds_utc()
+            return self.db.query(PriceChange).filter(
+                PriceChange.product_id == product_id,
+                PriceChange.reason_code.in_(["UPDATED", "CORRECTED"]),
+                PriceChange.changed_at >= start_utc,
+                PriceChange.new_seller_price.isnot(None),
+                PriceChange.old_seller_price.isnot(None),
+                PriceChange.new_seller_price < PriceChange.old_seller_price,
+            ).count()
+        except Exception as e:
+            logger.debug("Night down-correction count failed for product_id=%s: %s", product_id, e)
+            return 0
+
+    def _should_hold_competitor_above_price(
+        self,
+        product: Optional[Product],
+        config: ProductConfig,
+        actual_final: Decimal,
+        target_final: Decimal,
+        new_seller: Decimal,
+        corrected_seller: Decimal,
+    ) -> Tuple[bool, str]:
+        """For competitor 'above', keep prices above target during the day.
+
+        At night we allow a small number of downward attempts to approach the
+        target. This prevents endless SPP oscillation while still probing WB
+        when buyer traffic is lower.
+        """
+        if getattr(config, "competitor_offset_direction", None) != "above":
+            return False, ""
+        if actual_final <= target_final or corrected_seller >= new_seller:
+            return False, ""
+
+        product_id = getattr(product, "id", None)
+        if not self._is_competitor_above_night_window():
+            return True, (
+                f"Competitor above: финальная {actual_final}₽ уже выше цели "
+                f"{target_final:.2f}₽; днём держим выше конкурента"
+            )
+
+        attempts = self._night_down_corrections_count(product_id)
+        if attempts >= self._COMPETITOR_ABOVE_MAX_NIGHT_DOWN_CORRECTIONS:
+            return True, (
+                f"Competitor above: ночные попытки снижения исчерпаны "
+                f"({attempts}/{self._COMPETITOR_ABOVE_MAX_NIGHT_DOWN_CORRECTIONS}); "
+                f"держим {actual_final}₽ выше цели {target_final:.2f}₽"
+            )
+        return False, ""
 
     def _has_rrp_target(self, config, spp: Decimal) -> bool:
         seller_price_direct, rrp = self._resolve_rrp(config, spp)
@@ -712,6 +812,17 @@ class RepricerEngine:
             # Обратный расчет цены продавца через эффективный СПП.
             try:
                 new_seller_price = self._calculate_seller_price_from_final(target_final, calc_spp, seller_discount)
+                current_seller = current_data.get('seller_price') or Decimal(0)
+                hold_above, hold_msg = self._should_hold_competitor_above_price(
+                    product,
+                    config,
+                    current_final,
+                    target_final,
+                    Decimal(str(current_seller)),
+                    new_seller_price,
+                )
+                if hold_above:
+                    return None, "NO_CHANGE", hold_msg, competitor_price, winning_nm_id
 
                 reason_msg = (
                     f"Competitor ({rule}, {move}): конкурент nm_id={winning_nm_id} цена={competitor_price}₽, "
@@ -1546,6 +1657,17 @@ class RepricerEngine:
                     "Closed-loop: аномальная коррекция nm=%s (seller=%s→%s, ratio=%.4f), пропускаем",
                     nm, new_seller, corrected, ratio,
                 )
+                continue
+            hold_above, hold_msg = self._should_hold_competitor_above_price(
+                it.get("product"),
+                it["config"],
+                actual_final,
+                target_final,
+                new_seller,
+                corrected,
+            )
+            if hold_above:
+                logger.info("Closed-loop: nm=%s без снижения: %s", nm, hold_msg)
                 continue
             try:
                 corrected, _lr = self._apply_limits(

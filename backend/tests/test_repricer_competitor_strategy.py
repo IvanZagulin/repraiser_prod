@@ -255,7 +255,7 @@ class TestGetCompetitorPriceFallbacks:
 # _strategy_competitor — расчёт целевой цены продавца с учётом эффективного СПП
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _run_strategy(engine, config, current_data, competitor_final):
+def _run_strategy(engine, config, current_data, competitor_final, night_window=False):
     """Прогоняет _strategy_competitor с замоканным конкурентом."""
     engine._competitor_entries_map = {config.id: [999]}
 
@@ -263,7 +263,8 @@ def _run_strategy(engine, config, current_data, competitor_final):
         return _comp(competitor_final)
 
     product = SimpleNamespace(nm_id=111, seller_sku="SKU", config=config)
-    with patch.object(engine, "_cached_parse_product", side_effect=fake_parse):
+    with patch.object(engine, "_cached_parse_product", side_effect=fake_parse), \
+         patch.object(engine, "_is_competitor_above_night_window", return_value=night_window):
         return asyncio.run(engine._strategy_competitor(product, config, current_data))
 
 
@@ -291,7 +292,7 @@ class TestStrategyCompetitorCorridor:
         assert comp_price == Decimal("1593")
         assert winner == 999
 
-    def test_lowers_when_above_competitor_target(self):
+    def test_holds_when_above_competitor_target_during_day(self):
         engine = _make_engine_with_settings()
         config = _make_config(offset_type="rub", offset_direction="above", offset_value="0")
         current_data = {
@@ -306,10 +307,10 @@ class TestStrategyCompetitorCorridor:
             engine, config, current_data, competitor_final=1593
         )
 
-        assert reason_code == "CALCULATED"
-        assert new_seller == Decimal("2419")
+        assert reason_code == "NO_CHANGE"
+        assert new_seller is None
 
-    def test_lowers_when_far_above_competitor_target(self):
+    def test_lowers_when_above_competitor_target_at_night(self):
         engine = _make_engine_with_settings()
         config = _make_config(offset_type="rub", offset_direction="above", offset_value="0")
         current_data = {
@@ -321,7 +322,7 @@ class TestStrategyCompetitorCorridor:
         }
 
         new_seller, reason_code, _msg, _comp_price, _winner = _run_strategy(
-            engine, config, current_data, competitor_final=1593
+            engine, config, current_data, competitor_final=1593, night_window=True
         )
 
         assert reason_code == "CALCULATED"
@@ -497,7 +498,7 @@ class TestCorrectUnstableProducts:
         assert len(changes) == 1
         assert changes[0].new_seller_price == Decimal("2422")
 
-    def test_corrects_when_actual_above_target(self, db_session, test_product):
+    def test_holds_when_actual_above_target_during_day(self, db_session, test_product):
         engine = RepricerEngine(db=db_session, user_id=None)
         engine._user_settings = {}
         engine._CLOSED_LOOP_SETTLE_SEC = 0
@@ -530,7 +531,47 @@ class TestCorrectUnstableProducts:
         with patch("app.services.repricer_engine.catalog_parser.parse_batch_ids",
                    side_effect=fake_parse_batch), \
              patch("app.services.repricer_engine.create_wb_client",
-                   return_value=fake_client):
+                   return_value=fake_client), \
+             patch.object(engine, "_is_competitor_above_night_window", return_value=False):
+            n = asyncio.run(engine._verify_and_correct_competitor(run, items))
+
+        assert n == 0
+        assert fake_client.calls == []
+
+    def test_corrects_when_actual_above_target_at_night(self, db_session, test_product):
+        engine = RepricerEngine(db=db_session, user_id=None)
+        engine._user_settings = {}
+        engine._CLOSED_LOOP_SETTLE_SEC = 0
+
+        run = RepricerRun(run_type="manual", status="running",
+                          started_at=datetime(2026, 6, 10, 14, 0, 0))
+        db_session.add(run); db_session.commit(); db_session.refresh(run)
+
+        config = SimpleNamespace(
+            min_price=Decimal("80"), max_price=None,
+            skip_margin_check=True, product=test_product,
+            competitor_offset_type="rub",
+            competitor_offset_direction="above",
+            competitor_offset_value=Decimal("0"),
+        )
+        items = [{
+            "product": test_product, "nm_id": test_product.nm_id, "token": "tok",
+            "config": config, "new_price": Decimal("2460"),
+            "current_data": {"seller_price": Decimal("2460"), "final_price": Decimal("1588"),
+                             "discount": Decimal("0"), "spp": Decimal("34")},
+            "competitor_price": Decimal("1593"), "competitor_nm_id": 1,
+        }]
+        fresh = {test_product.nm_id: SimpleNamespace(final_price=Decimal("1620"), spp=Decimal("34"))}
+        fake_client = _FakeClient()
+
+        async def fake_parse_batch(nm_ids, **kw):
+            return fresh
+
+        with patch("app.services.repricer_engine.catalog_parser.parse_batch_ids",
+                   side_effect=fake_parse_batch), \
+             patch("app.services.repricer_engine.create_wb_client",
+                   return_value=fake_client), \
+             patch.object(engine, "_is_competitor_above_night_window", return_value=True):
             n = asyncio.run(engine._verify_and_correct_competitor(run, items))
 
         assert n == 1
