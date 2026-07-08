@@ -126,8 +126,29 @@ class CatalogParser:
             return data['products']
         return data.get('data', {}).get('products', [])
 
+    async def _request_via_catalog_proxy(self, url: str) -> Optional[dict]:
+        """Запрос через CATALOG_PROXY_URL (HTTP/SOCKS5 прокси на рабочем сервере)"""
+        proxy_url = settings.CATALOG_PROXY_URL
+        if not proxy_url:
+            return None
+        try:
+            async with AsyncSession(
+                timeout=15,
+                headers=_HEADERS,
+                impersonate="edge101",
+                proxy=proxy_url,
+            ) as client:
+                response = await client.get(url)
+                if response.status_code == 200:
+                    return response.json()
+                logger.warning(f"Catalog proxy: код {response.status_code} для {url}")
+                return None
+        except Exception as e:
+            logger.warning(f"Catalog proxy ({proxy_url}): ошибка {e}")
+            return None
+
     async def _request_with_proxy(self, url: str, proxy: ProxyConfig) -> Optional[dict]:
-        """Запрос через прокси (curl_cffi для обхода TLS fingerprinting)"""
+        """Запрос через прокси из пула (curl_cffi для обхода TLS fingerprinting)"""
         try:
             async with AsyncSession(
                 timeout=15,
@@ -190,14 +211,14 @@ class CatalogParser:
 
     async def parse_product(self, nm_id: int) -> Optional[ProductData]:
         """
-        Парсинг товара. Пытается через прокси (если есть),
-        иначе — напрямую.
+        Парсинг товара. Приоритет: CATALOG_PROXY_URL → direct → SOCKS5 pool.
         """
         url = self._build_url(nm_id)
         logger.info(f"Парсинг товара nm_id={nm_id}")
 
-        # Direct-first: быстрый путь через сервер, proxy fallback при бане
-        data = await self._request_direct(url)
+        data = await self._request_via_catalog_proxy(url)
+        if data is None:
+            data = await self._request_direct(url)
         if data is None:
             for attempt in range(self.max_retries):
                 proxy = await proxy_pool.get_next_proxy()
@@ -207,7 +228,7 @@ class CatalogParser:
                 if data is not None:
                     break
         if data is None:
-            logger.error(f"nm_id={nm_id}: не удалось получить данные ни через прокси, ни напрямую")
+            logger.error(f"nm_id={nm_id}: не удалось получить данные")
             return None
         return self._parse_response(nm_id, data)
 
@@ -229,8 +250,8 @@ class CatalogParser:
         self,
         nm_ids: list[int],
         chunk_size: int = 100,
-        delay_between_chunks: float = 0.0,
-        concurrency: int = 20,
+        delay_between_chunks: float = 0.3,
+        concurrency: int = 5,
     ) -> Dict[int, Optional[ProductData]]:
         """
         Батчевый парсинг: объединяет nm_ids в чанки по chunk_size и делает
@@ -250,14 +271,17 @@ class CatalogParser:
                 url = self._build_batch_url(chunk)
                 data = None
 
-                # Proxy-only: direct забанен (Timeweb ASN), не тратим время
-                for _attempt in range(3):
-                    proxy = await proxy_pool.get_next_proxy()
-                    if proxy is None:
-                        break
-                    data = await self._request_with_proxy(url, proxy)
-                    if data is not None:
-                        break
+                data = await self._request_via_catalog_proxy(url)
+                if data is None:
+                    data = await self._request_direct(url)
+                if data is None:
+                    for _attempt in range(3):
+                        proxy = await proxy_pool.get_next_proxy()
+                        if proxy is None:
+                            break
+                        data = await self._request_with_proxy(url, proxy)
+                        if data is not None:
+                            break
 
                 chunk_result: Dict[int, Optional[ProductData]] = {}
                 if data is None:

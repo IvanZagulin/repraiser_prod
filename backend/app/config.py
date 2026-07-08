@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     
     # SOCKS5 Proxies (format: ip:port:login:password;ip:port:login:password)
     SOCKS5_PROXIES: str = ""
+
+    # HTTP/SOCKS5 прокси для парсинга каталога WB (card.wb.ru)
+    # Формат: http://user:pass@host:port или socks5://host:port
+    CATALOG_PROXY_URL: str = ""
     
     # WB API
     WB_API_BASE_URL: str = "https://discounts-prices-api.wildberries.ru"
