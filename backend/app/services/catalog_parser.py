@@ -163,7 +163,7 @@ class CatalogParser:
         await asyncio.sleep(random.uniform(0.05, 0.15))  # антибот WB
         try:
             async with AsyncSession(
-                timeout=15,
+                timeout=5,
                 headers=_HEADERS,
                 impersonate="edge101",
             ) as client:
@@ -230,12 +230,13 @@ class CatalogParser:
         nm_ids: list[int],
         chunk_size: int = 100,
         delay_between_chunks: float = 0.0,
-        concurrency: int = 15,
+        concurrency: int = 20,
     ) -> Dict[int, Optional[ProductData]]:
         """
         Батчевый парсинг: объединяет nm_ids в чанки по chunk_size и делает
         один HTTP-запрос на чанк вместо N отдельных. Чанки выполняются параллельно
         (до concurrency одновременных запросов).
+        Неудавшиеся чанки повторяются до 2 раз.
         """
         if not nm_ids:
             return {}
@@ -244,25 +245,22 @@ class CatalogParser:
         chunks = [nm_ids[i:i + chunk_size] for i in range(0, len(nm_ids), chunk_size)]
         semaphore = asyncio.Semaphore(concurrency)
 
-        async def fetch_chunk(idx: int, chunk: list[int]) -> Dict[int, Optional[ProductData]]:
+        async def fetch_chunk(chunk: list[int]) -> Dict[int, Optional[ProductData]]:
             async with semaphore:
                 url = self._build_batch_url(chunk)
                 data = None
 
-                # Direct-first: быстрый путь через сервер, proxy fallback при бане
-                data = await self._request_direct(url)
-                if data is None:
-                    for _attempt in range(3):
-                        proxy = await proxy_pool.get_next_proxy()
-                        if proxy is None:
-                            break
-                        data = await self._request_with_proxy(url, proxy)
-                        if data is not None:
-                            break
+                # Proxy-only: direct забанен (Timeweb ASN), не тратим время
+                for _attempt in range(3):
+                    proxy = await proxy_pool.get_next_proxy()
+                    if proxy is None:
+                        break
+                    data = await self._request_with_proxy(url, proxy)
+                    if data is not None:
+                        break
 
                 chunk_result: Dict[int, Optional[ProductData]] = {}
                 if data is None:
-                    logger.error(f"Батч чанк {idx + 1}/{len(chunks)}: не удалось получить данные")
                     for nm_id in chunk:
                         chunk_result[nm_id] = None
                     return chunk_result
@@ -281,10 +279,26 @@ class CatalogParser:
                         chunk_result[nm_id] = None
                 return chunk_result
 
-        chunk_results = await asyncio.gather(*[fetch_chunk(i, c) for i, c in enumerate(chunks)])
         result: Dict[int, Optional[ProductData]] = {}
+
+        # Раунд 1: основной парсинг
+        chunk_results = await asyncio.gather(*[fetch_chunk(c) for c in chunks])
         for cr in chunk_results:
             result.update(cr)
+
+        # Раунд 2-3: retry неудавшихся чанков
+        for retry_round in range(2):
+            failed_ids = [nm for nm, v in result.items() if v is None]
+            if not failed_ids:
+                break
+            retry_chunks = [failed_ids[i:i + chunk_size] for i in range(0, len(failed_ids), chunk_size)]
+            logger.info(f"Retry раунд {retry_round + 1}: {len(failed_ids)} неудавшихся товаров ({len(retry_chunks)} чанков)")
+            await asyncio.sleep(1)
+            retry_results = await asyncio.gather(*[fetch_chunk(c) for c in retry_chunks])
+            for cr in retry_results:
+                for nm_id, data in cr.items():
+                    if data is not None:
+                        result[nm_id] = data
 
         success = sum(1 for v in result.values() if v is not None)
         logger.info(f"Батч-парсинг завершён: {success}/{len(nm_ids)} успешно")

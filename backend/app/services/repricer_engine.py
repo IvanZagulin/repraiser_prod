@@ -315,8 +315,9 @@ class RepricerEngine:
     
     async def _cached_parse_product(self, nm_id: int):
         """
-        Парсинг товара из WB Catalog API с кешированием в Redis (TTL=180с).
-        Снижает нагрузку на WB Catalog при прогоне по многим товарам.
+        Парсинг товара из WB Catalog API с кешированием в Redis.
+        Не делает одиночных HTTP-запросов — только читает кеш,
+        заполненный глобальным batch pre-fetch.
         """
         cache_key = f"wb_catalog:{nm_id}"
         cached = cache_get(cache_key)
@@ -331,26 +332,18 @@ class RepricerEngine:
                 catalog_stale=False,
             )
 
-        product_data = await catalog_parser.parse_product(nm_id)
-        if product_data:
-            cache_set(cache_key, product_data.to_dict(), ttl=600)
-            # Долгосрочный бэкап: при 403 используем стейл-данные (лучше чем ничего)
-            cache_set(f"wb_catalog_last:{nm_id}", product_data.to_dict(), ttl=86400)  # 24ч
-        else:
-            # Каталог недоступен — пробуем стейл-бэкап (последний успешный парсинг)
-            stale = cache_get(f"wb_catalog_last:{nm_id}")
-            if stale is not None:
-                logger.debug("nm_id=%s: каталог недоступен, используем стейл-кеш (24ч)", nm_id)
-                return SimpleNamespace(
-                    final_price=Decimal(str(stale['final_price'])),
-                    seller_price=Decimal(str(stale.get('seller_price', 0))),
-                    spp=Decimal(str(stale['spp'])) if stale['spp'] is not None else None,
-                    is_in_promo=stale['is_in_promo'],
-                    total_quantity=stale['total_quantity'],
-                    in_stock=stale['in_stock'],
-                    catalog_stale=True,
-                )
-        return product_data
+        stale = cache_get(f"wb_catalog_last:{nm_id}")
+        if stale is not None:
+            return SimpleNamespace(
+                final_price=Decimal(str(stale['final_price'])),
+                seller_price=Decimal(str(stale.get('seller_price', 0))),
+                spp=Decimal(str(stale['spp'])) if stale['spp'] is not None else None,
+                is_in_promo=stale['is_in_promo'],
+                total_quantity=stale['total_quantity'],
+                in_stock=stale['in_stock'],
+                catalog_stale=True,
+            )
+        return None
 
     async def _prefetch_own_prices(self, products: list) -> None:
         # Fetch ALL seller prices per account (no filterNmID - WB rejects 100+ ids with 400)
@@ -1807,6 +1800,23 @@ class RepricerEngine:
                         cache_set(f"wb_catalog:{nm_id}", product_data.to_dict(), ttl=600)
                 logger.info(f"Pre-fetch завершён: {sum(1 for v in batch_results.values() if v)} / {len(cold_ids)}")
 
+            # Глобальный pre-fetch ВСЕХ собственных товаров одним батчем.
+            # Убирает тысячи одиночных HTTP-запросов из основного цикла.
+            all_own_nm_ids = list({r[0] for r in self.db.execute(
+                select(Product.nm_id).filter(Product.id.in_(all_product_ids))
+            ).all()})
+            own_cold = [nm for nm in all_own_nm_ids if cache_get("wb_catalog:%d" % nm) is None]
+            if own_cold:
+                logger.info(f"Глобальный pre-fetch: {len(own_cold)} холодных из {len(all_own_nm_ids)} собственных товаров")
+                own_results = await catalog_parser.parse_batch_ids(own_cold)
+                cached_count = 0
+                for nm_id, product_data in own_results.items():
+                    if product_data is not None:
+                        cache_set("wb_catalog:%d" % nm_id, product_data.to_dict(), ttl=600)
+                        cache_set("wb_catalog_last:%d" % nm_id, product_data.to_dict(), ttl=86400)
+                        cached_count += 1
+                logger.info(f"Глобальный pre-fetch завершён: {cached_count}/{len(own_cold)} закешировано")
+
         if not all_product_ids:
             logger.info("Нет активных товаров для обработки — прогон не создаётся")
             # Если был создан run из API (queued), помечаем его завершённым
@@ -1907,24 +1917,8 @@ class RepricerEngine:
                     # Fetch only the missing chunk items in one POST batch.
                     await self._prefetch_missing_prices(chunk_products)
 
-                    # Прогрев каталога собственных товаров (цены уже загружены глобально)
-                    # OOS товарам каталог не нужен (57% = OUT_OF_STOCK → пропускаются).
-                    # Проверяем по prefetched_prices: если seller_price=0, товар нет на складе.
-                    own_cold_ids = [
-                        p.nm_id for p in chunk_products
-                        if self._marketplace(p.account) == "wb"
-                        if cache_get("wb_catalog:%d" % p.nm_id) is None
-                        and (
-                            p.nm_id not in self._prefetched_prices
-                            or getattr(self._prefetched_prices.get(p.nm_id), 'seller_price', 0) > 0
-                        )
-                    ]
-                    if own_cold_ids:
-                        logger.info("Pre-fetch каталога: %d холодных товаров в чанке", len(own_cold_ids))
-                        own_batch = await catalog_parser.parse_batch_ids(own_cold_ids)
-                        for nm_id, data in own_batch.items():
-                            if data is not None:
-                                cache_set("wb_catalog:%d" % nm_id, data.to_dict(), ttl=600)
+                    # Per-chunk pre-fetch убран: глобальный pre-fetch уже прогрел кеш
+                    pass
 
                 # === ФАЗА 1: вычисляем решения параллельно (50 товаров одновременно) ===
                 pending_updates = {}  # (marketplace, account_id) -> {account, updates}
