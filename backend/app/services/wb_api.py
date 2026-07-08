@@ -268,9 +268,31 @@ class WBAPIClient:
                         raise WBAPIError(f"API ?????? ??? {response.status_code}: {response.text}")
 
                 except httpx.TimeoutException:
-                    raise WBAPIError("Timeout ??? ??????? ? WB API")
+                    if retry_count >= max_retries:
+                        raise WBAPIError("Timeout при запросе к WB API")
+                    logger.warning(
+                        "WB API timeout, waiting %.1fs before retry %s/%s",
+                        transient_delay,
+                        retry_count + 1,
+                        max_retries,
+                    )
+                    await asyncio.sleep(transient_delay)
+                    transient_delay = min(transient_delay * 2, 16.0)
+                    retry_count += 1
+                    continue
                 except httpx.RequestError as e:
-                    raise WBAPIError(f"?????? ?????????? ? WB API: {e}")
+                    if retry_count >= max_retries:
+                        raise WBAPIError(f"Ошибка соединения с WB API: {e}")
+                    logger.warning(
+                        "WB API connection error (%s), retry %s/%s",
+                        e,
+                        retry_count + 1,
+                        max_retries,
+                    )
+                    await asyncio.sleep(transient_delay)
+                    transient_delay = min(transient_delay * 2, 16.0)
+                    retry_count += 1
+                    continue
 
         # ???? ????? ?? ????? - ?????? ????????? ????? ???????
         raise RateLimitError(f"Rate limit (429) ????? {max_retries} ???????")

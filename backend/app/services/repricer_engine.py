@@ -391,27 +391,36 @@ class RepricerEngine:
                 return
             if is_token_expired(account.wb_api_token):
                 return
-            try:
-                fetched = 0
-                async with create_wb_client(account.wb_api_token) as client:
-                    offset = 0
-                    while True:
+            fetched = 0
+            async with create_wb_client(account.wb_api_token) as client:
+                offset = 0
+                consecutive_failures = 0
+                while True:
+                    try:
                         prices = await client.get_prices(nm_ids=None, limit=1000, offset=offset)
                         for p in prices:
                             self._prefetched_prices[p.nm_id] = p
                             fetched += 1
+                        consecutive_failures = 0
                         if len(prices) < 1000:
                             break
                         offset += 1000
+                    except Exception as e:
+                        consecutive_failures += 1
+                        if consecutive_failures >= 3:
+                            logger.warning(
+                                "Partial price prefetch for %s: retained %d items; "
+                                "giving up after 3 consecutive failures at offset %d: %s",
+                                account.name, fetched, offset, e,
+                            )
+                            break
+                        logger.warning(
+                            "Price prefetch for %s: error at offset %d (attempt %d/3), retrying: %s",
+                            account.name, offset, consecutive_failures, e,
+                        )
+                        await asyncio.sleep(2.0 * consecutive_failures)
+            if fetched:
                 logger.info("Pre-fetch цен (global): %d товаров для аккаунта %s", fetched, account.name)
-            except Exception as e:
-                logger.warning(
-                    "Partial price prefetch for %s: retained %d items; "
-                    "missing items will use batch fallback: %s",
-                    account.name,
-                    fetched,
-                    e,
-                )
 
         await asyncio.gather(*[_fetch_account(a) for a in accounts])
 
@@ -443,29 +452,36 @@ class RepricerEngine:
         async def _fetch_batch(token: str, entry: dict) -> None:
             requested = list(dict.fromkeys(entry["nm_ids"]))
             account = entry["account"]
-            try:
-                async with create_wb_client(token) as client:
-                    prices = await client.get_prices_by_articles(requested)
-                returned = set()
-                for price in prices:
-                    self._prefetched_prices[price.nm_id] = price
-                    returned.add(price.nm_id)
-                missing = set(requested) - returned
-                self._price_fetch_failed.update(missing)
-                logger.info(
-                    "Price batch fallback for %s: %d/%d",
-                    account.name,
-                    len(returned),
-                    len(requested),
-                )
-            except Exception as e:
-                self._price_fetch_failed.update(requested)
-                logger.warning(
-                    "Price batch fallback failed for %s (%d items): %s",
-                    account.name,
-                    len(requested),
-                    e,
-                )
+            for attempt in range(3):
+                try:
+                    async with create_wb_client(token) as client:
+                        prices = await client.get_prices_by_articles(requested)
+                    returned = set()
+                    for price in prices:
+                        self._prefetched_prices[price.nm_id] = price
+                        returned.add(price.nm_id)
+                    missing = set(requested) - returned
+                    self._price_fetch_failed.update(missing)
+                    logger.info(
+                        "Price batch fallback for %s: %d/%d",
+                        account.name,
+                        len(returned),
+                        len(requested),
+                    )
+                    return
+                except Exception as e:
+                    if attempt < 2:
+                        logger.warning(
+                            "Price batch fallback for %s (%d items): attempt %d/3 failed: %s",
+                            account.name, len(requested), attempt + 1, e,
+                        )
+                        await asyncio.sleep(3.0 * (attempt + 1))
+                    else:
+                        self._price_fetch_failed.update(requested)
+                        logger.warning(
+                            "Price batch fallback failed for %s (%d items) after 3 attempts: %s",
+                            account.name, len(requested), e,
+                        )
 
         await asyncio.gather(
             *[_fetch_batch(token, entry) for token, entry in by_token.items()]
