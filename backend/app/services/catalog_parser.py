@@ -250,8 +250,8 @@ class CatalogParser:
         self,
         nm_ids: list[int],
         chunk_size: int = 100,
-        delay_between_chunks: float = 0.3,
-        concurrency: int = 5,
+        delay_between_chunks: float = 0.05,
+        concurrency: int = 15,
     ) -> Dict[int, Optional[ProductData]]:
         """
         Батчевый парсинг: объединяет nm_ids в чанки по chunk_size и делает
