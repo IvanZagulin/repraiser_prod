@@ -1813,7 +1813,7 @@ class RepricerEngine:
                 batch_results = await catalog_parser.parse_batch_ids(cold_ids)
                 for nm_id, product_data in batch_results.items():
                     if product_data is not None:
-                        cache_set(f"wb_catalog:{nm_id}", product_data.to_dict(), ttl=600)
+                        cache_set(f"wb_catalog:{nm_id}", product_data.to_dict(), ttl=1800)
                 logger.info(f"Pre-fetch завершён: {sum(1 for v in batch_results.values() if v)} / {len(cold_ids)}")
 
             # Глобальный pre-fetch ВСЕХ собственных товаров одним батчем.
@@ -1828,9 +1828,18 @@ class RepricerEngine:
                 cached_count = 0
                 for nm_id, product_data in own_results.items():
                     if product_data is not None:
-                        cache_set("wb_catalog:%d" % nm_id, product_data.to_dict(), ttl=600)
+                        cache_set("wb_catalog:%d" % nm_id, product_data.to_dict(), ttl=1800)
                         cache_set("wb_catalog_last:%d" % nm_id, product_data.to_dict(), ttl=86400)
                         cached_count += 1
+                if cached_count == 0 and len(own_cold) > 10:
+                    logger.warning("Глобальный pre-fetch: 0 успехов, повтор через 10 сек...")
+                    await asyncio.sleep(10)
+                    own_results = await catalog_parser.parse_batch_ids(own_cold)
+                    for nm_id, product_data in own_results.items():
+                        if product_data is not None:
+                            cache_set("wb_catalog:%d" % nm_id, product_data.to_dict(), ttl=1800)
+                            cache_set("wb_catalog_last:%d" % nm_id, product_data.to_dict(), ttl=86400)
+                            cached_count += 1
                 logger.info(f"Глобальный pre-fetch завершён: {cached_count}/{len(own_cold)} закешировано")
 
         if not all_product_ids:
@@ -2118,7 +2127,8 @@ class RepricerEngine:
                 pending = 0
                 for dec in decisions:
                     if "skip_code" in dec and dec["current_data"] is None:
-                        if dec["skip_code"] in ("COOLDOWN", "SKIPPED_INACTIVE", "SKIPPED_QUARANTINE"):
+                        if dec["skip_code"] in ("COOLDOWN", "SKIPPED_INACTIVE", "SKIPPED_QUARANTINE",
+                                                "CATALOG_UNAVAILABLE", "OUT_OF_STOCK"):
                             results["skipped"] += 1
                         else:
                             results["errors"] += 1
