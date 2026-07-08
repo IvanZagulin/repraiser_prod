@@ -196,17 +196,16 @@ class CatalogParser:
         url = self._build_url(nm_id)
         logger.info(f"Парсинг товара nm_id={nm_id}")
 
-        # Прокси-first: пробуем через прокси, fallback на direct
-        data = None
-        for attempt in range(self.max_retries):
-            proxy = await proxy_pool.get_next_proxy()
-            if proxy is None:
-                break
-            data = await self._request_with_proxy(url, proxy)
-            if data is not None:
-                break
+        # Direct-first: быстрый путь через сервер, proxy fallback при бане
+        data = await self._request_direct(url)
         if data is None:
-            data = await self._request_direct(url)
+            for attempt in range(self.max_retries):
+                proxy = await proxy_pool.get_next_proxy()
+                if proxy is None:
+                    break
+                data = await self._request_with_proxy(url, proxy)
+                if data is not None:
+                    break
         if data is None:
             logger.error(f"nm_id={nm_id}: не удалось получить данные ни через прокси, ни напрямую")
             return None
@@ -250,16 +249,16 @@ class CatalogParser:
                 url = self._build_batch_url(chunk)
                 data = None
 
-                # Прокси-first: пробуем через прокси, fallback на direct
-                for _attempt in range(3):
-                    proxy = await proxy_pool.get_next_proxy()
-                    if proxy is None:
-                        break
-                    data = await self._request_with_proxy(url, proxy)
-                    if data is not None:
-                        break
+                # Direct-first: быстрый путь через сервер, proxy fallback при бане
+                data = await self._request_direct(url)
                 if data is None:
-                    data = await self._request_direct(url)
+                    for _attempt in range(3):
+                        proxy = await proxy_pool.get_next_proxy()
+                        if proxy is None:
+                            break
+                        data = await self._request_with_proxy(url, proxy)
+                        if data is not None:
+                            break
 
                 chunk_result: Dict[int, Optional[ProductData]] = {}
                 if data is None:
