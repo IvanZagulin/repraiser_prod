@@ -2211,6 +2211,15 @@ class RepricerEngine:
                     duration_seconds=_duration_ms // 1000,
                 )
 
+            error_pct = (results['errors'] / run.total_products * 100) if run.total_products > 0 else 0
+            if error_pct > 50 and run.total_products > 10 and not dry_run:
+                await telegram_notifier.notify_catalog_parse_errors(
+                    run_id=run.id,
+                    total=run.total_products,
+                    errors=results['errors'],
+                    error_pct=error_pct,
+                )
+
             return run
             
         except Exception as e:

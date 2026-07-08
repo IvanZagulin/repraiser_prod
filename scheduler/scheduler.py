@@ -687,11 +687,15 @@ def setup_scheduler() -> AsyncIOScheduler:
     )
     logger.info("Задача 'repricer_job' зарегистрирована (каждые 5 минут)")
 
-    # Proxy health-check отключён — прокси не используются для каталога
-    # (вызывали массовый бан WB). При необходимости раскомментировать.
-    # scheduler.add_job(health_check_proxies, trigger=IntervalTrigger(minutes=30),
-    #     id="proxy_health_check", name="Proxy Health Check", replace_existing=True)
-    logger.info("Proxy health-check ОТКЛЮЧЁН (прокси не используются)")
+    scheduler.add_job(
+        health_check_proxies,
+        trigger=IntervalTrigger(minutes=30),
+        id="proxy_health_check",
+        name="Proxy Health Check",
+        replace_existing=True,
+        max_instances=1,
+    )
+    logger.info("Задача 'proxy_health_check' зарегистрирована (каждые 30 мин)")
 
     scheduler.add_job(
         catalog_sync_job,
@@ -742,7 +746,12 @@ async def startup():
     logger.info("WB Repricer Scheduler запускается...")
     logger.info("=" * 70)
 
-    logger.info("Proxy pool не инициализируется: прокси отключены для каталога")
+    try:
+        await proxy_pool.initialize()
+        stats = proxy_pool.get_stats()
+        logger.info(f"Proxy pool инициализирован: {stats}")
+    except Exception as e:
+        logger.warning(f"Proxy pool init failed: {e}")
 
     try:
         db = SessionLocal()

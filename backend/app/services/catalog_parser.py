@@ -127,13 +127,13 @@ class CatalogParser:
         return data.get('data', {}).get('products', [])
 
     async def _request_with_proxy(self, url: str, proxy: ProxyConfig) -> Optional[dict]:
-        """Запрос через прокси"""
+        """Запрос через прокси (curl_cffi для обхода TLS fingerprinting)"""
         try:
-            async with httpx.AsyncClient(
-                proxy=proxy.url,  # httpx 0.28+: kwarg переименован proxies→proxy
+            async with AsyncSession(
                 timeout=15,
-                follow_redirects=True,
                 headers=_HEADERS,
+                impersonate="edge101",
+                proxy=proxy.url,
             ) as client:
                 response = await client.get(url)
                 if response.status_code == 200:
@@ -144,16 +144,9 @@ class CatalogParser:
                 else:
                     logger.warning(f"Код {response.status_code} через прокси {proxy}")
                 return None
-        except httpx.TimeoutException:
-            logger.warning(f"Timeout через прокси {proxy}")
-            proxy_pool.mark_as_dead(proxy)
-            return None
-        except httpx.ProxyError as e:
+        except Exception as e:
             logger.warning(f"Ошибка прокси {proxy}: {e}")
             proxy_pool.mark_as_dead(proxy)
-            return None
-        except Exception as e:
-            logger.error(f"Неожиданная ошибка через {proxy}: {e}")
             return None
 
     async def _request_direct(self, url: str) -> Optional[dict]:
@@ -203,8 +196,17 @@ class CatalogParser:
         url = self._build_url(nm_id)
         logger.info(f"Парсинг товара nm_id={nm_id}")
 
-        # Direct-only: прокси отключены для каталога (вызывали массовый бан WB)
-        data = await self._request_direct(url)
+        # Прокси-first: пробуем через прокси, fallback на direct
+        data = None
+        for attempt in range(self.max_retries):
+            proxy = await proxy_pool.get_next_proxy()
+            if proxy is None:
+                break
+            data = await self._request_with_proxy(url, proxy)
+            if data is not None:
+                break
+        if data is None:
+            data = await self._request_direct(url)
         if data is None:
             logger.error(f"nm_id={nm_id}: не удалось получить данные ни через прокси, ни напрямую")
             return None
@@ -248,8 +250,16 @@ class CatalogParser:
                 url = self._build_batch_url(chunk)
                 data = None
 
-                # Direct-only (прокси отключены для каталога)
-                data = await self._request_direct(url)
+                # Прокси-first: пробуем через прокси, fallback на direct
+                for _attempt in range(3):
+                    proxy = await proxy_pool.get_next_proxy()
+                    if proxy is None:
+                        break
+                    data = await self._request_with_proxy(url, proxy)
+                    if data is not None:
+                        break
+                if data is None:
+                    data = await self._request_direct(url)
 
                 chunk_result: Dict[int, Optional[ProductData]] = {}
                 if data is None:

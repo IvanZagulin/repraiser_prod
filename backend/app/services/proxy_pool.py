@@ -3,6 +3,7 @@ import logging
 from typing import Optional, List
 from dataclasses import dataclass
 import httpx
+from curl_cffi.requests import AsyncSession as CurlAsyncSession
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -93,24 +94,14 @@ class ProxyPool:
 
     async def check_proxy(self, proxy: ProxyConfig, timeout: int = 10) -> bool:
         """
-        Проверка работоспособности прокси РЕАЛЬНЫМ HTTP-запросом через него.
-
-        TCP-проверки недостаточно: прокси может принимать TCP-соединение, но не
-        проксировать HTTP/SOCKS — тогда парсинг через него молча падает и уходит
-        в direct, а пул продолжает считать прокси живым. Делаем настоящий GET.
-
-        Args:
-            proxy: Конфигурация прокси
-            timeout: Таймаут проверки в секундах
-
-        Returns:
-            True если через прокси успешно получен HTTP 200
+        Проверка работоспособности прокси через curl_cffi (с TLS impersonate).
         """
         try:
-            async with httpx.AsyncClient(
-                proxy=proxy.url,
+            async with CurlAsyncSession(
                 timeout=timeout,
                 headers={"User-Agent": "Mozilla/5.0"},
+                impersonate="edge101",
+                proxy=proxy.url,
             ) as client:
                 resp = await client.get(self._CHECK_URL)
             if resp.status_code == 200:

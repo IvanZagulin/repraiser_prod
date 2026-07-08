@@ -182,5 +182,24 @@ class TelegramNotifier:
         await self.send_message(text)
 
 
+    async def notify_catalog_parse_errors(
+        self,
+        run_id: int,
+        total: int,
+        errors: int,
+        error_pct: float,
+    ):
+        """Уведомление о массовых ошибках парсинга каталога WB"""
+        text = (
+            f"\U0001f534 <b>Массовые ошибки парсинга каталога WB</b>\n\n"
+            f"Run ID: <b>{run_id}</b>\n"
+            f"Всего товаров: {total}\n"
+            f"Ошибок парсинга: {errors} ({error_pct:.0f}%)\n\n"
+            f"Вероятные причины: бан IP WB, мёртвые прокси, смена API.\n"
+            f"Проверьте логи celery-воркера."
+        )
+        await self.send_message(text)
+
+
 # Singleton instance
 telegram_notifier = TelegramNotifier()
