@@ -1919,9 +1919,12 @@ class RepricerEngine:
                 run.error_count = results['errors']
                 self.db.commit()
 
-            # Загружаем цены ВСЕХ аккаунтов один раз до цикла (не повторять per-chunk)
+            # Загружаем цены: для маленьких прогонов точечно, для больших — все разом
             if not dry_run:
-                await self._prefetch_all_prices_once()
+                if total_count <= 500:
+                    logger.info("Малый прогон (%d товаров): точечный pre-fetch цен", total_count)
+                else:
+                    await self._prefetch_all_prices_once()
 
             total_chunks = (total_count + CHUNK_SIZE - 1) // CHUNK_SIZE
             # Накопитель для closed-loop: ВСЕ обновлённые competitor-товары.
