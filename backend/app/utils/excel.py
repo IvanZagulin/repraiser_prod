@@ -797,9 +797,9 @@ class ExcelImporter:
 
         Колонки (совпадают с шаблоном generate_strategy_template):
         A  seller_sku *
-        B  strategy *           (rrp | competitor)
+        B  strategy             (rrp | competitor; optional when disabling)
         C  is_active             (да/нет/true/false)
-        D  min_price *
+        D  min_price            (optional when only disabling an existing strategy)
         E  max_price
         F  rrp_price
         G  rrp_tolerance
@@ -884,13 +884,10 @@ class ExcelImporter:
 
                 if not cfg["seller_sku"]:
                     raise ExcelImportError(f"Строка {row_idx}: seller_sku обязателен")
-                if not cfg["strategy"]:
-                    raise ExcelImportError(f"Строка {row_idx}: strategy обязателен")
-                if cfg["strategy"] not in ("rrp", "competitor"):
+                if not cfg["strategy"] and cfg.get("is_active", True):
+                    raise ExcelImportError(f"Строка {row_idx}: strategy обязателен для активной стратегии")
+                if cfg["strategy"] and cfg["strategy"] not in ("rrp", "competitor"):
                     raise ExcelImportError(f"Строка {row_idx}: strategy должен быть 'rrp' или 'competitor'")
-                if cfg["min_price"] is None:
-                    raise ExcelImportError(f"Строка {row_idx}: min_price обязателен")
-
                 # equal — синоним: «как у конкурента». БД хранит как above + 0.
                 if cfg.get("competitor_offset_direction") == "equal":
                     cfg["competitor_offset_direction"] = "above"

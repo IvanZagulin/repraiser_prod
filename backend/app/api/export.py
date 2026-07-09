@@ -559,6 +559,20 @@ async def import_strategy(
                     setattr(existing_config, key, value)
             results['updated'] += 1
         else:
+            if not config_data.get('strategy'):
+                if config_data.get('is_active', True):
+                    results['errors'].append(
+                        f"Товар {config_data['seller_sku']}: strategy обязателен для новой активной стратегии"
+                    )
+                    continue
+                config_data['strategy'] = 'rrp'
+            if config_data.get('min_price') is None:
+                if config_data.get('is_active', True):
+                    results['errors'].append(
+                        f"Товар {config_data['seller_sku']}: min_price обязателен для новой активной стратегии"
+                    )
+                    continue
+                config_data['min_price'] = 0
             config = ProductConfig(
                 product_id=product.id,
                 **{k: v for k, v in config_data.items() if k not in ('seller_sku', 'account_id', 'account_name_or_id')}
