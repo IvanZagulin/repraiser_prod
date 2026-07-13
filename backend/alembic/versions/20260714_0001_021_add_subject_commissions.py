@@ -38,27 +38,33 @@ def upgrade():
         ["subject_name"],
         unique=True,
     )
-    op.execute("""
+    op.execute(sa.text("""
         INSERT INTO app_settings (key, value, user_id, updated_at)
         SELECT
-            'brand_min_margin_rules',
-            '[{"brand":"Просвещение","min_margin_pct":20.0}]',
+            :key,
+            :value,
             NULL,
             NOW()
         WHERE NOT EXISTS (
             SELECT 1 FROM app_settings
-            WHERE key = 'brand_min_margin_rules' AND user_id IS NULL
+            WHERE key = :key AND user_id IS NULL
         )
-    """)
+    """).bindparams(
+        key="brand_min_margin_rules",
+        value='[{"brand":"Просвещение","min_margin_pct":20.0}]',
+    ))
 
 
 def downgrade():
-    op.execute("""
+    op.execute(sa.text("""
         DELETE FROM app_settings
-        WHERE key = 'brand_min_margin_rules'
+        WHERE key = :key
           AND user_id IS NULL
-          AND value = '[{"brand":"Просвещение","min_margin_pct":20.0}]'
-    """)
+          AND value = :value
+    """).bindparams(
+        key="brand_min_margin_rules",
+        value='[{"brand":"Просвещение","min_margin_pct":20.0}]',
+    ))
 
     op.drop_index(op.f("ix_wb_subject_commissions_subject_name"), table_name="wb_subject_commissions")
     op.drop_index(op.f("ix_wb_subject_commissions_id"), table_name="wb_subject_commissions")
