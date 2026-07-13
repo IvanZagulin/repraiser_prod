@@ -98,6 +98,7 @@ def sync_wb_catalog_task(self, account_id: int):
                 vendor_code=vendor_code,
                 image_url=info.get("image_url"),   # первое фото с WB Content API
                 name=info.get("name") or None,
+                subject_name=info.get("subject_name") or None,
                 synced_at=now,
             ))
 
@@ -111,6 +112,7 @@ def sync_wb_catalog_task(self, account_id: int):
             updated = db.execute(sa_text("""
                 UPDATE products p
                 SET image_url = COALESCE(p.image_url, c.image_url),
+                    subject_name = COALESCE(c.subject_name, p.subject_name),
                     name = CASE
                         WHEN (p.name IS NULL OR p.name LIKE 'Товар %' OR p.name = p.seller_sku) AND c.name IS NOT NULL AND c.name != ''
                         THEN c.name
@@ -119,13 +121,19 @@ def sync_wb_catalog_task(self, account_id: int):
                 FROM wb_catalog c
                 WHERE p.account_id = c.account_id
                   AND p.nm_id = c.nm_id
-                  AND (p.image_url IS NULL OR p.name IS NULL OR p.name LIKE 'Товар %' OR p.name = p.seller_sku)
+                  AND (
+                    p.image_url IS NULL
+                    OR p.subject_name IS NULL
+                    OR p.name IS NULL
+                    OR p.name LIKE 'Товар %'
+                    OR p.name = p.seller_sku
+                  )
             """)).rowcount
             db.commit()
             if updated:
                 logger.info(f"[catalog.sync] account_id={account_id}: обновлено image_url/name у {updated} товаров")
         except Exception as e:
-            logger.warning(f"[catalog.sync] backfill image_url/name failed: {e}")
+            logger.warning(f"[catalog.sync] backfill image_url/name/subject failed: {e}")
             db.rollback()
 
         # Targeted-backfill: дозапрашиваем по nm_id товары, у которых image_url всё ещё пустой.
@@ -135,7 +143,9 @@ def sync_wb_catalog_task(self, account_id: int):
             from sqlalchemy import text as sa_text
             missing_rows = db.execute(sa_text("""
                 SELECT p.id, p.nm_id FROM products p
-                WHERE p.account_id = :acc AND p.image_url IS NULL AND p.nm_id IS NOT NULL
+                WHERE p.account_id = :acc
+                  AND (p.image_url IS NULL OR p.subject_name IS NULL)
+                  AND p.nm_id IS NOT NULL
             """), {"acc": account_id}).fetchall()
 
             if missing_rows:
@@ -156,22 +166,31 @@ def sync_wb_catalog_task(self, account_id: int):
                     if not info:
                         continue
                     image_url = info.get("image_url")
-                    if not image_url:
+                    subject_name = info.get("subject_name")
+                    if not image_url and not subject_name:
                         continue
                     # Обновляем product и wb_catalog в одной транзакции
-                    db.execute(sa_text(
-                        "UPDATE products SET image_url = :url WHERE id = :id"
-                    ), {"url": image_url, "id": product_id})
                     db.execute(sa_text("""
-                        INSERT INTO wb_catalog (account_id, nm_id, vendor_code, image_url, synced_at)
-                        VALUES (:acc, :nm_id, :vc, :url, NOW())
+                        UPDATE products
+                        SET image_url = COALESCE(image_url, :url),
+                            subject_name = COALESCE(:subject_name, subject_name)
+                        WHERE id = :id
+                    """), {"url": image_url, "subject_name": subject_name, "id": product_id})
+                    db.execute(sa_text("""
+                        INSERT INTO wb_catalog (account_id, nm_id, vendor_code, image_url, subject_name, synced_at)
+                        VALUES (:acc, :nm_id, :vc, :url, :subject_name, NOW())
                         ON CONFLICT (account_id, vendor_code)
-                        DO UPDATE SET nm_id = :nm_id, image_url = :url, synced_at = NOW()
+                        DO UPDATE SET
+                            nm_id = :nm_id,
+                            image_url = COALESCE(wb_catalog.image_url, :url),
+                            subject_name = COALESCE(:subject_name, wb_catalog.subject_name),
+                            synced_at = NOW()
                     """), {
                         "acc": account_id,
                         "nm_id": nm_id,
                         "vc": info.get("seller_sku", str(nm_id)),
                         "url": image_url,
+                        "subject_name": subject_name,
                     })
                     targeted_updated += 1
 
@@ -215,7 +234,7 @@ def sync_wb_catalog_task(self, account_id: int):
 def sync_all_wb_catalogs_task():
     """
     Запускает sync_wb_catalog_task для всех активных аккаунтов.
-    Вызывается планировщиком раз в неделю.
+    Вызывается планировщиком раз в сутки.
     """
     from app.models.account import Account
 

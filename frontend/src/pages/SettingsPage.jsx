@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Save, Wallet, TrendingUp, User, KeyRound, Eye, EyeOff } from 'lucide-react';
+import { Save, Wallet, TrendingUp, User, KeyRound, Eye, EyeOff, CheckCircle, Plus, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getSettings, updateSettings, changePasswordSendCode, changePasswordConfirm } from '../api/client';
 import { useAuthStore } from '../store';
@@ -214,6 +214,9 @@ export default function SettingsPage() {
   const [acquiringType,   setAcquiringType]   = useState('pct');
   const [acquiringValue,  setAcquiringValue]  = useState(0.0);
   const [minMarginPct,    setMinMarginPct]    = useState(0.0);
+  const [brandMinMarginRules, setBrandMinMarginRules] = useState([
+    { brand: 'Просвещение', min_margin_pct: 20 },
+  ]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -233,6 +236,11 @@ export default function SettingsPage() {
       setAcquiringType(d.acquiring_type   || 'pct');
       setAcquiringValue(d.acquiring_value  ?? 0);
       setMinMarginPct(d.min_margin_pct ?? 0);
+      setBrandMinMarginRules(
+        Array.isArray(d.brand_min_margin_rules)
+          ? d.brand_min_margin_rules
+          : [{ brand: 'Просвещение', min_margin_pct: 20 }]
+      );
     } catch {
       toast.error('Ошибка загрузки настроек');
     } finally {
@@ -252,6 +260,12 @@ export default function SettingsPage() {
         acquiring_type:   acquiringType,
         acquiring_value:  acquiringValue,
         min_margin_pct:   minMarginPct,
+        brand_min_margin_rules: brandMinMarginRules
+          .map(rule => ({
+            brand: String(rule.brand || '').trim(),
+            min_margin_pct: Number(rule.min_margin_pct) || 0,
+          }))
+          .filter(rule => rule.brand),
       });
       toast.success('Настройки сохранены');
     } catch {
@@ -275,6 +289,20 @@ export default function SettingsPage() {
 
   const exampleFinal  = 23000;
   const exampleWallet = Math.round(exampleFinal * (1 - walletPct / 100));
+
+  const updateBrandRule = (index, patch) => {
+    setBrandMinMarginRules(rules =>
+      rules.map((rule, i) => (i === index ? { ...rule, ...patch } : rule))
+    );
+  };
+
+  const addBrandRule = () => {
+    setBrandMinMarginRules(rules => [...rules, { brand: '', min_margin_pct: 20 }]);
+  };
+
+  const removeBrandRule = (index) => {
+    setBrandMinMarginRules(rules => rules.filter((_, i) => i !== index));
+  };
 
   if (loading) {
     return (
@@ -363,6 +391,54 @@ export default function SettingsPage() {
                 Репрайсер не опустит цену ниже уровня при котором маржа меньше этого порога.
                 0 = выключено.
               </p>
+              <div className="mt-5 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-foreground">Индивидуальная маржа по брендам</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Правило бренда заменяет общую минимальную маржу.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addBrandRule}
+                    className="btn btn-secondary text-sm inline-flex items-center gap-2"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Добавить
+                  </button>
+                </div>
+
+                {brandMinMarginRules.map((rule, index) => (
+                  <div key={index} className="grid grid-cols-[1fr_96px_36px] gap-2 items-center">
+                    <input
+                      type="text"
+                      value={rule.brand}
+                      onChange={e => updateBrandRule(index, { brand: e.target.value })}
+                      className="input text-sm"
+                      placeholder="Бренд"
+                    />
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.5"
+                      value={rule.min_margin_pct}
+                      onChange={e => updateBrandRule(index, { min_margin_pct: parseFloat(e.target.value) || 0 })}
+                      className="input text-sm"
+                      placeholder="%"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeBrandRule(index)}
+                      className="btn btn-secondary p-2"
+                      title="Удалить правило"
+                      aria-label="Удалить правило"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 

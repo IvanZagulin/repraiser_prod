@@ -420,7 +420,7 @@ async def health_check_proxies():
 async def catalog_sync_job():
     """Ежедневно в 02:00 UTC (05:00 МСК): синхронизирует каталог карточек WB для всех аккаунтов."""
     logger.info("=" * 70)
-    logger.info("Планировщик: еженедельная синхронизация каталога WB")
+    logger.info("Планировщик: ежедневная синхронизация каталога WB")
     try:
         from app.tasks.catalog_sync import sync_all_wb_catalogs_task
         sync_all_wb_catalogs_task.delay()

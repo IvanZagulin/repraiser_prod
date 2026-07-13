@@ -16,6 +16,7 @@ from app.models.product_group import ProductGroup, ProductGroupMembership
 from app.models.competitor_alert import CompetitorAlert
 from app.models.pricing_rule import PricingRule
 from app.models.wb_catalog import WBCatalog
+from app.models.wb_subject_commission import WBSubjectCommission
 from app.models.lead import Lead
 
 __all__ = [
@@ -38,5 +39,6 @@ __all__ = [
     "CompetitorAlert",
     "PricingRule",
     "WBCatalog",
+    "WBSubjectCommission",
     "Lead",
 ]

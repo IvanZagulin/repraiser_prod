@@ -516,6 +516,7 @@ async def import_strategy(
                     seller_sku=catalog_entry.vendor_code,
                     name=catalog_entry.name if catalog_entry.name and catalog_entry.name != catalog_entry.vendor_code else None,
                     image_url=catalog_entry.image_url,
+                    subject_name=catalog_entry.subject_name,
                 )
                 db.add(new_product)
                 db.flush()  # get id without commit

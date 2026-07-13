@@ -1,3 +1,4 @@
+import json
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
@@ -14,6 +15,12 @@ router = APIRouter()
 limiter = Limiter(key_func=get_real_ip)
 
 VALID_INTERVALS = [1, 5, 10, 15, 20, 30, 60, 120, 180, 360, 720, 1440]
+DEFAULT_BRAND_MIN_MARGIN_RULES = [{"brand": "Просвещение", "min_margin_pct": 20.0}]
+
+
+class BrandMinMarginRule(BaseModel):
+    brand: str = Field(..., min_length=1, max_length=255)
+    min_margin_pct: float = Field(..., ge=0.0, le=1000.0)
 
 
 class SettingsResponse(BaseModel):
@@ -26,6 +33,7 @@ class SettingsResponse(BaseModel):
     acquiring_type: str
     acquiring_value: float
     min_margin_pct: float
+    brand_min_margin_rules: list[BrandMinMarginRule] = Field(default_factory=list)
 
 
 class SettingsUpdate(BaseModel):
@@ -38,6 +46,7 @@ class SettingsUpdate(BaseModel):
     acquiring_type: str              = Field("pct", pattern="^(pct|rub)$")
     acquiring_value: float           = Field(0.0, ge=0.0, le=100.0)
     min_margin_pct: float            = Field(0.0, ge=0.0, le=1000.0)
+    brand_min_margin_rules: list[BrandMinMarginRule] = Field(default_factory=list)
 
 
 # ─── helpers (также экспортируются для repricer_engine) ───────────────────────
@@ -70,6 +79,35 @@ def _set_setting(db: Session, key: str, value: str, user_id: Optional[int] = Non
         db.commit()
 
 
+def _get_brand_min_margin_rules(db: Session, user_id: Optional[int]) -> list[BrandMinMarginRule]:
+    raw = _get_setting(
+        db,
+        "brand_min_margin_rules",
+        json.dumps(DEFAULT_BRAND_MIN_MARGIN_RULES, ensure_ascii=False),
+        user_id,
+    )
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        parsed = DEFAULT_BRAND_MIN_MARGIN_RULES
+    if not isinstance(parsed, list):
+        parsed = DEFAULT_BRAND_MIN_MARGIN_RULES
+
+    rules = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        brand = str(item.get("brand") or "").strip()
+        pct = item.get("min_margin_pct")
+        if not brand or pct is None:
+            continue
+        try:
+            rules.append(BrandMinMarginRule(brand=brand, min_margin_pct=float(pct)))
+        except Exception:
+            continue
+    return rules
+
+
 # ─── endpoints ────────────────────────────────────────────────────────────────
 
 @router.get("", response_model=SettingsResponse)
@@ -90,6 +128,7 @@ async def get_settings(
         acquiring_type=_get_setting(db, "acquiring_type", "pct", uid),
         acquiring_value=float(_get_setting(db, "acquiring_value", "0.0", uid)),
         min_margin_pct=float(_get_setting(db, "min_margin_pct", "0.0", uid)),
+        brand_min_margin_rules=_get_brand_min_margin_rules(db, uid),
     )
 
 
@@ -112,6 +151,16 @@ async def update_settings(
     _set_setting(db, "acquiring_type",             data.acquiring_type,                 uid, auto_commit=False)
     _set_setting(db, "acquiring_value",            str(data.acquiring_value),           uid, auto_commit=False)
     _set_setting(db, "min_margin_pct",             str(data.min_margin_pct),            uid, auto_commit=False)
+    _set_setting(
+        db,
+        "brand_min_margin_rules",
+        json.dumps([
+            (rule.model_dump() if hasattr(rule, "model_dump") else rule.dict())
+            for rule in data.brand_min_margin_rules
+        ], ensure_ascii=False),
+        uid,
+        auto_commit=False,
+    )
     db.commit()
     return SettingsResponse(
         repricer_interval_minutes=data.repricer_interval_minutes or int(_get_setting(db, "repricer_interval_minutes", "60", uid)),
@@ -123,4 +172,5 @@ async def update_settings(
         acquiring_type=data.acquiring_type,
         acquiring_value=data.acquiring_value,
         min_margin_pct=data.min_margin_pct,
+        brand_min_margin_rules=data.brand_min_margin_rules,
     )

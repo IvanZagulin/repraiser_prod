@@ -20,6 +20,7 @@ class WBCatalog(Base):
     vendor_code = Column(String(255), nullable=False)
     image_url   = Column(String(512), nullable=True)   # первое фото из WB Content API
     name        = Column(String(512), nullable=True)   # название карточки из WB Content API
+    subject_name = Column(String(255), nullable=True)  # предмет из WB Content API
     synced_at   = Column(DateTime, default=_utcnow, nullable=False)
 
     __table_args__ = (

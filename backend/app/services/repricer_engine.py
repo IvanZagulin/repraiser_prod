@@ -5,13 +5,13 @@ import time
 from types import SimpleNamespace
 from typing import Optional, Dict, List, Tuple
 from decimal import Decimal, ROUND_UP
-from datetime import datetime, timezone, timedelta, time as dt_time
+from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select
 
 from app.models import (
     Product, ProductConfig, Account, PriceSnapshot,
-    RepricerRun, PriceChange
+    RepricerRun, PriceChange, WBSubjectCommission
 )
 from app.models.app_setting import AppSetting
 from app.services import (
@@ -101,12 +101,16 @@ class RepricerEngine:
             "commission_type", "commission_value",
             "logistics_type", "logistics_value",
             "acquiring_type", "acquiring_value",
+            "brand_min_margin_rules",
         ]
         result: Dict = {
             "min_margin_pct": "0.0", "wb_wallet_discount_pct": "0",
             "commission_type": "pct", "commission_value": "0.0",
             "logistics_type": "rub", "logistics_value": "0.0",
             "acquiring_type": "pct", "acquiring_value": "0.0",
+            "brand_min_margin_rules": json.dumps([
+                {"brand": "Просвещение", "min_margin_pct": 20}
+            ], ensure_ascii=False),
         }
         # Global defaults (user_id=None)
         for row in self.db.query(AppSetting).filter(
@@ -119,7 +123,89 @@ class RepricerEngine:
                 AppSetting.key.in_(keys), AppSetting.user_id == self.user_id
             ).all():
                 result[row.key] = row.value
+        result["brand_min_margin_rules_map"] = self._parse_brand_min_margin_rules(
+            result.get("brand_min_margin_rules")
+        )
+        result["subject_commissions"] = {}
+        try:
+            for row in self.db.query(WBSubjectCommission).all():
+                key = self._normalize_text(row.subject_name)
+                if key:
+                    result["subject_commissions"][key] = str(row.commission_pct)
+        except Exception as e:
+            logger.debug("WB subject commissions load skipped: %s", e)
         return result
+
+    @staticmethod
+    def _normalize_text(value) -> str:
+        return " ".join(str(value or "").strip().casefold().replace("ё", "е").split())
+
+    def _parse_brand_min_margin_rules(self, raw) -> Dict[str, Decimal]:
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            logger.warning("Invalid brand_min_margin_rules setting: %r", raw)
+            return {}
+
+        rules: Dict[str, Decimal] = {}
+        if isinstance(parsed, dict):
+            iterable = (
+                {"brand": brand, "min_margin_pct": pct}
+                for brand, pct in parsed.items()
+            )
+        elif isinstance(parsed, list):
+            iterable = parsed
+        else:
+            return {}
+
+        for item in iterable:
+            if not isinstance(item, dict):
+                continue
+            brand_key = self._normalize_text(item.get("brand"))
+            pct = item.get("min_margin_pct")
+            if not brand_key or pct is None:
+                continue
+            try:
+                rules[brand_key] = Decimal(str(pct))
+            except Exception:
+                continue
+        return rules
+
+    def _effective_min_margin_pct(self, config: ProductConfig, default_pct: Decimal) -> Decimal:
+        product = getattr(config, "product", None)
+        brand_key = self._normalize_text(getattr(product, "brand", None))
+        if not brand_key:
+            return default_pct
+        rules = (self._user_settings or {}).get("brand_min_margin_rules_map") or {}
+        for rule_brand, pct in rules.items():
+            if rule_brand == brand_key or rule_brand in brand_key or brand_key in rule_brand:
+                return Decimal(str(pct))
+        return default_pct
+
+    def _effective_fee_items(self, config: ProductConfig, settings_map: Dict) -> List[Tuple[str, Decimal]]:
+        commission_type = settings_map.get("commission_type", "pct")
+        commission_value = Decimal(str(settings_map.get("commission_value", "0")))
+
+        product = getattr(config, "product", None)
+        subject_key = self._normalize_text(getattr(product, "subject_name", None))
+        subject_commissions = settings_map.get("subject_commissions") or {}
+        if subject_key and subject_key in subject_commissions:
+            commission_type = "pct"
+            commission_value = Decimal(str(subject_commissions[subject_key]))
+
+        return [
+            (commission_type, commission_value),
+            (
+                settings_map.get("logistics_type", "rub"),
+                Decimal(str(settings_map.get("logistics_value", "0"))),
+            ),
+            (
+                settings_map.get("acquiring_type", "pct"),
+                Decimal(str(settings_map.get("acquiring_value", "0"))),
+            ),
+        ]
 
     def _round_up(self, value: Decimal) -> int:
         """
@@ -155,9 +241,6 @@ class RepricerEngine:
     # cold-start: товар без истории осцилляции тоже может перелететь коридор).
     _CLOSED_LOOP_ENABLED = True
     _CLOSED_LOOP_SETTLE_SEC = 20
-    _COMPETITOR_ABOVE_NIGHT_START_MSK = "00:00"
-    _COMPETITOR_ABOVE_NIGHT_END_MSK = "06:00"
-    _COMPETITOR_ABOVE_MAX_NIGHT_DOWN_CORRECTIONS = 2
 
     def _competitor_target_final(self, config, competitor_price: Decimal) -> Decimal:
         """Return target final buyer price for competitor strategy."""
@@ -173,103 +256,6 @@ class RepricerEngine:
         if offset_direction == 'above':
             return competitor_price * (1 + offset_value / 100)
         return competitor_price * (1 - offset_value / 100)
-
-    def _parse_hhmm(self, value: str) -> dt_time:
-        hour, minute = (int(part) for part in value.split(":", 1))
-        return dt_time(hour=hour, minute=minute)
-
-    def _competitor_above_night_bounds_utc(
-        self,
-        now_utc: Optional[datetime] = None,
-    ) -> Tuple[datetime, datetime]:
-        """Return current competitor-above night window bounds as naive UTC."""
-        now_utc = now_utc or datetime.now(timezone.utc)
-        if now_utc.tzinfo is None:
-            now_utc = now_utc.replace(tzinfo=timezone.utc)
-        msk_tz = timezone(timedelta(hours=3))
-        now_msk = now_utc.astimezone(msk_tz)
-        start_t = self._parse_hhmm(self._COMPETITOR_ABOVE_NIGHT_START_MSK)
-        end_t = self._parse_hhmm(self._COMPETITOR_ABOVE_NIGHT_END_MSK)
-
-        if start_t <= end_t:
-            start_date = now_msk.date()
-            if now_msk.time() < start_t:
-                start_date -= timedelta(days=1)
-            start_msk = datetime.combine(start_date, start_t, tzinfo=msk_tz)
-            end_msk = datetime.combine(start_date, end_t, tzinfo=msk_tz)
-            if end_msk <= start_msk:
-                end_msk += timedelta(days=1)
-        else:
-            if now_msk.time() >= start_t:
-                start_date = now_msk.date()
-            else:
-                start_date = now_msk.date() - timedelta(days=1)
-            start_msk = datetime.combine(start_date, start_t, tzinfo=msk_tz)
-            end_msk = datetime.combine(start_date + timedelta(days=1), end_t, tzinfo=msk_tz)
-
-        return (
-            start_msk.astimezone(timezone.utc).replace(tzinfo=None),
-            end_msk.astimezone(timezone.utc).replace(tzinfo=None),
-        )
-
-    def _is_competitor_above_night_window(self) -> bool:
-        now_utc = datetime.now(timezone.utc)
-        start_utc, end_utc = self._competitor_above_night_bounds_utc(now_utc)
-        now_naive = now_utc.replace(tzinfo=None)
-        return start_utc <= now_naive < end_utc
-
-    def _night_down_corrections_count(self, product_id: Optional[int]) -> int:
-        if not product_id:
-            return 0
-        try:
-            start_utc, _end_utc = self._competitor_above_night_bounds_utc()
-            return self.db.query(PriceChange).filter(
-                PriceChange.product_id == product_id,
-                PriceChange.reason_code.in_(["UPDATED", "CORRECTED"]),
-                PriceChange.changed_at >= start_utc,
-                PriceChange.new_seller_price.isnot(None),
-                PriceChange.old_seller_price.isnot(None),
-                PriceChange.new_seller_price < PriceChange.old_seller_price,
-            ).count()
-        except Exception as e:
-            logger.debug("Night down-correction count failed for product_id=%s: %s", product_id, e)
-            return 0
-
-    def _should_hold_competitor_above_price(
-        self,
-        product: Optional[Product],
-        config: ProductConfig,
-        actual_final: Decimal,
-        target_final: Decimal,
-        new_seller: Decimal,
-        corrected_seller: Decimal,
-    ) -> Tuple[bool, str]:
-        """For competitor 'above', keep prices above target during the day.
-
-        At night we allow a small number of downward attempts to approach the
-        target. This prevents endless SPP oscillation while still probing WB
-        when buyer traffic is lower.
-        """
-        if getattr(config, "competitor_offset_direction", None) != "above":
-            return False, ""
-        if actual_final <= target_final or corrected_seller >= new_seller:
-            return False, ""
-
-        product_id = getattr(product, "id", None)
-        if not self._is_competitor_above_night_window():
-            return True, (
-                f"Competitor above: финальная {actual_final}₽ уже выше цели "
-                f"{target_final:.2f}₽; днём держим выше конкурента"
-            )
-
-        attempts = self._night_down_corrections_count(product_id)
-        if attempts >= self._COMPETITOR_ABOVE_MAX_NIGHT_DOWN_CORRECTIONS:
-            return True, (
-                f"Competitor above: ночные попытки снижения исчерпаны "
-                f"({attempts}/{self._COMPETITOR_ABOVE_MAX_NIGHT_DOWN_CORRECTIONS}); "
-                f"держим {actual_final}₽ выше цели {target_final:.2f}₽"
-            )
-        return False, ""
 
     def _has_rrp_target(self, config, spp: Decimal) -> bool:
         seller_price_direct, rrp = self._resolve_rrp(config, spp)
@@ -821,17 +807,6 @@ class RepricerEngine:
             # Обратный расчет цены продавца через эффективный СПП.
             try:
                 new_seller_price = self._calculate_seller_price_from_final(target_final, calc_spp, seller_discount)
-                current_seller = current_data.get('seller_price') or Decimal(0)
-                hold_above, hold_msg = self._should_hold_competitor_above_price(
-                    product,
-                    config,
-                    current_final,
-                    target_final,
-                    Decimal(str(current_seller)),
-                    new_seller_price,
-                )
-                if hold_above:
-                    return None, "NO_CHANGE", hold_msg, competitor_price, winning_nm_id
 
                 reason_msg = (
                     f"Competitor ({rule}, {move}): конкурент nm_id={winning_nm_id} цена={competitor_price}₽, "
@@ -885,6 +860,7 @@ class RepricerEngine:
         # Все расчёты в Decimal для точности финансовой математики
         s = self._user_settings or {}
         min_margin_pct = Decimal(s.get("min_margin_pct", "0"))
+        min_margin_pct = self._effective_min_margin_pct(config, min_margin_pct)
 
         # Минимальный порог себестоимости: 1 руб.
         # При cost_price < 1 деление даёт некорректно огромную маржу.
@@ -893,23 +869,12 @@ class RepricerEngine:
         if min_margin_pct > 0 and config.product and config.product.cost_price:
             cost_price = Decimal(str(config.product.cost_price))
             if cost_price >= _COST_PRICE_MIN:
-                commission_type  = s.get("commission_type",  "pct")
-                commission_value = Decimal(s.get("commission_value", "0"))
-                logistics_type   = s.get("logistics_type",   "rub")
-                logistics_value  = Decimal(s.get("logistics_value",  "0"))
-                acquiring_type   = s.get("acquiring_type",   "pct")
-                acquiring_value  = Decimal(s.get("acquiring_value",  "0"))
-
                 sp = Decimal(str(new_price))
                 # Применяем скидку продавца: реальная выручка = seller_price * (1 - discount/100)
                 discount_factor = (1 - seller_discount / 100) if seller_discount > 0 else Decimal(1)
                 eff_sp = sp * discount_factor
                 fees = Decimal("0")
-                fee_items = [
-                    (commission_type, commission_value),
-                    (logistics_type,  logistics_value),
-                    (acquiring_type,  acquiring_value),
-                ]
+                fee_items = self._effective_fee_items(config, s)
                 for ftype, fval in fee_items:
                     fees += eff_sp * fval / 100 if ftype == "pct" else fval
 
@@ -1666,17 +1631,6 @@ class RepricerEngine:
                     "Closed-loop: аномальная коррекция nm=%s (seller=%s→%s, ratio=%.4f), пропускаем",
                     nm, new_seller, corrected, ratio,
                 )
-                continue
-            hold_above, hold_msg = self._should_hold_competitor_above_price(
-                it.get("product"),
-                it["config"],
-                actual_final,
-                target_final,
-                new_seller,
-                corrected,
-            )
-            if hold_above:
-                logger.info("Closed-loop: nm=%s без снижения: %s", nm, hold_msg)
                 continue
             try:
                 corrected, _lr = self._apply_limits(

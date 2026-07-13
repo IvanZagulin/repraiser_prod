@@ -108,6 +108,9 @@ jobs:
           echo "[deploy] Running DB migrations..."
           docker compose run -T --rm --no-deps backend alembic upgrade head </dev/null
 
+          echo "[deploy] Importing WB subject commissions..."
+          docker compose run -T --rm --no-deps backend python -m app.scripts.import_wb_subject_commissions </dev/null
+
           echo "[deploy] Recreating app services..."
           docker compose up -d --no-deps --force-recreate $APP_SERVICES
 
@@ -115,6 +118,9 @@ jobs:
           timeout 90 bash -c 'until docker inspect --format="{{.State.Health.Status}}" wb_repricer_backend_prod 2>/dev/null | grep -q healthy; do sleep 3; done' \
             && echo "[deploy] Backend healthy ✓" \
             || echo "[deploy] WARNING: Backend health check timed out"
+
+          echo "[deploy] Queueing WB catalog sync for subject refresh..."
+          docker compose exec -T backend python -c "from app.tasks.catalog_sync import sync_all_wb_catalogs_task; task = sync_all_wb_catalogs_task.delay(); print(f'[deploy] catalog.sync_all queued: {task.id}')"
 
           echo "[deploy] Done. Running containers:"
           docker compose ps --format 'table {{.Name}}\t{{.Status}}'

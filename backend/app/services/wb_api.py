@@ -58,6 +58,15 @@ def _get_limiter(category: str, api_token: str) -> _AsyncWBLimiter:
     return _limiters[key]
 
 
+def _extract_subject_name(card: dict) -> str:
+    """Best-effort WB subject name extraction from Content API card payload."""
+    for key in ("subjectName", "subject", "objectName", "object"):
+        value = card.get(key)
+        if value:
+            return str(value).strip()
+    return ""
+
+
 class WBAPIError(Exception):
     """?????? WB API"""
     pass
@@ -609,6 +618,7 @@ class WBAPIClient:
                             "seller_sku": card.get("vendorCode", ""),
                             "name":       card.get("title", ""),
                             "image_url":  image_url,
+                            "subject_name": _extract_subject_name(card),
                         }
                         logger.info(f"? ?????????? ? ???????? ???????? ??? nm_id={nm_id}: {info['name']!r}")
                         return info
@@ -668,6 +678,7 @@ class WBAPIClient:
                         "seller_sku": card.get("vendorCode", seller_sku),
                         "name":       card.get("title", ""),
                         "image_url":  image_url,
+                        "subject_name": _extract_subject_name(card),
                     }
                     logger.info(f"? ???????? ??????? ?? ???????? {seller_sku!r}: nm_id={info['nm_id']}")
                     return info
@@ -820,6 +831,7 @@ class WBAPIClient:
                         "seller_sku": vendor_code,
                         "name":       card.get("title", ""),
                         "image_url":  image_url,
+                        "subject_name": _extract_subject_name(card),
                     }
 
                 resp_cursor = page_data.get("cursor", {})
@@ -875,6 +887,7 @@ class WBAPIClient:
                                     "seller_sku": sku,
                                     "name": card.get("title", ""),
                                     "image_url": image_url,
+                                    "subject_name": _extract_subject_name(card),
                                 }
                             break
                 except Exception as e:

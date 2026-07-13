@@ -21,6 +21,7 @@ class Product(Base):
     image_url = Column(String(500), nullable=True, comment="URL фото товара из WB Content API")
     cost_price = Column(Numeric(10, 2), nullable=True, comment="Себестоимость товара")
     brand = Column(String(255), nullable=True, comment="Бренд товара")
+    subject_name = Column(String(255), nullable=True, index=True, comment="Предмет WB")
     current_seller_price = Column(Numeric(10, 2), nullable=True, comment="Актуальная цена продавца (денормализация из последнего снапшота)")
     created_at = Column(DateTime, default=_utcnow, nullable=False)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)

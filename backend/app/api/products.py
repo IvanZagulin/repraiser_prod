@@ -7,7 +7,7 @@ from slowapi import Limiter
 import logging
 
 from app.database import get_db
-from app.models import Product, ProductConfig, PriceSnapshot, Account, ConfigChangeLog
+from app.models import Product, ProductConfig, PriceSnapshot, Account, ConfigChangeLog, WBSubjectCommission
 from app.models.user import User
 from app.models.competitor_entry import CompetitorEntry
 from app.models.rrp_spp_tier import RRPSPPTier
@@ -28,6 +28,28 @@ from app.utils import get_real_ip
 logger = logging.getLogger(__name__)
 router = APIRouter()
 limiter = Limiter(key_func=get_real_ip)
+
+
+def _normalize_text(value) -> str:
+    return " ".join(str(value or "").strip().casefold().replace("ё", "е").split())
+
+
+def _load_subject_commissions(db: Session) -> dict[str, float]:
+    rows = db.query(WBSubjectCommission).all()
+    return {
+        _normalize_text(row.subject_name): float(row.commission_pct)
+        for row in rows
+        if row.subject_name
+    }
+
+
+def _effective_fee_rows(product: Product, base_fees: list[tuple[str, float]], subject_commissions: dict[str, float]):
+    commission_type, commission_value = base_fees[0]
+    subject_key = _normalize_text(getattr(product, "subject_name", None))
+    if subject_key and subject_key in subject_commissions:
+        commission_type = "pct"
+        commission_value = subject_commissions[subject_key]
+    return [(commission_type, commission_value), *base_fees[1:]]
 
 
 def _user_product(db: Session, product_id: int, user: User) -> Product:
@@ -89,6 +111,12 @@ async def list_products(
     logistics_value  = float(_fee_map["logistics_value"])
     acquiring_type   = _fee_map["acquiring_type"]
     acquiring_value  = float(_fee_map["acquiring_value"])
+    subject_commissions = _load_subject_commissions(db)
+    base_fee_rows = [
+        (commission_type, commission_value),
+        (logistics_type,  logistics_value),
+        (acquiring_type,  acquiring_value),
+    ]
 
     margin_filter = margin_min is not None or margin_max is not None
 
@@ -254,11 +282,7 @@ async def list_products(
                 discount_pct = float(latest_snapshot.discount) if latest_snapshot.discount else 0.0
                 eff_sp = sp * (1 - discount_pct / 100)
                 fees = 0.0
-                for ftype, fval in [
-                    (commission_type, commission_value),
-                    (logistics_type,  logistics_value),
-                    (acquiring_type,  acquiring_value),
-                ]:
+                for ftype, fval in _effective_fee_rows(product, base_fee_rows, subject_commissions):
                     fees += eff_sp * fval / 100 if ftype == "pct" else fval
                 product_data['margin'] = round((eff_sp - cost_price - fees) / cost_price * 100, 2)
 
@@ -992,6 +1016,12 @@ async def get_product_detail(
     logistics_value = float(_get_setting(db, "logistics_value", "0.0", uid))
     acquiring_type = _get_setting(db, "acquiring_type", "pct", uid)
     acquiring_value = float(_get_setting(db, "acquiring_value", "0.0", uid))
+    subject_commissions = _load_subject_commissions(db)
+    base_fee_rows = [
+        (commission_type, commission_value),
+        (logistics_type, logistics_value),
+        (acquiring_type, acquiring_value),
+    ]
 
     # Latest snapshot
     latest_snap = (
@@ -1075,11 +1105,7 @@ async def get_product_detail(
         eff_sp = sp * (1 - discount_pct / 100)
         cost = float(product.cost_price)
         fees = 0.0
-        for ftype, fval in [
-            (commission_type, commission_value),
-            (logistics_type, logistics_value),
-            (acquiring_type, acquiring_value),
-        ]:
+        for ftype, fval in _effective_fee_rows(product, base_fee_rows, subject_commissions):
             fees += eff_sp * fval / 100 if ftype == "pct" else fval
         fees_total = round(fees, 2)
         margin = round((eff_sp - cost - fees) / cost * 100, 1)

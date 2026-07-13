@@ -47,10 +47,12 @@ def _make_config(
     return cfg
 
 
-def _make_product(cost_price="500.00"):
+def _make_product(cost_price="500.00", brand=None, subject_name=None):
     """Create a lightweight Product-like object for testing."""
     return SimpleNamespace(
         cost_price=Decimal(cost_price),
+        brand=brand,
+        subject_name=subject_name,
     )
 
 
@@ -212,6 +214,44 @@ class TestApplyLimitsMarginGuard:
         # margin = (800-500-68)/500*100 = 46.4% > 10% => no clamp
         price, reason = engine._apply_limits(Decimal("800"), config)
         assert price == Decimal("800")
+        assert reason == "UPDATED"
+
+    def test_margin_guard_uses_brand_specific_threshold(self):
+        engine = _make_engine(user_settings={
+            "min_margin_pct": "27",
+            "brand_min_margin_rules_map": {"просвещение": Decimal("20")},
+            "commission_type": "pct",
+            "commission_value": "0",
+            "logistics_type": "rub",
+            "logistics_value": "0",
+            "acquiring_type": "pct",
+            "acquiring_value": "0",
+        })
+        product = _make_product(cost_price="100", brand="Издательство Просвещение")
+        config = _make_config(min_price="100", max_price="5000", product=product)
+
+        price, reason = engine._apply_limits(Decimal("120"), config)
+
+        assert price == Decimal("120")
+        assert reason == "UPDATED"
+
+    def test_margin_guard_uses_subject_commission_when_available(self):
+        engine = _make_engine(user_settings={
+            "min_margin_pct": "20",
+            "commission_type": "pct",
+            "commission_value": "45",
+            "logistics_type": "rub",
+            "logistics_value": "0",
+            "acquiring_type": "pct",
+            "acquiring_value": "0",
+            "subject_commissions": {"учебники": "35"},
+        })
+        product = _make_product(cost_price="100", subject_name="Учебники")
+        config = _make_config(min_price="100", max_price="5000", product=product)
+
+        price, reason = engine._apply_limits(Decimal("200"), config)
+
+        assert price == Decimal("200")
         assert reason == "UPDATED"
 
     def test_margin_guard_skipped_when_no_cost_price(self):
