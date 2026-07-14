@@ -7,7 +7,7 @@ from slowapi import Limiter
 import logging
 
 from app.database import get_db
-from app.models import Product, ProductConfig, PriceSnapshot, Account, ConfigChangeLog, WBSubjectCommission
+from app.models import Product, ProductConfig, PriceSnapshot, Account, ConfigChangeLog, WBSubjectCommission, WBCatalog
 from app.models.user import User
 from app.models.competitor_entry import CompetitorEntry
 from app.models.rrp_spp_tier import RRPSPPTier
@@ -443,10 +443,31 @@ async def search_wb_product(
     if not account:
         raise HTTPException(status_code=404, detail="Аккаунт не найден")
 
+    text_clean = text.strip()
+    catalog_conditions = [WBCatalog.vendor_code == text_clean]
+    try:
+        catalog_nm_id = int(text_clean)
+        catalog_conditions.append(WBCatalog.nm_id == catalog_nm_id)
+    except ValueError:
+        pass
+
+    catalog_card = (
+        db.query(WBCatalog)
+        .filter(WBCatalog.account_id == account.id)
+        .filter(or_(*catalog_conditions))
+        .first()
+    )
+    if catalog_card:
+        return {
+            "nm_id": catalog_card.nm_id,
+            "seller_sku": catalog_card.vendor_code,
+            "name": catalog_card.name or "",
+        }
+
     wb_client = create_wb_client(account.wb_api_token)
 
     try:
-        cards = await wb_client.search_cards(text_search=text, limit=100)
+        cards = await wb_client.search_cards(text_search=text_clean, limit=100)
     except WBAPIError as e:
         import logging
         logging.getLogger(__name__).error(f"WB API search error: {e}")
@@ -461,7 +482,7 @@ async def search_wb_product(
         }
 
     try:
-        nm_id_int = int(text.strip())
+        nm_id_int = int(text_clean)
     except ValueError:
         raise HTTPException(status_code=404, detail="Товар не найден в WB")
 
