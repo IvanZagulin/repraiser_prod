@@ -59,7 +59,7 @@ groups:
           summary: "Диск {{ $labels.mount }} занят {{ $value }}%"
 
       - alert: MemHigh
-        expr: ops_mem_used_pct > 90
+        expr: ops_mem_used_pct > 85
         for: 5m
         labels: { severity: warning, source: watchdog }
         annotations:
@@ -118,11 +118,11 @@ groups:
           summary: "OOM kill в контейнере {{ $labels.name }}"
 
       - alert: ContainerHighMemory
-        expr: (container_memory_usage_bytes{name=~".+"} / container_spec_memory_limit_bytes{name=~".+"}) > 0.9
+        expr: (container_memory_usage_bytes{name=~".+"} / container_spec_memory_limit_bytes{name=~".+"}) > 0.85
         for: 10m
         labels: { severity: warning, source: cadvisor }
         annotations:
-          summary: "Контейнер {{ $labels.name }} использует > 90% лимита памяти"
+          summary: "Контейнер {{ $labels.name }} использует > 85% лимита памяти"
 
   - name: postgres
     interval: 30s
