@@ -1097,6 +1097,14 @@ async def get_product_detail(
             price_max_30d = max(prices)
 
     # Margin calculation
+    effective_fee_rows = _effective_fee_rows(product, base_fee_rows, subject_commissions)
+    effective_commission_type, effective_commission_value = effective_fee_rows[0]
+    subject_key = _normalize_text(getattr(product, "subject_name", None))
+    commission_source = (
+        "subject"
+        if subject_key and subject_key in subject_commissions
+        else "settings"
+    )
     margin = None
     fees_total = None
     if latest_snap and product.cost_price and float(product.cost_price) > 0:
@@ -1105,7 +1113,7 @@ async def get_product_detail(
         eff_sp = sp * (1 - discount_pct / 100)
         cost = float(product.cost_price)
         fees = 0.0
-        for ftype, fval in _effective_fee_rows(product, base_fee_rows, subject_commissions):
+        for ftype, fval in effective_fee_rows:
             fees += eff_sp * fval / 100 if ftype == "pct" else fval
         fees_total = round(fees, 2)
         margin = round((eff_sp - cost - fees) / cost * 100, 1)
@@ -1185,6 +1193,7 @@ async def get_product_detail(
             "seller_sku": product.seller_sku,
             "name": product.name,
             "brand": product.brand,
+            "subject_name": product.subject_name,
             "image_url": product.image_url,
             "cost_price": float(product.cost_price) if product.cost_price else None,
             "account_id": product.account_id,
@@ -1219,6 +1228,9 @@ async def get_product_detail(
             "value": margin,
             "fees_total": fees_total,
             "cost_price": float(product.cost_price) if product.cost_price else None,
+            "commission_type": effective_commission_type,
+            "commission_value": effective_commission_value,
+            "commission_source": commission_source,
         },
         "stats": {
             "total_changes": total_changes,

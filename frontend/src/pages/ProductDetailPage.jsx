@@ -32,6 +32,10 @@ const getWBImageUrl = (nmId) => {
 };
 
 const fmt = (n) => n != null ? Number(n).toLocaleString('ru') : '—';
+const fmtCommission = (type, value) => {
+  if (value == null) return '—';
+  return type === 'pct' ? `${Number(value).toLocaleString('ru')}%` : `${fmt(value)}₽`;
+};
 
 const ChartTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
@@ -213,6 +217,11 @@ export default function ProductDetailPage() {
             <span className="text-sm" style={{ color: 'var(--text-3)' }}>
               Артикул: <strong style={{ color: 'var(--text-2)' }}>{product.seller_sku}</strong>
             </span>
+            {product.subject_name && (
+              <span className="text-sm" style={{ color: 'var(--text-3)' }}>
+                Предмет: <strong style={{ color: 'var(--text-2)' }}>{product.subject_name}</strong>
+              </span>
+            )}
             <button
               onClick={copyNmId}
               className="flex items-center gap-1 text-sm hover:text-primary transition-colors"
@@ -381,6 +390,10 @@ export default function ProductDetailPage() {
                 <Edit3 className="inline w-3 h-3 ml-1 opacity-50" />
               </p>
             )}
+            <p className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
+              Комиссия: {fmtCommission(margin.commission_type, margin.commission_value)}
+              {margin.commission_source === 'subject' ? ' · по предмету' : ' · из настроек'}
+            </p>
           </div>
 
           {/* Ozon live pricing */}
