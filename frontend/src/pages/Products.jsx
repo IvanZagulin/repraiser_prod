@@ -273,8 +273,8 @@ export default function Products() {
 
       {/* Filters + View Toggle */}
       <div className="card mb-4">
-        <div className="flex items-center gap-3">
-          <div className="flex-1 relative">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative w-full min-w-[260px] flex-1">
             <Search
               className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4"
               style={{ color: 'var(--text-3)' }}
@@ -290,7 +290,7 @@ export default function Products() {
           <select
             value={filterStrategy}
             onChange={(e) => setFilterStrategy(e.target.value)}
-            className="input w-40"
+            className="input w-full sm:w-40"
           >
             <option value="all">Все стратегии</option>
             <option value="rrp">РРЦ</option>
@@ -299,7 +299,7 @@ export default function Products() {
           <select
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
-            className="input w-36"
+            className="input w-full sm:w-36"
           >
             <option value="all">Все статусы</option>
             <option value="active">Активные</option>
@@ -308,7 +308,7 @@ export default function Products() {
           <select
             value={filterAccount}
             onChange={(e) => setFilterAccount(e.target.value)}
-            className="input w-40"
+            className="input w-full sm:w-40"
           >
             <option value="">Все кабинеты</option>
             {accounts.map((a) => (
@@ -318,7 +318,7 @@ export default function Products() {
           <select
             value={filterBrand}
             onChange={(e) => setFilterBrand(e.target.value)}
-            className="input w-44"
+            className="input w-full sm:w-44"
           >
             <option value="">Все бренды</option>
             {brands.map((b) => (
@@ -326,7 +326,7 @@ export default function Products() {
             ))}
           </select>
 
-          <div className="flex rounded-lg overflow-hidden border border-border bg-muted/50">
+          <div className="flex shrink-0 rounded-lg overflow-hidden border border-border bg-muted/50">
             <button
               onClick={() => setViewMode('grid')}
               className={`p-2 transition-colors ${viewMode === 'grid' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground'}`}
