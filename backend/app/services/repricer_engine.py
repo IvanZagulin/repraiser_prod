@@ -40,6 +40,9 @@ class RepricerEngine:
         self._prefetched_prices: Dict[int, object] = {}  # nm_id -> PriceData, cleared per chunk
         self._price_fetch_failed: set[int] = set()
         self._competitor_entries_map: Optional[Dict[int, list]] = None  # config_id -> [nm_id], прогрев на прогон
+        self._catalog_single_fallbacks = 0
+        self._catalog_single_fallback_failures = 0
+        self._catalog_single_fallback_disabled = False
 
     def _marketplace(self, account: Optional[Account]) -> str:
         return getattr(account, "marketplace", "wb") or "wb"
@@ -241,6 +244,8 @@ class RepricerEngine:
     # cold-start: товар без истории осцилляции тоже может перелететь коридор).
     _CLOSED_LOOP_ENABLED = True
     _CLOSED_LOOP_SETTLE_SEC = 20
+    _CATALOG_SINGLE_FALLBACK_MAX_PER_RUN = 300
+    _CATALOG_SINGLE_FALLBACK_MAX_FAILURES = 20
 
     def _competitor_target_final(self, config, competitor_price: Decimal) -> Decimal:
         """Return target final buyer price for competitor strategy."""
@@ -330,6 +335,52 @@ class RepricerEngine:
                 catalog_stale=True,
             )
         return None
+
+    async def _parse_product_single_fallback(self, nm_id: int):
+        """Try one live catalog request when batch/cache missed a product."""
+        if self._catalog_single_fallback_disabled:
+            return None
+        if self._catalog_single_fallbacks >= self._CATALOG_SINGLE_FALLBACK_MAX_PER_RUN:
+            self._catalog_single_fallback_disabled = True
+            logger.warning(
+                "Catalog single fallback disabled: per-run limit %d reached",
+                self._CATALOG_SINGLE_FALLBACK_MAX_PER_RUN,
+            )
+            return None
+        if self._catalog_single_fallback_failures >= self._CATALOG_SINGLE_FALLBACK_MAX_FAILURES:
+            self._catalog_single_fallback_disabled = True
+            logger.warning(
+                "Catalog single fallback disabled: %d consecutive failures",
+                self._catalog_single_fallback_failures,
+            )
+            return None
+
+        self._catalog_single_fallbacks += 1
+        try:
+            product_data = await catalog_parser.parse_product(nm_id)
+        except Exception as e:
+            self._catalog_single_fallback_failures += 1
+            logger.warning("Catalog single fallback failed for nm_id=%s: %s", nm_id, e)
+            return None
+
+        if product_data is None:
+            self._catalog_single_fallback_failures += 1
+            logger.warning("Catalog single fallback returned empty data for nm_id=%s", nm_id)
+            return None
+
+        self._catalog_single_fallback_failures = 0
+        payload = product_data.to_dict()
+        cache_set(f"wb_catalog:{nm_id}", payload, ttl=1800)
+        cache_set(f"wb_catalog_last:{nm_id}", payload, ttl=86400)
+        return SimpleNamespace(
+            final_price=Decimal(str(payload['final_price'])),
+            seller_price=Decimal(str(payload.get('seller_price', 0))),
+            spp=Decimal(str(payload['spp'])) if payload['spp'] is not None else None,
+            is_in_promo=payload['is_in_promo'],
+            total_quantity=payload['total_quantity'],
+            in_stock=payload['in_stock'],
+            catalog_stale=False,
+        )
 
     async def _prefetch_own_prices(self, products: list) -> None:
         # Fetch ALL seller prices per account (no filterNmID - WB rejects 100+ ids with 400)
@@ -510,15 +561,19 @@ class RepricerEngine:
             catalog_product = await self._cached_parse_product(product.nm_id)
 
             if catalog_product and getattr(catalog_product, "catalog_stale", False):
-                logger.warning(
-                    "nm_id=%s: каталог недоступен, stale-кеш не используем для переоценки",
-                    product.nm_id,
-                )
-                return {"catalog_stale": True}
+                catalog_product = await self._parse_product_single_fallback(product.nm_id)
+                if not catalog_product:
+                    logger.warning(
+                        "nm_id=%s: каталог недоступен, stale-кеш не используем для переоценки",
+                        product.nm_id,
+                    )
+                    return {"catalog_stale": True}
 
             if not catalog_product:
-                logger.warning("nm_id=%s: каталог недоступен — пропускаем переоценку", product.nm_id)
-                return {"catalog_stale": True}
+                catalog_product = await self._parse_product_single_fallback(product.nm_id)
+                if not catalog_product:
+                    logger.warning("nm_id=%s: каталог недоступен — пропускаем переоценку", product.nm_id)
+                    return {"catalog_stale": True}
 
             # Истинный СПП WB = скидка от цены после скидки продавца до финальной цены
             discounted_price = price_data.discounted_price

@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -95,3 +96,42 @@ async def test_batch_failure_blocks_single_item_get_fallback():
 
     assert result is None
     create_client.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_catalog_cache_miss_uses_limited_single_fallback():
+    engine = RepricerEngine(db=MagicMock(), user_id=12)
+    account = SimpleNamespace(
+        name="Test account",
+        is_active=True,
+        wb_api_token="token",
+    )
+    product = SimpleNamespace(nm_id=1135666168, account=account)
+    engine._prefetched_prices[product.nm_id] = SimpleNamespace(
+        seller_price=Decimal("730"),
+        discounted_price=Decimal("730"),
+        discount=Decimal("0"),
+    )
+    catalog_data = MagicMock()
+    catalog_data.to_dict.return_value = {
+        "final_price": 357,
+        "seller_price": 730,
+        "spp": 51,
+        "is_in_promo": True,
+        "total_quantity": 7,
+        "in_stock": True,
+    }
+
+    with patch("app.services.repricer_engine.cache_get", return_value=None), \
+         patch("app.services.repricer_engine.cache_set") as cache_set, \
+         patch(
+             "app.services.repricer_engine.catalog_parser.parse_product",
+             new=AsyncMock(return_value=catalog_data),
+         ) as parse_product:
+        result = await engine._get_current_price_data(product, account)
+
+    assert result is not None
+    assert result["final_price"] == Decimal("357")
+    assert result["spp"] == Decimal("51")
+    parse_product.assert_awaited_once_with(product.nm_id)
+    assert cache_set.call_count == 2
