@@ -7,29 +7,30 @@ cd ~/repraiser_prod/repraiser_prod
 # НЕ трогаем → нет downtime БД и потери метрик при каждом деплое.
 APP_SERVICES="backend celery_worker scheduler flower frontend"
 
-# === Guard: не деплоить если celery занят ===
-# Рестарт celery при активных задачах (acks_late=True) вызывает redelivery
-# и может привести к 429-шторму WB API. Ждём до 5 мин.
-echo "[deploy] Проверяем что celery свободен..."
+# === Guard: do not deploy while repricer is active ===
+# Celery inspect alone is not enough: after worker restarts a run can remain
+# visible only in repricer_runs.status='running'. Check both signals.
+echo "[deploy] Checking repricer activity..."
 MAX_WAIT=300
 WAITED=0
 while true; do
-    # grep -c returns "0" with exit code 1 on no matches, causing "0\n0" via ||
-    # Use grep -q to detect any active tasks
-    if docker exec wb_repricer_celery celery -A app.celery_app inspect active 2>/dev/null | grep -q "'id':"; then
-        ACTIVE="busy"
+    if docker exec wb_repricer_celery celery -A app.celery_app inspect active 2>/dev/null | grep -q "repricer.run_for_user"; then
+        ACTIVE_REPRICER="1"
     else
-        ACTIVE="0"
+        ACTIVE_REPRICER="0"
     fi
-    if [ "$ACTIVE" = "0" ]; then
-        echo "[deploy] Celery свободен ✓"
+
+    RUNNING_DB=$(docker exec wb_repricer_backend_prod python -c 'from app.database import SessionLocal; from app.models import RepricerRun; s=SessionLocal(); print(s.query(RepricerRun).filter(RepricerRun.status == "running").count()); s.close()' 2>/dev/null || echo unknown)
+
+    if [ "$ACTIVE_REPRICER" = "0" ] && [ "$RUNNING_DB" = "0" ]; then
+        echo "[deploy] Repricer idle"
         break
     fi
     if [ "$WAITED" -ge "$MAX_WAIT" ]; then
-        echo "[deploy] WARNING: celery занят ($ACTIVE задач) уже ${MAX_WAIT}с — продолжаем деплой принудительно"
-        break
+        echo "[deploy] ERROR: repricer still active after ${MAX_WAIT}s (celery=${ACTIVE_REPRICER}, db_running=${RUNNING_DB}); aborting deploy"
+        exit 1
     fi
-    echo "[deploy] Celery занят ($ACTIVE задач), ждём... (${WAITED}/${MAX_WAIT}с)"
+    echo "[deploy] Repricer busy (celery=${ACTIVE_REPRICER}, db_running=${RUNNING_DB}), waiting... (${WAITED}/${MAX_WAIT}s)"
     sleep 15
     WAITED=$((WAITED + 15))
 done

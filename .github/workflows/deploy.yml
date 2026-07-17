@@ -42,20 +42,26 @@ jobs:
           CLEAN_U=$(printf '%s' "$U" | tr -d '[:space:]"'"'"'')
           ssh "${CLEAN_U}@${CLEAN_H}" 'bash -s' <<'EOF'
           cd ~/repraiser_prod/repraiser_prod
-          echo "[deploy] Checking celery..."
+          echo "[deploy] Checking repricer activity..."
           MAX_WAIT=300; WAITED=0
           while true; do
-            if docker exec wb_repricer_celery celery -A app.celery_app inspect active 2>/dev/null | grep -q "'id':"; then
-              ACTIVE="busy"
+            if docker exec wb_repricer_celery celery -A app.celery_app inspect active 2>/dev/null | grep -q "repricer.run_for_user"; then
+              ACTIVE_REPRICER="1"
             else
-              ACTIVE="0"
+              ACTIVE_REPRICER="0"
             fi
-            [ "$ACTIVE" = "0" ] && echo "[deploy] Celery idle ✓" && break
-            if [ "$WAITED" -ge "$MAX_WAIT" ]; then
-              echo "[deploy] WARNING: celery busy after ${MAX_WAIT}s — forcing deploy"
+
+            RUNNING_DB=$(docker exec wb_repricer_backend_prod python -c 'from app.database import SessionLocal; from app.models import RepricerRun; s=SessionLocal(); print(s.query(RepricerRun).filter(RepricerRun.status == "running").count()); s.close()' 2>/dev/null || echo unknown)
+
+            if [ "$ACTIVE_REPRICER" = "0" ] && [ "$RUNNING_DB" = "0" ]; then
+              echo "[deploy] Repricer idle"
               break
             fi
-            echo "[deploy] Celery busy, waiting... (${WAITED}/${MAX_WAIT}s)"
+            if [ "$WAITED" -ge "$MAX_WAIT" ]; then
+              echo "[deploy] ERROR: repricer still active after ${MAX_WAIT}s (celery=${ACTIVE_REPRICER}, db_running=${RUNNING_DB}); aborting deploy"
+              exit 1
+            fi
+            echo "[deploy] Repricer busy (celery=${ACTIVE_REPRICER}, db_running=${RUNNING_DB}), waiting... (${WAITED}/${MAX_WAIT}s)"
             sleep 15
             WAITED=$((WAITED + 15))
           done
