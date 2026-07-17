@@ -1861,7 +1861,7 @@ class RepricerEngine:
             # Обрабатываем товары чанками по CHUNK_SIZE штук:
             # — не грузим всё в RAM разом (100к товаров × ~8 KB = ~800 MB → OOM)
             # — коммитим каждые COMMIT_EVERY товаров вместо round-trip на каждый
-            results = {'updated': 0, 'skipped': 0, 'errors': 0}
+            results = {'updated': 0, 'skipped': 0, 'errors': 0, 'catalog_unavailable': 0}
             CHUNK_SIZE  = 1000  # вдвое меньше чанков → меньше pre-fetch раундов
             COMMIT_EVERY = 200  # товаров между коммитами (меньше DB round-trips)
 
@@ -2084,6 +2084,8 @@ class RepricerEngine:
                 pending = 0
                 for dec in decisions:
                     if "skip_code" in dec and dec["current_data"] is None:
+                        if dec["skip_code"] == "CATALOG_UNAVAILABLE":
+                            results["catalog_unavailable"] += 1
                         if dec["skip_code"] in ("COOLDOWN", "SKIPPED_INACTIVE", "SKIPPED_QUARANTINE",
                                                 "CATALOG_UNAVAILABLE", "OUT_OF_STOCK"):
                             results["skipped"] += 1
@@ -2155,10 +2157,27 @@ class RepricerEngine:
 
             # Обновляем статус прогона
             _duration_ms = int((time.monotonic() - _run_start) * 1000)
+            catalog_unavailable = results.get("catalog_unavailable", 0)
+            catalog_unavailable_pct = (
+                catalog_unavailable / run.total_products * 100
+                if run.total_products > 0
+                else 0
+            )
+            catalog_outage = (
+                catalog_unavailable > 10
+                and run.total_products > 100
+                and catalog_unavailable_pct > 50
+            )
             run.updated_count = results['updated']
             run.skipped_count = results['skipped']
             run.error_count = results['errors']
-            run.status = "completed"
+            run.status = "failed" if catalog_outage else "completed"
+            if catalog_outage:
+                run.error_message = (
+                    "WB catalog unavailable for most products "
+                    f"({catalog_unavailable}/{run.total_products}); "
+                    "check CATALOG_PROXY_URL / SSH reverse tunnel"
+                )
             run.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
             self.db.commit()
 
@@ -2173,11 +2192,20 @@ class RepricerEngine:
                 "updated": results['updated'],
                 "skipped": results['skipped'],
                 "errors": results['errors'],
+                "catalog_unavailable": catalog_unavailable,
                 "duration_ms": _duration_ms,
                 "run_type": run_type,
                 "dry_run": dry_run,
                 "products_per_sec": round(run.total_products / (_duration_ms / 1000), 2) if _duration_ms > 0 else 0,
             }))
+
+            if catalog_outage and not dry_run:
+                await telegram_notifier.notify_catalog_parse_errors(
+                    run_id=run.id,
+                    total=run.total_products,
+                    errors=catalog_unavailable,
+                    error_pct=catalog_unavailable_pct,
+                )
 
             if results['updated'] == 0 and run.total_products > 0 and not dry_run:
                 await telegram_notifier.notify_zero_updates(

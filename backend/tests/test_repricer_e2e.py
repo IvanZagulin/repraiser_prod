@@ -12,9 +12,13 @@ the unit tests of individual math helpers in test_repricer_engine.py.
 """
 
 import asyncio
+from decimal import Decimal
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.models.product import Product
+from app.models.product_config import ProductConfig
 from app.models.repricer_run import RepricerRun
 from app.services.repricer_engine import RepricerEngine
 
@@ -129,3 +133,60 @@ class TestRunRepricerDryRun:
         )
         assert run is not None
         assert run.run_type == "scheduled"
+
+    def test_mass_catalog_unavailable_marks_run_failed(
+        self, db_session, test_user, test_account, monkeypatch
+    ):
+        """A tunnel/catalog outage must not look like a successful zero-update run."""
+        product_ids = []
+        for idx in range(101):
+            product = Product(
+                account_id=test_account.id,
+                nm_id=900_000_000 + idx,
+                seller_sku=f"OUTAGE-{idx}",
+                name=f"Outage product {idx}",
+                cost_price=Decimal("100.00"),
+            )
+            db_session.add(product)
+            db_session.flush()
+            db_session.add(ProductConfig(
+                product_id=product.id,
+                strategy="rrp",
+                is_active=True,
+                min_price=Decimal("100.00"),
+                max_price=Decimal("2000.00"),
+                rrp_price=Decimal("1000.00"),
+            ))
+            product_ids.append(product.id)
+        db_session.commit()
+
+        async def _catalog_unavailable(self, product, config, dry_run=False):
+            return {
+                "product": product,
+                "needs_update": False,
+                "skip_code": "CATALOG_UNAVAILABLE",
+                "current_data": None,
+                "new_price": None,
+                "limit_reason": None,
+                "reason_msg": "catalog unavailable",
+            }
+
+        monkeypatch.setattr(RepricerEngine, "_decide_product", _catalog_unavailable)
+        monkeypatch.setattr(RepricerEngine, "_prefetch_all_prices_once", AsyncMock())
+
+        engine = RepricerEngine(db_session, user_id=test_user.id)
+        with patch("app.services.repricer_engine.catalog_parser.parse_batch_ids", new=AsyncMock(return_value={})), \
+             patch("app.services.repricer_engine.telegram_notifier.notify_catalog_parse_errors", new=AsyncMock()), \
+             patch("app.services.repricer_engine.telegram_notifier.notify_zero_updates", new=AsyncMock()):
+            run = asyncio.run(
+                engine.run_repricer(
+                    product_ids=product_ids,
+                    run_type="scheduled",
+                    dry_run=False,
+                )
+            )
+
+        assert run.status == "failed"
+        assert run.updated_count == 0
+        assert run.skipped_count == 101
+        assert "WB catalog unavailable" in run.error_message
