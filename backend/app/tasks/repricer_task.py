@@ -155,6 +155,18 @@ def run_repricer_for_user(
     # Защита от двойного запуска для одного пользователя
     if not acquire_run_lock(user_id):
         logger.warning(f"[Celery] user={user_id}: прогон уже идёт, пропускаем дублирующийся запуск")
+        if existing_run_id:
+            db = SessionLocal()
+            try:
+                from app.models.repricer_run import RepricerRun
+                run = db.query(RepricerRun).filter(RepricerRun.id == existing_run_id).first()
+                if run and run.status == "queued":
+                    run.status = "failed"
+                    run.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                    run.error_message = "Repricer run already active; wait for it to finish"
+                    db.commit()
+            finally:
+                db.close()
         return {"status": "skipped", "reason": "already running"}
 
     with _graceful_shutdown_guard(user_id):

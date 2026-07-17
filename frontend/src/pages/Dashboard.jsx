@@ -257,7 +257,7 @@ export default function Dashboard() {
     try {
       toast.loading('Запуск репрайсера...', { id: 'run-all' });
       await runRepricer(null);
-      toast.success('Репрайсер завершён', { id: 'run-all' });
+      toast.success('Репрайсер поставлен в очередь', { id: 'run-all' });
       loadAll();
     } catch {
       toast.error('Ошибка запуска', { id: 'run-all' });

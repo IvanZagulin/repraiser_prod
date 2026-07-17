@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from app.models.repricer_run import RepricerRun
 from app.tasks import repricer_task
 
 
@@ -58,6 +59,34 @@ class TestLockGate:
         assert result == {"status": "skipped", "reason": "already running"}
         # До БД и release дойти не должно
         mock_session.assert_not_called()
+        mock_release.assert_not_called()
+
+    def test_existing_queued_run_failed_when_lock_busy(self, patched_session, db_session, test_user):
+        """Async API creates a queued run before Celery can acquire the lock."""
+        run = RepricerRun(
+            user_id=test_user.id,
+            run_type="manual",
+            status="queued",
+            total_products=1,
+            updated_count=0,
+            skipped_count=0,
+            error_count=0,
+        )
+        db_session.add(run)
+        db_session.commit()
+
+        with patch("app.tasks.repricer_task.acquire_run_lock", return_value=False), \
+             patch("app.tasks.repricer_task.release_run_lock") as mock_release:
+            result = repricer_task.run_repricer_for_user.apply(
+                args=(test_user.id, [1]),
+                kwargs={"run_type": "manual", "existing_run_id": run.id},
+            ).get()
+
+        db_session.refresh(run)
+        assert result == {"status": "skipped", "reason": "already running"}
+        assert run.status == "failed"
+        assert "already active" in run.error_message
+        assert run.completed_at is not None
         mock_release.assert_not_called()
 
 

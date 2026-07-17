@@ -117,7 +117,7 @@ export const getProductDetail = (productId) =>
 
 // Repricer
 export const runRepricer = (sellerSkus) =>
-  api.post('/api/repricer/run-sync', { seller_skus: sellerSkus });
+  api.post('/api/repricer/run', { seller_skus: sellerSkus });
 
 export const fetchPrices = () =>
   api.post('/api/repricer/fetch-prices');
