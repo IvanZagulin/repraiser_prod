@@ -153,20 +153,39 @@ def run_repricer_for_user(
 ):
     """Запускает репрайсер для одного пользователя в Celery-воркере."""
     # Защита от двойного запуска для одного пользователя
-    if not acquire_run_lock(user_id):
-        logger.warning(f"[Celery] user={user_id}: прогон уже идёт, пропускаем дублирующийся запуск")
-        if existing_run_id:
-            db = SessionLocal()
-            try:
-                from app.models.repricer_run import RepricerRun
+    lock_acquired = acquire_run_lock(user_id)
+    if not lock_acquired and existing_run_id:
+        db = SessionLocal()
+        try:
+            from app.models.repricer_run import RepricerRun
+            running_count = (
+                db.query(RepricerRun)
+                .filter(
+                    RepricerRun.user_id == user_id,
+                    RepricerRun.status == "running",
+                )
+                .count()
+            )
+            if running_count == 0:
+                logger.warning(
+                    "[Celery] user=%s: run lock exists but DB has no running runs; "
+                    "releasing stale lock and retrying once",
+                    user_id,
+                )
+                release_run_lock(user_id)
+                lock_acquired = acquire_run_lock(user_id)
+            if not lock_acquired:
                 run = db.query(RepricerRun).filter(RepricerRun.id == existing_run_id).first()
                 if run and run.status == "queued":
                     run.status = "failed"
                     run.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
                     run.error_message = "Repricer run already active; wait for it to finish"
                     db.commit()
-            finally:
-                db.close()
+        finally:
+            db.close()
+
+    if not lock_acquired:
+        logger.warning(f"[Celery] user={user_id}: прогон уже идёт, пропускаем дублирующийся запуск")
         return {"status": "skipped", "reason": "already running"}
 
     with _graceful_shutdown_guard(user_id):

@@ -63,6 +63,15 @@ class TestLockGate:
 
     def test_existing_queued_run_failed_when_lock_busy(self, patched_session, db_session, test_user):
         """Async API creates a queued run before Celery can acquire the lock."""
+        running = RepricerRun(
+            user_id=test_user.id,
+            run_type="manual",
+            status="running",
+            total_products=1,
+            updated_count=0,
+            skipped_count=0,
+            error_count=0,
+        )
         run = RepricerRun(
             user_id=test_user.id,
             run_type="manual",
@@ -72,6 +81,7 @@ class TestLockGate:
             skipped_count=0,
             error_count=0,
         )
+        db_session.add(running)
         db_session.add(run)
         db_session.commit()
 
@@ -88,6 +98,40 @@ class TestLockGate:
         assert "already active" in run.error_message
         assert run.completed_at is not None
         mock_release.assert_not_called()
+
+    def test_stale_lock_without_running_run_is_released_and_retried(
+        self, patched_session, db_session, test_user
+    ):
+        """A stale Redis lock must not block a queued async run forever."""
+        run = RepricerRun(
+            user_id=test_user.id,
+            run_type="manual",
+            status="queued",
+            total_products=1,
+            updated_count=0,
+            skipped_count=0,
+            error_count=0,
+        )
+        db_session.add(run)
+        db_session.commit()
+        fake_run = MagicMock(id=run.id, status="completed", updated_count=3)
+
+        async def _fake_run_repricer(*args, **kwargs):
+            return fake_run
+
+        with patch("app.tasks.repricer_task.acquire_run_lock", side_effect=[False, True]) as mock_acquire, \
+             patch("app.tasks.repricer_task.release_run_lock") as mock_release, \
+             patch("app.services.repricer_engine.RepricerEngine") as mock_engine_cls:
+            mock_engine_cls.return_value.run_repricer = _fake_run_repricer
+            result = repricer_task.run_repricer_for_user.apply(
+                args=(test_user.id, [1]),
+                kwargs={"run_type": "manual", "existing_run_id": run.id},
+            ).get()
+
+        assert result["run_id"] == run.id
+        assert result["status"] == "completed"
+        assert mock_acquire.call_count == 2
+        assert mock_release.call_count == 2
 
 
 class TestUserValidation:
