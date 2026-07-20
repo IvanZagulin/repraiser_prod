@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 # Ошибки соединения/сети — допускают retry; логические ошибки — нет
 _NETWORK_ERRORS = (ConnectionError, TimeoutError, OSError, redis_lib.ConnectionError, redis_lib.TimeoutError)
+_MANUAL_LOCK_RETRY_DELAY_SEC = 60
+_MANUAL_LOCK_MAX_RETRIES = 90
 
 
 # ─── Graceful shutdown ────────────────────────────────────────────────────────
@@ -176,6 +178,27 @@ def run_repricer_for_user(
                 lock_acquired = acquire_run_lock(user_id)
             if not lock_acquired:
                 run = db.query(RepricerRun).filter(RepricerRun.id == existing_run_id).first()
+                if run and run.status == "queued" and run_type == "manual":
+                    if self.request.retries >= _MANUAL_LOCK_MAX_RETRIES:
+                        run.status = "failed"
+                        run.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                        run.error_message = "Timed out waiting for active repricer run to finish"
+                        db.commit()
+                        return {"status": "skipped", "reason": "active run timeout"}
+                    run.error_message = "Waiting for active repricer run to finish"
+                    db.commit()
+                    logger.info(
+                        "[Celery] user=%s run=%s: active repricer lock, keeping manual run queued "
+                        "(retry %s/%s)",
+                        user_id,
+                        existing_run_id,
+                        self.request.retries + 1,
+                        _MANUAL_LOCK_MAX_RETRIES,
+                    )
+                    raise self.retry(
+                        countdown=_MANUAL_LOCK_RETRY_DELAY_SEC,
+                        max_retries=_MANUAL_LOCK_MAX_RETRIES,
+                    )
                 if run and run.status == "queued":
                     run.status = "failed"
                     run.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)

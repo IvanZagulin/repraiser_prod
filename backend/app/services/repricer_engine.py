@@ -244,6 +244,7 @@ class RepricerEngine:
     # cold-start: товар без истории осцилляции тоже может перелететь коридор).
     _CLOSED_LOOP_ENABLED = True
     _CLOSED_LOOP_SETTLE_SEC = 20
+    _CLOSED_LOOP_CORRECTION_SETTLE_SEC = 5
     _CATALOG_SINGLE_FALLBACK_MAX_PER_RUN = 300
     _CATALOG_SINGLE_FALLBACK_MAX_FAILURES = 20
 
@@ -1718,6 +1719,15 @@ class RepricerEngine:
             except Exception as e:
                 logger.error("Closed-loop: ошибка отправки коррекции: %s", e)
 
+        verified_after_correction: dict = {}
+        if applied:
+            try:
+                if self._CLOSED_LOOP_CORRECTION_SETTLE_SEC > 0:
+                    await asyncio.sleep(self._CLOSED_LOOP_CORRECTION_SETTLE_SEC)
+                verified_after_correction = await catalog_parser.parse_batch_ids(list(applied))
+            except Exception as e:
+                logger.error("Closed-loop: повторный парсинг после коррекции упал: %s", e)
+
         n = 0
         for nm, (it, corrected, target_final, actual_final, ratio) in plan.items():
             if nm not in applied:
@@ -1727,15 +1737,27 @@ class RepricerEngine:
             base["seller_price"] = Decimal(str(it["new_price"]))
             base["final_price"] = actual_final
             new_final_est = corrected * ratio
+            corrected_final = new_final_est
+            corrected_spp = None
+            verified_pd = verified_after_correction.get(nm)
+            if verified_pd is not None:
+                parsed_final = Decimal(str(getattr(verified_pd, "final_price", 0) or 0))
+                if parsed_final > 0:
+                    corrected_final = parsed_final
+                    parsed_spp = getattr(verified_pd, "spp", None)
+                    if parsed_spp is not None:
+                        corrected_spp = Decimal(str(parsed_spp))
             snap = dict(base)
             snap["seller_price"] = corrected
-            snap["final_price"] = new_final_est
+            snap["final_price"] = corrected_final
+            if corrected_spp is not None:
+                snap["spp"] = corrected_spp
             try:
                 self._save_price_snapshot(product, snap,
                                           competitor_nm_id=it.get("competitor_nm_id"),
                                           competitor_price=it.get("competitor_price"))
                 self._save_price_change(
-                    run, product, base, corrected, new_final_est, "CORRECTED",
+                    run, product, base, corrected, corrected_final, "CORRECTED",
                     f"Closed-loop: факт {actual_final}₽ != цели {target_final:.2f}₽ → "
                     f"seller {it['new_price']}→{corrected}",
                 )

@@ -451,6 +451,7 @@ class TestCorrectUnstableProducts:
     def test_corrects_when_actual_below_floor(self, db_session, test_product, test_account):
         engine = RepricerEngine(db=db_session, user_id=None)
         engine._user_settings = {}
+        engine._CLOSED_LOOP_CORRECTION_SETTLE_SEC = 0
         engine._CLOSED_LOOP_SETTLE_SEC = 0  # не ждём в тесте
 
         run = RepricerRun(run_type="manual", status="running",
@@ -477,11 +478,14 @@ class TestCorrectUnstableProducts:
         }]
 
         # Факт после первого шага: 1588 ниже цели 1593 → коррекция.
-        fresh = {test_product.nm_id: SimpleNamespace(final_price=Decimal("1588"), spp=Decimal("34"))}
+        first_fresh = {test_product.nm_id: SimpleNamespace(final_price=Decimal("1588"), spp=Decimal("34"))}
+        corrected_fresh = {test_product.nm_id: SimpleNamespace(final_price=Decimal("1593"), spp=Decimal("34"))}
         fake_client = _FakeClient()
+        parse_calls = []
 
         async def fake_parse_batch(nm_ids, **kw):
-            return fresh
+            parse_calls.append(list(nm_ids))
+            return first_fresh if len(parse_calls) == 1 else corrected_fresh
 
         with patch("app.services.repricer_engine.catalog_parser.parse_batch_ids",
                    side_effect=fake_parse_batch), \
@@ -491,15 +495,23 @@ class TestCorrectUnstableProducts:
 
         assert n == 1
         assert fake_client.calls == [[{"nmID": test_product.nm_id, "price": 2422}]]
+        assert parse_calls == [[test_product.nm_id], [test_product.nm_id]]
         changes = db_session.query(PriceChange).filter(
             PriceChange.run_id == run.id, PriceChange.reason_code == "CORRECTED"
         ).all()
         assert len(changes) == 1
         assert changes[0].new_seller_price == Decimal("2422")
+        assert changes[0].new_final_price == Decimal("1593")
+        latest_snapshot = db_session.query(PriceSnapshot).filter(
+            PriceSnapshot.product_id == test_product.id
+        ).order_by(PriceSnapshot.snapshot_at.desc()).first()
+        assert latest_snapshot.seller_price == Decimal("2422")
+        assert latest_snapshot.final_price == Decimal("1593")
 
     def test_corrects_when_actual_above_target_during_day(self, db_session, test_product):
         engine = RepricerEngine(db=db_session, user_id=None)
         engine._user_settings = {}
+        engine._CLOSED_LOOP_CORRECTION_SETTLE_SEC = 0
         engine._CLOSED_LOOP_SETTLE_SEC = 0
 
         run = RepricerRun(run_type="manual", status="running",
@@ -539,6 +551,7 @@ class TestCorrectUnstableProducts:
     def test_corrects_when_actual_above_target_at_night(self, db_session, test_product):
         engine = RepricerEngine(db=db_session, user_id=None)
         engine._user_settings = {}
+        engine._CLOSED_LOOP_CORRECTION_SETTLE_SEC = 0
         engine._CLOSED_LOOP_SETTLE_SEC = 0
 
         run = RepricerRun(run_type="manual", status="running",
