@@ -61,8 +61,8 @@ class TestLockGate:
         mock_session.assert_not_called()
         mock_release.assert_not_called()
 
-    def test_existing_queued_run_failed_when_lock_busy(self, patched_session, db_session, test_user):
-        """Async API creates a queued run before Celery can acquire the lock."""
+    def test_existing_queued_manual_run_times_out_when_lock_stays_busy(self, patched_session, db_session, test_user):
+        """Async API keeps a manual run queued while waiting for the active lock."""
         running = RepricerRun(
             user_id=test_user.id,
             run_type="manual",
@@ -85,7 +85,8 @@ class TestLockGate:
         db_session.add(run)
         db_session.commit()
 
-        with patch("app.tasks.repricer_task.acquire_run_lock", return_value=False), \
+        with patch("app.tasks.repricer_task._MANUAL_LOCK_MAX_RETRIES", 1), \
+             patch("app.tasks.repricer_task.acquire_run_lock", return_value=False), \
              patch("app.tasks.repricer_task.release_run_lock") as mock_release:
             result = repricer_task.run_repricer_for_user.apply(
                 args=(test_user.id, [1]),
@@ -93,9 +94,9 @@ class TestLockGate:
             ).get()
 
         db_session.refresh(run)
-        assert result == {"status": "skipped", "reason": "already running"}
+        assert result == {"status": "skipped", "reason": "active run timeout"}
         assert run.status == "failed"
-        assert "already active" in run.error_message
+        assert "Timed out waiting" in run.error_message
         assert run.completed_at is not None
         mock_release.assert_not_called()
 
