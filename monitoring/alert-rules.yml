@@ -52,7 +52,7 @@ groups:
           summary: "Контейнер {{ $labels.name }} unhealthy"
 
       - alert: DiskHigh
-        expr: ops_disk_used_pct{mount="/"} > 85
+        expr: ops_disk_used_pct{mount="/"} > 90
         for: 5m
         labels: { severity: warning, source: watchdog }
         annotations:

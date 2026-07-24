@@ -324,17 +324,6 @@ class RepricerEngine:
                 catalog_stale=False,
             )
 
-        stale = cache_get(f"wb_catalog_last:{nm_id}")
-        if stale is not None:
-            return SimpleNamespace(
-                final_price=Decimal(str(stale['final_price'])),
-                seller_price=Decimal(str(stale.get('seller_price', 0))),
-                spp=Decimal(str(stale['spp'])) if stale['spp'] is not None else None,
-                is_in_promo=stale['is_in_promo'],
-                total_quantity=stale['total_quantity'],
-                in_stock=stale['in_stock'],
-                catalog_stale=True,
-            )
         return None
 
     async def _parse_product_single_fallback(self, nm_id: int):
@@ -372,7 +361,6 @@ class RepricerEngine:
         self._catalog_single_fallback_failures = 0
         payload = product_data.to_dict()
         cache_set(f"wb_catalog:{nm_id}", payload, ttl=1800)
-        cache_set(f"wb_catalog_last:{nm_id}", payload, ttl=86400)
         return SimpleNamespace(
             final_price=Decimal(str(payload['final_price'])),
             seller_price=Decimal(str(payload.get('seller_price', 0))),
@@ -1860,7 +1848,6 @@ class RepricerEngine:
                 for nm_id, product_data in own_results.items():
                     if product_data is not None:
                         cache_set("wb_catalog:%d" % nm_id, product_data.to_dict(), ttl=1800)
-                        cache_set("wb_catalog_last:%d" % nm_id, product_data.to_dict(), ttl=86400)
                         cached_count += 1
                 if cached_count == 0 and len(own_cold) > 10:
                     logger.warning("Глобальный pre-fetch: 0 успехов, повтор через 10 сек...")
@@ -1869,7 +1856,6 @@ class RepricerEngine:
                     for nm_id, product_data in own_results.items():
                         if product_data is not None:
                             cache_set("wb_catalog:%d" % nm_id, product_data.to_dict(), ttl=1800)
-                            cache_set("wb_catalog_last:%d" % nm_id, product_data.to_dict(), ttl=86400)
                             cached_count += 1
                 logger.info(f"Глобальный pre-fetch завершён: {cached_count}/{len(own_cold)} закешировано")
 
