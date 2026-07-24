@@ -2071,13 +2071,7 @@ class RepricerEngine:
                                         len(updates),
                                     )
                                     continue
-                                # Мелкие батчи (≤3 товара): не тратить 33с на verify.
-                                # Если WB отклонит — поймаем в следующем прогоне.
-                                if len(updates) <= 3:
-                                    statuses = {u["nmID"]: (True, "") for u in updates}
-                                    logger.info('Batch ≤3: skip verify (uploadID=%s)', upload_id)
-                                else:
-                                    statuses = await client.verify_batch_update(upload_id)
+                                statuses = await client.verify_batch_update(upload_id)
                             logger.info(
                                 "Batch update: %d цен отправлено (uploadID=%s, статусов=%d)",
                                 len(updates), upload_id, len(statuses),
