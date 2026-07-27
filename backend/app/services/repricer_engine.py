@@ -360,7 +360,7 @@ class RepricerEngine:
 
         self._catalog_single_fallback_failures = 0
         payload = product_data.to_dict()
-        cache_set(f"wb_catalog:{nm_id}", payload, ttl=1800)
+        cache_set(f"wb_catalog:{nm_id}", payload, ttl=3600)
         return SimpleNamespace(
             final_price=Decimal(str(payload['final_price'])),
             seller_price=Decimal(str(payload.get('seller_price', 0))),
@@ -1840,7 +1840,7 @@ class RepricerEngine:
                 batch_results = await catalog_parser.parse_batch_ids(cold_ids)
                 for nm_id, product_data in batch_results.items():
                     if product_data is not None:
-                        cache_set(f"wb_catalog:{nm_id}", product_data.to_dict(), ttl=1800)
+                        cache_set(f"wb_catalog:{nm_id}", product_data.to_dict(), ttl=3600)
                 logger.info(f"Pre-fetch завершён: {sum(1 for v in batch_results.values() if v)} / {len(cold_ids)}")
 
             # Глобальный pre-fetch ВСЕХ собственных товаров одним батчем.
@@ -1855,7 +1855,7 @@ class RepricerEngine:
                 cached_count = 0
                 for nm_id, product_data in own_results.items():
                     if product_data is not None:
-                        cache_set("wb_catalog:%d" % nm_id, product_data.to_dict(), ttl=1800)
+                        cache_set("wb_catalog:%d" % nm_id, product_data.to_dict(), ttl=3600)
                         cached_count += 1
                 if cached_count == 0 and len(own_cold) > 10:
                     logger.warning("Глобальный pre-fetch: 0 успехов, повтор через 10 сек...")
@@ -1863,7 +1863,7 @@ class RepricerEngine:
                     own_results = await catalog_parser.parse_batch_ids(own_cold)
                     for nm_id, product_data in own_results.items():
                         if product_data is not None:
-                            cache_set("wb_catalog:%d" % nm_id, product_data.to_dict(), ttl=1800)
+                            cache_set("wb_catalog:%d" % nm_id, product_data.to_dict(), ttl=3600)
                             cached_count += 1
                 logger.info(f"Глобальный pre-fetch завершён: {cached_count}/{len(own_cold)} закешировано")
 
@@ -2148,13 +2148,16 @@ class RepricerEngine:
                 # === ФАЗА 3: сохраняем результаты ===
                 pending = 0
                 for dec in decisions:
-                    if "skip_code" in dec and dec["current_data"] is None:
-                        if dec["skip_code"] == "CATALOG_UNAVAILABLE":
+                    skip = dec.get("skip_code")
+                    if skip == "OUT_OF_STOCK":
+                        results["out_of_stock"] += 1
+                        results["skipped"] += 1
+                        continue
+                    if skip and dec["current_data"] is None:
+                        if skip == "CATALOG_UNAVAILABLE":
                             results["catalog_unavailable"] += 1
-                        if dec["skip_code"] == "OUT_OF_STOCK":
-                            results["out_of_stock"] += 1
-                        if dec["skip_code"] in ("COOLDOWN", "SKIPPED_INACTIVE", "SKIPPED_QUARANTINE",
-                                                "CATALOG_UNAVAILABLE", "OUT_OF_STOCK"):
+                        if skip in ("COOLDOWN", "SKIPPED_INACTIVE", "SKIPPED_QUARANTINE",
+                                                "CATALOG_UNAVAILABLE"):
                             results["skipped"] += 1
                         else:
                             results["errors"] += 1
