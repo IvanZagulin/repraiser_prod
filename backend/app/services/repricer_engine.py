@@ -758,6 +758,8 @@ class RepricerEngine:
         for nm_id in nm_ids:
             try:
                 p = await self._cached_parse_product(nm_id)
+                if not p or getattr(p, "catalog_stale", False):
+                    p = await self._parse_product_single_fallback(nm_id)
                 if p and not getattr(p, "catalog_stale", False):
                     basic = getattr(p, 'seller_price', None) or Decimal(0)
                     prices.append((nm_id, p.final_price, p.in_stock, basic))
