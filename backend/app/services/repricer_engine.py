@@ -2024,13 +2024,20 @@ class RepricerEngine:
                 update_errors: dict = {}
 
                 if not dry_run and pending_updates:
-                    # Импортируем тут чтобы не ломать существующие импорты в начале файла.
                     from app.services.wb_api import WBAuthError
                     from datetime import timedelta
                     from app.services.ozon_api import OzonAuthError
-                    for (_marketplace, _account_id), entry in pending_updates.items():
+                    _nm_to_config = {
+                        d["product"].nm_id: d["product"].config
+                        for d in decisions if d.get("product") and d["product"].config
+                    }
+
+                    async def _update_account(_marketplace, _account_id, entry):
                         account = entry["account"]
                         updates = entry["updates"]
+                        _ok = set()
+                        _fail = set()
+                        _errors = {}
                         upload_id = None
                         try:
                             if _marketplace == "ozon":
@@ -2052,14 +2059,14 @@ class RepricerEngine:
                                 for u in updates:
                                     st = statuses.get(u["_product_pk"])
                                     if st is None:
-                                        update_fail.add(u["_product_pk"])
-                                        update_errors[u["_product_pk"]] = "Статус задачи Ozon не получен"
+                                        _fail.add(u["_product_pk"])
+                                        _errors[u["_product_pk"]] = "Статус задачи Ozon не получен"
                                     elif st[0]:
-                                        update_ok.add(u["_product_pk"])
+                                        _ok.add(u["_product_pk"])
                                     else:
-                                        update_fail.add(u["_product_pk"])
-                                        update_errors[u["_product_pk"]] = st[1] or "Ozon отклонил цену"
-                                continue
+                                        _fail.add(u["_product_pk"])
+                                        _errors[u["_product_pk"]] = st[1] or "Ozon отклонил цену"
+                                return _ok, _fail, _errors
 
                             token = account.wb_api_token
                             async with create_wb_client(token) as client:
@@ -2070,38 +2077,30 @@ class RepricerEngine:
                                 resp = await client.update_prices(wb_updates)
                                 upload_id = (resp.get("data") or {}).get("id")
                                 if resp.get("_already_queued"):
-                                    # Задача уже в очереди WB, статуса нет —
-                                    # помечаем как ok, следующий прогон уточнит.
                                     for u in updates:
-                                        update_ok.add(u["_product_pk"])
+                                        _ok.add(u["_product_pk"])
                                     logger.info(
                                         "Batch update: %d цен — задача уже в очереди WB",
                                         len(updates),
                                     )
-                                    continue
+                                    return _ok, _fail, _errors
                                 statuses = await client.verify_batch_update(upload_id)
                             logger.info(
                                 "Batch update: %d цен отправлено (uploadID=%s, статусов=%d)",
                                 len(updates), upload_id, len(statuses),
                             )
-                            # Карты nm_id → product_config для пометки quarantine.
-                            _nm_to_config = {
-                                d["product"].nm_id: d["product"].config
-                                for d in decisions if d.get("product") and d["product"].config
-                            }
                             for u in updates:
                                 nm = u["nmID"]
                                 st = statuses.get(nm)
                                 if st is None:
-                                    update_fail.add(u["_product_pk"])
-                                    update_errors[u["_product_pk"]] = "Статус задачи WB не получен (таймаут опроса)"
+                                    _fail.add(u["_product_pk"])
+                                    _errors[u["_product_pk"]] = "Статус задачи WB не получен (таймаут опроса)"
                                 elif st[0]:
-                                    update_ok.add(u["_product_pk"])
+                                    _ok.add(u["_product_pk"])
                                 else:
-                                    update_fail.add(u["_product_pk"])
+                                    _fail.add(u["_product_pk"])
                                     err_text = st[1] or "WB отклонил цену"
-                                    update_errors[u["_product_pk"]] = err_text
-                                    # Price Quarantine: помечаем wb_blocked_until=+24h.
+                                    _errors[u["_product_pk"]] = err_text
                                     if 'quarantine' in err_text.lower() and nm in _nm_to_config:
                                         cfg = _nm_to_config[nm]
                                         _now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -2111,7 +2110,6 @@ class RepricerEngine:
                                             nm, cfg.wb_blocked_until.isoformat()
                                         )
                         except WBAuthError as e:
-                            # 401 от WB → токен невалиден/отозван. Деактивируем аккаунт.
                             _acc = next(
                                 (d["product"].account for d in decisions
                                  if d.get("product") and d["product"].account
@@ -2126,19 +2124,29 @@ class RepricerEngine:
                                 except Exception:
                                     pass
                             for u in updates:
-                                update_fail.add(u["_product_pk"])
-                                update_errors[u["_product_pk"]] = f"401 от WB — аккаунт деактивирован: {e}"
+                                _fail.add(u["_product_pk"])
+                                _errors[u["_product_pk"]] = f"401 от WB — аккаунт деактивирован: {e}"
                         except OzonAuthError as e:
                             logger.error("Аккаунт '%s' (id=%s): Ozon auth error — деактивируем", account.name, account.id)
                             account.is_active = False
                             for u in updates:
-                                update_fail.add(u["_product_pk"])
-                                update_errors[u["_product_pk"]] = f"401 от Ozon — аккаунт деактивирован: {e}"
+                                _fail.add(u["_product_pk"])
+                                _errors[u["_product_pk"]] = f"401 от Ozon — аккаунт деактивирован: {e}"
                         except Exception as e:
                             logger.error("Ошибка batch update (uploadID=%s): %s", upload_id, e)
                             for u in updates:
-                                update_fail.add(u["_product_pk"])
-                                update_errors[u["_product_pk"]] = f"Исключение при отправке: {e}"
+                                _fail.add(u["_product_pk"])
+                                _errors[u["_product_pk"]] = f"Исключение при отправке: {e}"
+                        return _ok, _fail, _errors
+
+                    _account_results = await asyncio.gather(*[
+                        _update_account(mk, aid, ent)
+                        for (mk, aid), ent in pending_updates.items()
+                    ])
+                    for _ok, _fail, _errors in _account_results:
+                        update_ok.update(_ok)
+                        update_fail.update(_fail)
+                        update_errors.update(_errors)
 
                 elif dry_run:
                     for d in decisions:
@@ -2214,6 +2222,16 @@ class RepricerEngine:
                     f"Чанк {chunk_idx + 1}/{total_chunks} готов "
                     f"({min(chunk_start + CHUNK_SIZE, total_count)}/{total_count} товаров)"
                 )
+
+                # Abort if run was cancelled/failed externally (e.g. by scheduler orphan cleanup)
+                if chunk_idx % 5 == 4:
+                    self.db.refresh(run)
+                    if run.status not in ("running",):
+                        logger.warning(
+                            "Run #%d was marked '%s' externally — aborting at chunk %d/%d",
+                            run.id, run.status, chunk_idx + 1, total_chunks,
+                        )
+                        break
 
             # === ФАЗА 4: closed-loop verify+correct обновлённых competitor-товаров ===
             # WB пересчитывает СПП за секунды, поэтому доправляем промахи (через
