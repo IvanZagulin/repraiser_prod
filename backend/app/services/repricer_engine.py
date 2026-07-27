@@ -1459,9 +1459,15 @@ class RepricerEngine:
 
             # Товар закончился на складе — WB не возвращает итоговую цену, пропускаем
             if current_data.get("total_quantity", 1) == 0 and current_data.get("final_price", 1) == 0:
-                return {"product": product, "needs_update": False, "skip_code": "OUT_OF_STOCK",
-                        "current_data": current_data, "new_price": None, "limit_reason": None,
-                        "reason_msg": "Нет остатка", "_t0": _t0}
+                if current_data.get("seller_price", 0) > 0:
+                    logger.info(
+                        "nm_id=%s: catalog stock=0 но seller_price=%s — товар активен, продолжаем с SPP=0",
+                        product.nm_id, current_data["seller_price"],
+                    )
+                else:
+                    return {"product": product, "needs_update": False, "skip_code": "OUT_OF_STOCK",
+                            "current_data": current_data, "new_price": None, "limit_reason": None,
+                            "reason_msg": "Нет остатка", "_t0": _t0}
 
         wallet_pct = (self._user_settings or {}).get("wb_wallet_discount_pct", 0) if marketplace == "wb" else 0
         try:
