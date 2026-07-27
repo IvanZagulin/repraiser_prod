@@ -1369,13 +1369,10 @@ class RepricerEngine:
                 _most_common_old, _mc_count = _price_counts.most_common(1)[0] if _price_counts else (0, 0)
                 if _mc_count >= _REVERSION_THRESHOLD:
                     logger.warning(
-                        "Promo-lock detected nm_id=%s: цена ревертится на %.0f₽ (%d раз за %d дней) — пропускаем",
+                        "Promo-lock nm_id=%s: WB ревертит цену на %.0f₽ (%d раз за %d дней). "
+                        "Товар участвует в WB-промо — рекомендуется вывести из акции.",
                         product.nm_id, _most_common_old, _mc_count, _REVERSION_DAYS,
                     )
-                    return {"product": product, "needs_update": False, "skip_code": "SKIPPED_PROMO",
-                            "current_data": None, "new_price": None, "limit_reason": None,
-                            "reason_msg": f"Promo-lock: WB сбрасывает цену на {_most_common_old:.0f}₽ ({_mc_count} раз за {_REVERSION_DAYS} дней)",
-                            "_t0": _t0}
         except Exception as _rev_err:
             logger.debug("Promo-reversion check failed for nm_id=%s: %s", product.nm_id, _rev_err)
 
