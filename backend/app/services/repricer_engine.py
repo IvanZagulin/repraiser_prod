@@ -1352,6 +1352,33 @@ class RepricerEngine:
                     "current_data": None, "new_price": None, "limit_reason": None,
                     "reason_msg": f"WB Price Quarantine до {_blocked_until.isoformat()}", "_t0": _t0}
 
+        _REVERSION_THRESHOLD = 3
+        _REVERSION_DAYS = 7
+        try:
+            from datetime import timedelta as _td
+            _rev_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - _td(days=_REVERSION_DAYS)
+            _recent_changes = self.db.query(PriceChange).filter(
+                PriceChange.product_id == product.id,
+                PriceChange.reason_code.in_(["UPDATED", "CLAMPED_TO_MARGIN"]),
+                PriceChange.changed_at >= _rev_cutoff,
+            ).order_by(PriceChange.changed_at.desc()).limit(10).all()
+            if len(_recent_changes) >= _REVERSION_THRESHOLD:
+                _old_prices = [float(c.old_seller_price) for c in _recent_changes if c.old_seller_price]
+                from collections import Counter as _Counter
+                _price_counts = _Counter(_old_prices)
+                _most_common_old, _mc_count = _price_counts.most_common(1)[0] if _price_counts else (0, 0)
+                if _mc_count >= _REVERSION_THRESHOLD:
+                    logger.warning(
+                        "Promo-lock detected nm_id=%s: цена ревертится на %.0f₽ (%d раз за %d дней) — пропускаем",
+                        product.nm_id, _most_common_old, _mc_count, _REVERSION_DAYS,
+                    )
+                    return {"product": product, "needs_update": False, "skip_code": "SKIPPED_PROMO",
+                            "current_data": None, "new_price": None, "limit_reason": None,
+                            "reason_msg": f"Promo-lock: WB сбрасывает цену на {_most_common_old:.0f}₽ ({_mc_count} раз за {_REVERSION_DAYS} дней)",
+                            "_t0": _t0}
+        except Exception as _rev_err:
+            logger.debug("Promo-reversion check failed for nm_id=%s: %s", product.nm_id, _rev_err)
+
         if config.min_price is None:
             return {"product": product, "needs_update": False, "skip_code": "SKIPPED_INACTIVE",
                     "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": None, "_t0": _t0}
@@ -1524,6 +1551,16 @@ class RepricerEngine:
             )
             reason_msg = (reason_msg or "") + f". Ступенчатое снижение: отправляем {stepped} (целевая {final_new_price}, текущая {_curr_sp_for_step})"
             final_new_price = stepped
+
+        _MAX_RAISE_RATIO = Decimal("1.25")
+        if marketplace == "wb" and _curr_sp_for_step > 0 and final_new_price > _curr_sp_for_step * _MAX_RAISE_RATIO:
+            stepped_up = Decimal(self._round_up(_curr_sp_for_step * _MAX_RAISE_RATIO))
+            logger.info(
+                "Ступенчатое повышение для nm_id=%s: целевая %s > +25%% текущей %s, отправляем %s",
+                product.nm_id, final_new_price, _curr_sp_for_step, stepped_up,
+            )
+            reason_msg = (reason_msg or "") + f". Ступенчатое повышение: отправляем {stepped_up} (целевая {final_new_price}, текущая {_curr_sp_for_step})"
+            final_new_price = stepped_up
 
         if final_new_price == current_data["seller_price"]:
             return {"product": product, "needs_update": False, "skip_code": "NO_CHANGE",
