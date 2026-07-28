@@ -323,6 +323,42 @@ class RepricerEngine:
         seller_price = final_price / (spp_factor * discount_factor)
         return Decimal(self._round_up(seller_price))
     
+    async def _preflight_catalog_check(self, max_wait: int = 300, interval: int = 30) -> None:
+        """Check catalog proxy availability, retry up to max_wait seconds."""
+        import aiohttp
+        from app.config import settings
+        proxy_url = getattr(settings, "CATALOG_PROXY_URL", "")
+        if not proxy_url:
+            return
+        parts = proxy_url.rstrip("/").rsplit("@", 1)
+        host_part = parts[-1] if parts else proxy_url
+        test_url = f"http://{host_part}/cards/v4/detail?appType=1&curr=rub&dest=-1257786&nm=282199514"
+        auth = None
+        if len(parts) == 2:
+            cred = parts[0].replace("http://", "").replace("https://", "")
+            user_pass = cred.split(":", 1)
+            if len(user_pass) == 2:
+                auth = aiohttp.BasicAuth(user_pass[0], user_pass[1])
+        waited = 0
+        while waited <= max_wait:
+            try:
+                async with aiohttp.ClientSession() as sess:
+                    async with sess.get(test_url, auth=auth, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status in (200, 407):
+                            if waited > 0:
+                                logger.info("Catalog proxy restored after %ds wait", waited)
+                            else:
+                                logger.info("Catalog proxy OK (pre-flight)")
+                            return
+                        logger.warning("Catalog proxy returned %d (pre-flight)", resp.status)
+            except Exception as e:
+                logger.warning("Catalog proxy unavailable (pre-flight, waited %ds/%ds): %s", waited, max_wait, e)
+            if waited >= max_wait:
+                break
+            await asyncio.sleep(interval)
+            waited += interval
+        logger.error("Catalog proxy still down after %ds — proceeding anyway", max_wait)
+
     async def _cached_parse_product(self, nm_id: int):
         """
         Парсинг товара из WB Catalog API с кешированием в Redis.
@@ -2019,6 +2055,10 @@ class RepricerEngine:
                 run.skipped_count = results['skipped']
                 run.error_count = results['errors']
                 self.db.commit()
+
+            # Pre-flight: проверяем доступность каталога WB (SSH-туннель)
+            if not dry_run:
+                await self._preflight_catalog_check()
 
             # Загружаем цены: для маленьких прогонов точечно, для больших — все разом
             if not dry_run:
