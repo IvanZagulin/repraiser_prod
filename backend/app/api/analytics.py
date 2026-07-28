@@ -112,6 +112,33 @@ def _calculate_margin_pct(
     return (margin_price - cost - fees) / cost * 100
 
 
+def _load_subject_commissions(db: Session) -> dict[str, float]:
+    """Load subject-specific WB commissions. Key = normalized subject name."""
+    try:
+        from app.models.wb_subject_commission import WBSubjectCommission
+        result = {}
+        for row in db.query(WBSubjectCommission).all():
+            key = " ".join(str(row.subject_name or "").strip().casefold().replace("ё", "е").split())
+            if key:
+                result[key] = float(row.commission_pct)
+        return result
+    except Exception:
+        return {}
+
+
+def _fee_map_for_subject(fee_map: dict, subject_name: str | None, subject_commissions: dict[str, float]) -> dict:
+    """Return fee_map with subject-specific commission override if available."""
+    if not subject_name or not subject_commissions:
+        return fee_map
+    key = " ".join(str(subject_name).strip().casefold().replace("ё", "е").split())
+    if key in subject_commissions:
+        overridden = dict(fee_map)
+        overridden["commission_type"] = "pct"
+        overridden["commission_value"] = str(subject_commissions[key])
+        return overridden
+    return fee_map
+
+
 def _latest_successful_price_changes(db: Session, product_ids: list[int]) -> dict[int, object]:
     if not product_ids:
         return {}
@@ -446,10 +473,8 @@ def margin_by_brand(
     """Average margin grouped by brand for products with cost_price set."""
     uid = current_user.id
     fee_map = _get_fee_settings(db, uid)
+    subject_commissions = _load_subject_commissions(db)
 
-    # current_seller_price updates from snapshots, while PriceChange stores the
-    # price immediately after repricing. Prefer the latest successful repricing
-    # result so margin changes are visible before the next external sync.
     rows = (
         db.query(
             Product.id,
@@ -458,6 +483,7 @@ def margin_by_brand(
             Product.nm_id,
             Product.cost_price,
             Product.current_seller_price,
+            Product.subject_name,
         )
         .join(Account, Product.account_id == Account.id)
         .filter(
@@ -485,15 +511,30 @@ def margin_by_brand(
         db, [row.id for row, _ in products_for_margin]
     )
 
-    for row, _snap in products_for_margin:
-        current_price = row.current_seller_price
+    for row, snap in products_for_margin:
         latest_change = latest_changes.get(row.id)
-        if latest_change and latest_change.new_seller_price is not None:
-            current_price = latest_change.new_seller_price
+        use_change = bool(
+            latest_change
+            and (
+                not snap
+                or not snap.snapshot_at
+                or latest_change.changed_at >= snap.snapshot_at
+            )
+        )
+        current_price = (
+            _to_float(latest_change.new_seller_price)
+            if use_change
+            else _to_float(row.current_seller_price)
+        )
+        if current_price is None and snap:
+            current_price = _to_float(snap.seller_price)
+
+        discount = _to_float(snap.discount) if snap else None
+        product_fee_map = _fee_map_for_subject(fee_map, row.subject_name, subject_commissions)
 
         sku_key = row.seller_sku or str(row.nm_id)
         brand_skus[row.brand].add(sku_key)
-        margin = _calculate_margin_pct(current_price, row.cost_price, fee_map)
+        margin = _calculate_margin_pct(current_price, row.cost_price, product_fee_map, discount)
         if margin is None:
             continue
         brand_margins[row.brand].append(margin)
@@ -524,6 +565,7 @@ async def export_brand_report(
 
     uid = current_user.id
     fee_map = _get_fee_settings(db, uid)
+    subject_commissions = _load_subject_commissions(db)
 
     q = (
         db.query(
@@ -534,6 +576,7 @@ async def export_brand_report(
             Product.nm_id,
             Product.cost_price,
             Product.current_seller_price,
+            Product.subject_name,
             Account.name.label("account_name"),
             ProductConfig.rrp_price,
             ProductConfig.min_price,
@@ -593,7 +636,8 @@ async def export_brand_report(
         discount = _to_float(snap.discount) if snap else None
         stock_quantity = _stock_qty(snap)
         cost = _to_float(p.cost_price) if p.cost_price and float(p.cost_price) > 0 else None
-        margin_pct = _calculate_margin_pct(seller_price, cost, fee_map, discount)
+        product_fee_map = _fee_map_for_subject(fee_map, p.subject_name, subject_commissions)
+        margin_pct = _calculate_margin_pct(seller_price, cost, product_fee_map, discount)
         margin = round(margin_pct, 2) if margin_pct is not None else None
 
         rrp_price = _to_float(p.rrp_price)
