@@ -300,6 +300,7 @@ def run_repricer_for_user(
                 product_lock_owner=priority_owner,
                 hold_product_locks=priority,
                 force_catalog_refresh=priority,
+                bypass_competitor_cooldown=priority,
             )
             run = asyncio.run(engine.run_repricer(
                 product_ids=product_ids,

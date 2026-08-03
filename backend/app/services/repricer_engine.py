@@ -46,6 +46,7 @@ class RepricerEngine:
         product_lock_owner: Optional[str] = None,
         hold_product_locks: bool = False,
         force_catalog_refresh: bool = False,
+        bypass_competitor_cooldown: bool = False,
     ):
         self.db = db
         self.user_id = user_id  # None → глобальные/дефолтные настройки
@@ -59,6 +60,7 @@ class RepricerEngine:
         self._product_lock_owner = product_lock_owner or f"engine:{uuid.uuid4().hex}"
         self._hold_product_locks = hold_product_locks
         self._force_catalog_refresh = force_catalog_refresh
+        self._bypass_competitor_cooldown = bypass_competitor_cooldown
 
     def _marketplace(self, account: Optional[Account]) -> str:
         return getattr(account, "marketplace", "wb") or "wb"
@@ -1405,7 +1407,11 @@ class RepricerEngine:
         # OVERRIDE: если СПП дрейфнул и финальная цена ушла от цели конкурента —
         # реагируем немедленно вверх или вниз.
         from datetime import timedelta
-        if config.strategy == "competitor" and self._COMPETITOR_COOLDOWN_HOURS > 0:
+        if (
+            config.strategy == "competitor"
+            and self._COMPETITOR_COOLDOWN_HOURS > 0
+            and not self._bypass_competitor_cooldown
+        ):
             cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=self._COMPETITOR_COOLDOWN_HOURS)
             recent = self.db.query(PriceChange).filter(
                 PriceChange.product_id == product.id,

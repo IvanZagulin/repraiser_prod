@@ -167,6 +167,7 @@ class TestPriorityProductRun:
             product_lock_owner=owner,
             hold_product_locks=True,
             force_catalog_refresh=True,
+            bypass_competitor_cooldown=True,
         )
         mock_product_release.assert_called_once_with(test_user.id, {1, 2}, owner)
 
