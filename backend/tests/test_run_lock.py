@@ -104,6 +104,58 @@ class TestLockLifecycle:
         mock_client.delete.assert_called_once_with("repricer:run_lock:1")
 
 
+class TestProductLocks:
+    def test_batch_acquire_returns_only_created_locks(self):
+        mock_client = MagicMock()
+        pipe = MagicMock()
+        pipe.execute.return_value = [True, None]
+        mock_client.pipeline.return_value = pipe
+        mock_client.mget.return_value = ["another-owner"]
+
+        with patch.object(redis_client, "_get_client", return_value=mock_client):
+            acquired = redis_client.acquire_product_locks(7, [10, 11], "owner-a")
+
+        assert acquired == {10}
+        assert pipe.set.call_count == 2
+        assert pipe.set.call_args_list[0].args[:2] == (
+            "repricer:product_lock:7:10",
+            "owner-a",
+        )
+
+    def test_same_owner_is_reentrant_and_refreshes_ttl(self):
+        mock_client = MagicMock()
+        create_pipe = MagicMock()
+        create_pipe.execute.return_value = [None]
+        renew_pipe = MagicMock()
+        renew_pipe.execute.return_value = [True]
+        mock_client.pipeline.side_effect = [create_pipe, renew_pipe]
+        mock_client.mget.return_value = ["owner-a"]
+
+        with patch.object(redis_client, "_get_client", return_value=mock_client):
+            acquired = redis_client.acquire_product_locks(7, [10], "owner-a", ttl=120)
+
+        assert acquired == {10}
+        renew_pipe.expire.assert_called_once_with("repricer:product_lock:7:10", 120)
+
+    def test_acquire_fails_closed_on_redis_error(self):
+        mock_client = MagicMock()
+        mock_client.pipeline.side_effect = redis_lib.ConnectionError("boom")
+        with patch.object(redis_client, "_get_client", return_value=mock_client):
+            assert redis_client.acquire_product_locks(7, [10], "owner-a") is None
+
+    def test_release_uses_compare_and_delete_script(self):
+        mock_client = MagicMock()
+        pipe = MagicMock()
+        mock_client.pipeline.return_value = pipe
+        with patch.object(redis_client, "_get_client", return_value=mock_client):
+            redis_client.release_product_locks(7, [10], "owner-a")
+
+        pipe.eval.assert_called_once()
+        args = pipe.eval.call_args.args
+        assert args[1:] == (1, "repricer:product_lock:7:10", "owner-a")
+        pipe.execute.assert_called_once_with()
+
+
 # ─── Catalog sync lock ────────────────────────────────────────────────────────
 
 

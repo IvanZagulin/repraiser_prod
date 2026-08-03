@@ -3,6 +3,7 @@ Extended repricer run tests.
 """
 import pytest
 from datetime import datetime, timezone
+from unittest.mock import patch
 from app.models.repricer_run import RepricerRun
 
 
@@ -109,6 +110,25 @@ class TestRunStatuses:
         r = client.post("/api/repricer/run", json={"dry_run": False})
         # 404 when user has no products
         assert r.status_code in (404, 503)
+
+    def test_selected_products_dispatch_as_priority(self, client, test_product):
+        with patch("app.tasks.repricer_task.run_repricer_for_user.apply_async") as dispatch:
+            response = client.post(
+                "/api/repricer/run",
+                json={"seller_skus": [test_product.seller_sku], "dry_run": False},
+            )
+
+        assert response.status_code == 200
+        assert dispatch.call_args.kwargs["priority"] == 9
+        assert dispatch.call_args.kwargs["kwargs"] == {"priority": True}
+
+    def test_full_manual_run_keeps_normal_priority(self, client, test_product):
+        with patch("app.tasks.repricer_task.run_repricer_for_user.apply_async") as dispatch:
+            response = client.post("/api/repricer/run", json={"dry_run": False})
+
+        assert response.status_code == 200
+        assert dispatch.call_args.kwargs["priority"] == 0
+        assert dispatch.call_args.kwargs["kwargs"] == {"priority": False}
 
 
 class TestRunPagination:

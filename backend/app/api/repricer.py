@@ -75,6 +75,7 @@ async def manual_run(
 ):
     """Ручной запуск репрайсера (через Celery — не блокирует API)"""
     product_ids = _user_product_ids(db, current_user.id, body.seller_skus or None)
+    priority = bool(body.seller_skus)
 
     if not product_ids:
         raise HTTPException(status_code=404, detail="No products found")
@@ -96,18 +97,27 @@ async def manual_run(
     db.refresh(run)
 
     try:
-        log_activity(db, current_user.id, "repricer_run", details={"run_id": run.id, "run_type": "manual", "dry_run": body.dry_run})
+        log_activity(db, current_user.id, "repricer_run", details={
+            "run_id": run.id,
+            "run_type": "manual",
+            "dry_run": body.dry_run,
+            "priority": priority,
+        })
         db.commit()
     except Exception as e:
         logger.warning(f"Failed to log activity 'repricer_run': {e}")
 
     from app.tasks.repricer_task import run_repricer_for_user
-    run_repricer_for_user.delay(
-        current_user.id,
-        product_ids,
-        "manual",
-        run.id,
-        body.dry_run,
+    run_repricer_for_user.apply_async(
+        args=[
+            current_user.id,
+            product_ids,
+            "manual",
+            run.id,
+            body.dry_run,
+        ],
+        kwargs={"priority": priority},
+        priority=9 if priority else 0,
     )
 
     return RepricerRunResponse.model_validate(run)

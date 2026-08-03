@@ -12,7 +12,7 @@ We patch:
   - `RepricerEngine` to keep the test fast and independent of the engine
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -133,6 +133,76 @@ class TestLockGate:
         assert result["status"] == "completed"
         assert mock_acquire.call_count == 2
         assert mock_release.call_count == 2
+
+
+class TestPriorityProductRun:
+    def test_bypasses_user_lock_and_holds_selected_product_locks(
+        self, patched_session, test_user
+    ):
+        fake_run = MagicMock(id=77, status="completed", updated_count=2)
+
+        async def _fake_run_repricer(*args, **kwargs):
+            return fake_run
+
+        with patch("app.tasks.repricer_task.acquire_run_lock") as mock_user_lock, \
+             patch("app.tasks.repricer_task.release_run_lock") as mock_user_release, \
+             patch("app.tasks.repricer_task.acquire_product_locks", return_value={1, 2}) as mock_product_lock, \
+             patch("app.tasks.repricer_task.release_product_locks") as mock_product_release, \
+             patch("app.services.repricer_engine.RepricerEngine") as mock_engine_cls:
+            mock_engine_cls.return_value.run_repricer = _fake_run_repricer
+            result = repricer_task.run_repricer_for_user.apply(
+                args=(test_user.id, [1, 2]),
+                kwargs={"run_type": "manual", "priority": True},
+            ).get()
+
+        assert result["run_id"] == 77
+        mock_user_lock.assert_not_called()
+        mock_user_release.assert_not_called()
+        mock_product_lock.assert_called_once()
+        owner = mock_product_lock.call_args.args[2]
+        assert owner.startswith("priority:")
+        mock_engine_cls.assert_called_once_with(
+            ANY,
+            user_id=test_user.id,
+            product_lock_owner=owner,
+            hold_product_locks=True,
+        )
+        mock_product_release.assert_called_once_with(test_user.id, {1, 2}, owner)
+
+    def test_busy_priority_product_times_out_without_releasing_user_lock(
+        self, patched_session, db_session, test_user
+    ):
+        run = RepricerRun(
+            user_id=test_user.id,
+            run_type="manual",
+            status="queued",
+            total_products=1,
+            updated_count=0,
+            skipped_count=0,
+            error_count=0,
+        )
+        db_session.add(run)
+        db_session.commit()
+
+        with patch("app.tasks.repricer_task._PRIORITY_LOCK_MAX_RETRIES", 0), \
+             patch("app.tasks.repricer_task.acquire_product_locks", return_value=set()), \
+             patch("app.tasks.repricer_task.acquire_run_lock") as mock_user_lock, \
+             patch("app.tasks.repricer_task.release_run_lock") as mock_user_release:
+            result = repricer_task.run_repricer_for_user.apply(
+                args=(test_user.id, [1]),
+                kwargs={
+                    "run_type": "manual",
+                    "existing_run_id": run.id,
+                    "priority": True,
+                },
+            ).get()
+
+        db_session.refresh(run)
+        assert result == {"status": "skipped", "reason": "priority product lock timeout"}
+        assert run.status == "failed"
+        assert "selected products" in run.error_message
+        mock_user_lock.assert_not_called()
+        mock_user_release.assert_not_called()
 
 
 class TestUserValidation:

@@ -2,6 +2,7 @@
 import json
 import logging
 import time
+import uuid
 from types import SimpleNamespace
 from typing import Optional, Dict, List, Tuple
 from decimal import Decimal, ROUND_UP
@@ -18,7 +19,12 @@ from app.services import (
     catalog_parser, create_wb_client, create_ozon_client, telegram_notifier
 )
 from app.utils.jwt import is_token_expired
-from app.redis_client import cache_get, cache_set
+from app.redis_client import (
+    acquire_product_locks,
+    cache_get,
+    cache_set,
+    release_product_locks,
+)
 from app.services.activity_logger import log_activity
 
 logger = logging.getLogger(__name__)
@@ -33,7 +39,13 @@ class RepricerEngine:
     2. Competitor - привязка к цене конкурента с заданным смещением
     """
     
-    def __init__(self, db: Session, user_id: Optional[int] = None):
+    def __init__(
+        self,
+        db: Session,
+        user_id: Optional[int] = None,
+        product_lock_owner: Optional[str] = None,
+        hold_product_locks: bool = False,
+    ):
         self.db = db
         self.user_id = user_id  # None → глобальные/дефолтные настройки
         self._user_settings: Optional[Dict] = None  # loaded once per run
@@ -43,6 +55,8 @@ class RepricerEngine:
         self._catalog_single_fallbacks = 0
         self._catalog_single_fallback_failures = 0
         self._catalog_single_fallback_disabled = False
+        self._product_lock_owner = product_lock_owner or f"engine:{uuid.uuid4().hex}"
+        self._hold_product_locks = hold_product_locks
 
     def _marketplace(self, account: Optional[Account]) -> str:
         return getattr(account, "marketplace", "wb") or "wb"
@@ -1949,6 +1963,7 @@ class RepricerEngine:
             self.db.add(run)
             self.db.commit()
 
+        owned_product_lock_ids: set[int] = set()
         try:
             total_count = len(all_product_ids)
             logger.info(f"Найдено {total_count} товаров для обработки")
@@ -1997,6 +2012,35 @@ class RepricerEngine:
                     .options(joinedload(Product.config), joinedload(Product.account))
                 )
                 chunk_products = self.db.execute(chunk_query).scalars().unique().all()
+
+                # Product locks allow a small priority/manual run to execute while
+                # the user's full run is active without both workers writing the
+                # same WB card at the same time.  Redis pipelining keeps this to
+                # one round-trip per 1000-product chunk.
+                chunk_product_ids = [product.id for product in chunk_products]
+                if dry_run:
+                    acquired_chunk_locks = set(chunk_product_ids)
+                else:
+                    acquired_chunk_locks = acquire_product_locks(
+                        self.user_id or 0,
+                        chunk_product_ids,
+                        self._product_lock_owner,
+                    )
+                    if acquired_chunk_locks is None:
+                        raise RuntimeError("Redis product locking unavailable")
+                if not dry_run:
+                    owned_product_lock_ids.update(acquired_chunk_locks)
+                busy_count = len(chunk_product_ids) - len(acquired_chunk_locks)
+                if busy_count:
+                    logger.info(
+                        "Skipping %d products reserved by a concurrent priority run",
+                        busy_count,
+                    )
+                    results["skipped"] += busy_count
+                chunk_products = [
+                    product for product in chunk_products
+                    if product.id in acquired_chunk_locks
+                ]
 
                 # === PRE-FETCH для текущего чанка ===
                 if not dry_run:
@@ -2257,6 +2301,26 @@ class RepricerEngine:
                     f"({min(chunk_start + CHUNK_SIZE, total_count)}/{total_count} товаров)"
                 )
 
+                if not dry_run and not self._hold_product_locks:
+                    closed_loop_ids = {
+                        item["product"].id for item in competitor_updates
+                    }
+                    releasable = acquired_chunk_locks - closed_loop_ids
+                    release_product_locks(
+                        self.user_id or 0,
+                        releasable,
+                        self._product_lock_owner,
+                    )
+                    owned_product_lock_ids.difference_update(releasable)
+                    if owned_product_lock_ids:
+                        renewed = acquire_product_locks(
+                            self.user_id or 0,
+                            owned_product_lock_ids,
+                            self._product_lock_owner,
+                        )
+                        if renewed != owned_product_lock_ids:
+                            raise RuntimeError("Lost product lock before closed-loop verification")
+
                 # Abort if run was cancelled/failed externally (e.g. by scheduler orphan cleanup)
                 if chunk_idx % 5 == 4:
                     self.db.refresh(run)
@@ -2363,3 +2427,10 @@ class RepricerEngine:
             await telegram_notifier.notify_scheduler_error(str(e))
             
             raise
+        finally:
+            if not self._hold_product_locks and owned_product_lock_ids:
+                release_product_locks(
+                    self.user_id or 0,
+                    owned_product_lock_ids,
+                    self._product_lock_owner,
+                )

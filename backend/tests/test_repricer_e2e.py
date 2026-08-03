@@ -134,6 +134,27 @@ class TestRunRepricerDryRun:
         assert run is not None
         assert run.run_type == "scheduled"
 
+    def test_full_run_skips_product_reserved_by_priority_run(
+        self, db_session, test_user, test_product, test_product_config
+    ):
+        engine = RepricerEngine(db_session, user_id=test_user.id)
+        with patch("app.services.repricer_engine.cache_get", return_value={}), \
+             patch("app.services.repricer_engine.acquire_product_locks", return_value=set()), \
+             patch.object(engine, "_prefetch_missing_prices", new=AsyncMock()), \
+             patch("app.services.repricer_engine.telegram_notifier.notify_zero_updates", new=AsyncMock()):
+            run = asyncio.run(
+                engine.run_repricer(
+                    product_ids=[test_product.id],
+                    run_type="scheduled",
+                    dry_run=False,
+                )
+            )
+
+        assert run.status == "completed"
+        assert run.skipped_count == 1
+        assert run.updated_count == 0
+        assert run.error_count == 0
+
     def test_mass_catalog_unavailable_marks_run_failed(
         self, db_session, test_user, test_account, monkeypatch
     ):
@@ -177,7 +198,9 @@ class TestRunRepricerDryRun:
         engine = RepricerEngine(db_session, user_id=test_user.id)
         with patch("app.services.repricer_engine.catalog_parser.parse_batch_ids", new=AsyncMock(return_value={})), \
              patch("app.services.repricer_engine.telegram_notifier.notify_catalog_parse_errors", new=AsyncMock()), \
-             patch("app.services.repricer_engine.telegram_notifier.notify_zero_updates", new=AsyncMock()):
+             patch("app.services.repricer_engine.telegram_notifier.notify_zero_updates", new=AsyncMock()), \
+             patch("app.services.repricer_engine.acquire_product_locks", side_effect=lambda _uid, ids, _owner: set(ids)), \
+             patch("app.services.repricer_engine.release_product_locks"):
             run = asyncio.run(
                 engine.run_repricer(
                     product_ids=product_ids,
