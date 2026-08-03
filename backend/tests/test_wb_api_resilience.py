@@ -134,4 +134,8 @@ async def test_catalog_cache_miss_uses_limited_single_fallback():
     assert result["final_price"] == Decimal("357")
     assert result["spp"] == Decimal("51")
     parse_product.assert_awaited_once_with(product.nm_id)
-    assert cache_set.call_count == 2
+    cache_set.assert_called_once_with(
+        f"wb_catalog:{product.nm_id}",
+        catalog_data.to_dict.return_value,
+        ttl=3600,
+    )
