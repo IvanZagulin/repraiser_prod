@@ -13,7 +13,7 @@ the unit tests of individual math helpers in test_repricer_engine.py.
 
 import asyncio
 from decimal import Decimal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -66,6 +66,65 @@ class TestRunRepricerDryRun:
             f"dry_run упал {run.error_count} раз — проверь типы в current_data "
             "(должны быть Decimal, не int/float)"
         )
+
+    def test_priority_run_refreshes_cached_own_and_competitor_catalog(
+        self, db_session, test_user, test_product, test_product_config
+    ):
+        competitor_nm_id = 987654321
+        test_product_config.strategy = "competitor"
+        test_product_config.competitor_nm_id = competitor_nm_id
+        test_product_config.competitor_offset_type = "rub"
+        test_product_config.competitor_offset_direction = "above"
+        test_product_config.competitor_offset_value = Decimal("0")
+        test_product_config.competitor_select_rule = "min_price"
+        test_product_config.skip_margin_check = True
+        db_session.commit()
+
+        cached_payload = {
+            "final_price": 900,
+            "seller_price": 1000,
+            "spp": 10,
+            "is_in_promo": False,
+            "total_quantity": 1,
+            "in_stock": True,
+        }
+        own_live = MagicMock()
+        own_live.to_dict.return_value = dict(cached_payload, final_price=850)
+        competitor_live = MagicMock()
+        competitor_live.to_dict.return_value = dict(cached_payload, final_price=800)
+        parse_batch = AsyncMock(
+            side_effect=[
+                {competitor_nm_id: competitor_live},
+                {test_product.nm_id: own_live},
+            ]
+        )
+
+        engine = RepricerEngine(
+            db_session,
+            user_id=test_user.id,
+            force_catalog_refresh=True,
+        )
+        with patch(
+            "app.services.repricer_engine.cache_get", return_value=cached_payload
+        ), patch("app.services.repricer_engine.cache_set") as cache_set, patch(
+            "app.services.repricer_engine.catalog_parser.parse_batch_ids",
+            new=parse_batch,
+        ):
+            run = asyncio.run(
+                engine.run_repricer(
+                    product_ids=[test_product.id],
+                    run_type="manual",
+                    dry_run=True,
+                )
+            )
+
+        assert run.status == "completed"
+        assert parse_batch.await_count == 2
+        assert parse_batch.await_args_list[0].args[0] == [competitor_nm_id]
+        assert parse_batch.await_args_list[1].args[0] == [test_product.nm_id]
+        cached_keys = [call.args[0] for call in cache_set.call_args_list]
+        assert f"wb_catalog:{competitor_nm_id}" in cached_keys
+        assert f"wb_catalog:{test_product.nm_id}" in cached_keys
 
     def test_total_products_at_least_one(
         self, db_session, test_user, test_account, test_product, test_product_config

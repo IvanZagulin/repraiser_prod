@@ -45,6 +45,7 @@ class RepricerEngine:
         user_id: Optional[int] = None,
         product_lock_owner: Optional[str] = None,
         hold_product_locks: bool = False,
+        force_catalog_refresh: bool = False,
     ):
         self.db = db
         self.user_id = user_id  # None → глобальные/дефолтные настройки
@@ -57,6 +58,7 @@ class RepricerEngine:
         self._catalog_single_fallback_disabled = False
         self._product_lock_owner = product_lock_owner or f"engine:{uuid.uuid4().hex}"
         self._hold_product_locks = hold_product_locks
+        self._force_catalog_refresh = force_catalog_refresh
 
     def _marketplace(self, account: Optional[Account]) -> str:
         return getattr(account, "marketplace", "wb") or "wb"
@@ -1879,12 +1881,20 @@ class RepricerEngine:
                 for cfg_id, nm in rows:
                     self._competitor_entries_map.setdefault(cfg_id, []).append(nm)
                     competitor_nm_ids.add(nm)
-            cold_ids = [
-                nm_id for nm_id in competitor_nm_ids
-                if cache_get(f"wb_catalog:{nm_id}") is None
-            ]
+            cold_ids = (
+                list(competitor_nm_ids)
+                if self._force_catalog_refresh
+                else [
+                    nm_id for nm_id in competitor_nm_ids
+                    if cache_get(f"wb_catalog:{nm_id}") is None
+                ]
+            )
             if cold_ids:
-                logger.info(f"Pre-fetch конкурентов: {len(cold_ids)} холодных из {len(competitor_nm_ids)} уникальных")
+                refresh_kind = "принудительно свежих" if self._force_catalog_refresh else "холодных"
+                logger.info(
+                    "Pre-fetch конкурентов: %d %s из %d уникальных",
+                    len(cold_ids), refresh_kind, len(competitor_nm_ids),
+                )
                 batch_results = await catalog_parser.parse_batch_ids(cold_ids)
                 for nm_id, product_data in batch_results.items():
                     if product_data is not None:
@@ -1896,9 +1906,20 @@ class RepricerEngine:
             all_own_nm_ids = list({r[0] for r in self.db.execute(
                 select(Product.nm_id).filter(Product.id.in_(all_product_ids))
             ).all()})
-            own_cold = [nm for nm in all_own_nm_ids if cache_get("wb_catalog:%d" % nm) is None]
+            own_cold = (
+                all_own_nm_ids
+                if self._force_catalog_refresh
+                else [
+                    nm for nm in all_own_nm_ids
+                    if cache_get("wb_catalog:%d" % nm) is None
+                ]
+            )
             if own_cold:
-                logger.info(f"Глобальный pre-fetch: {len(own_cold)} холодных из {len(all_own_nm_ids)} собственных товаров")
+                refresh_kind = "принудительно свежих" if self._force_catalog_refresh else "холодных"
+                logger.info(
+                    "Глобальный pre-fetch: %d %s из %d собственных товаров",
+                    len(own_cold), refresh_kind, len(all_own_nm_ids),
+                )
                 own_results = await catalog_parser.parse_batch_ids(own_cold)
                 cached_count = 0
                 for nm_id, product_data in own_results.items():
