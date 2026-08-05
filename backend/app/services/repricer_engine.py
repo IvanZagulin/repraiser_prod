@@ -23,6 +23,7 @@ from app.redis_client import (
     acquire_product_locks,
     cache_get,
     cache_set,
+    cache_ttl,
     release_product_locks,
 )
 from app.services.activity_logger import log_activity
@@ -323,6 +324,42 @@ class RepricerEngine:
         seller_price = final_price / (spp_factor * discount_factor)
         return Decimal(self._round_up(seller_price))
     
+    async def _preflight_catalog_check(self, max_wait: int = 300, interval: int = 30) -> None:
+        """Check catalog proxy availability, retry up to max_wait seconds."""
+        import httpx
+        from app.config import settings
+        proxy_url = getattr(settings, "CATALOG_PROXY_URL", "")
+        if not proxy_url:
+            return
+        parts = proxy_url.rstrip("/").rsplit("@", 1)
+        host_part = parts[-1] if parts else proxy_url
+        test_url = f"http://{host_part}/cards/v4/detail?appType=1&curr=rub&dest=-1257786&nm=282199514"
+        auth = None
+        if len(parts) == 2:
+            cred = parts[0].replace("http://", "").replace("https://", "")
+            user_pass = cred.split(":", 1)
+            if len(user_pass) == 2:
+                auth = (user_pass[0], user_pass[1])
+        waited = 0
+        while waited <= max_wait:
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    resp = await client.get(test_url, auth=auth)
+                    if resp.status_code in (200, 407):
+                        if waited > 0:
+                            logger.info("Catalog proxy restored after %ds wait", waited)
+                        else:
+                            logger.info("Catalog proxy OK (pre-flight)")
+                        return
+                    logger.warning("Catalog proxy returned %d (pre-flight)", resp.status_code)
+            except Exception as e:
+                logger.warning("Catalog proxy unavailable (pre-flight, waited %ds/%ds): %s", waited, max_wait, e)
+            if waited >= max_wait:
+                break
+            await asyncio.sleep(interval)
+            waited += interval
+        logger.error("Catalog proxy still down after %ds — proceeding anyway", max_wait)
+
     async def _cached_parse_product(self, nm_id: int):
         """
         Парсинг товара из WB Catalog API с кешированием в Redis.
@@ -378,7 +415,7 @@ class RepricerEngine:
 
         self._catalog_single_fallback_failures = 0
         payload = product_data.to_dict()
-        cache_set(f"wb_catalog:{nm_id}", payload, ttl=3600)
+        cache_set(f"wb_catalog:{nm_id}", payload, ttl=7200)
         return SimpleNamespace(
             final_price=Decimal(str(payload['final_price'])),
             seller_price=Decimal(str(payload.get('seller_price', 0))),
@@ -1892,7 +1929,7 @@ class RepricerEngine:
                 if self._force_catalog_refresh
                 else [
                     nm_id for nm_id in competitor_nm_ids
-                    if cache_get(f"wb_catalog:{nm_id}") is None
+                    if cache_ttl(f"wb_catalog:{nm_id}") < 1200
                 ]
             )
             if cold_ids:
@@ -1904,7 +1941,7 @@ class RepricerEngine:
                 batch_results = await catalog_parser.parse_batch_ids(cold_ids)
                 for nm_id, product_data in batch_results.items():
                     if product_data is not None:
-                        cache_set(f"wb_catalog:{nm_id}", product_data.to_dict(), ttl=3600)
+                        cache_set(f"wb_catalog:{nm_id}", product_data.to_dict(), ttl=7200)
                 logger.info(f"Pre-fetch завершён: {sum(1 for v in batch_results.values() if v)} / {len(cold_ids)}")
 
             # Глобальный pre-fetch ВСЕХ собственных товаров одним батчем.
@@ -1917,7 +1954,7 @@ class RepricerEngine:
                 if self._force_catalog_refresh
                 else [
                     nm for nm in all_own_nm_ids
-                    if cache_get("wb_catalog:%d" % nm) is None
+                    if cache_ttl("wb_catalog:%d" % nm) < 1200
                 ]
             )
             if own_cold:
@@ -1930,7 +1967,7 @@ class RepricerEngine:
                 cached_count = 0
                 for nm_id, product_data in own_results.items():
                     if product_data is not None:
-                        cache_set("wb_catalog:%d" % nm_id, product_data.to_dict(), ttl=3600)
+                        cache_set("wb_catalog:%d" % nm_id, product_data.to_dict(), ttl=7200)
                         cached_count += 1
                 if cached_count == 0 and len(own_cold) > 10:
                     logger.warning("Глобальный pre-fetch: 0 успехов, повтор через 10 сек...")
@@ -1938,7 +1975,7 @@ class RepricerEngine:
                     own_results = await catalog_parser.parse_batch_ids(own_cold)
                     for nm_id, product_data in own_results.items():
                         if product_data is not None:
-                            cache_set("wb_catalog:%d" % nm_id, product_data.to_dict(), ttl=3600)
+                            cache_set("wb_catalog:%d" % nm_id, product_data.to_dict(), ttl=7200)
                             cached_count += 1
                 logger.info(f"Глобальный pre-fetch завершён: {cached_count}/{len(own_cold)} закешировано")
 
@@ -2019,6 +2056,10 @@ class RepricerEngine:
                 run.skipped_count = results['skipped']
                 run.error_count = results['errors']
                 self.db.commit()
+
+            # Pre-flight: проверяем доступность каталога WB (SSH-туннель)
+            if not dry_run:
+                await self._preflight_catalog_check()
 
             # Загружаем цены: для маленьких прогонов точечно, для больших — все разом
             if not dry_run:

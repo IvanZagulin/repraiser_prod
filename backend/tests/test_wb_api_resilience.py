@@ -137,5 +137,5 @@ async def test_catalog_cache_miss_uses_limited_single_fallback():
     cache_set.assert_called_once_with(
         f"wb_catalog:{product.nm_id}",
         catalog_data.to_dict.return_value,
-        ttl=3600,
+        ttl=7200,
     )

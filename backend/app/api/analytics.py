@@ -524,10 +524,8 @@ def margin_by_brand(
         current_price = (
             _to_float(latest_change.new_seller_price)
             if use_change
-            else _to_float(row.current_seller_price)
+            else _to_float(snap.seller_price) if snap else None
         )
-        if current_price is None and snap:
-            current_price = _to_float(snap.seller_price)
 
         discount = _to_float(snap.discount) if snap else None
         product_fee_map = _fee_map_for_subject(fee_map, row.subject_name, subject_commissions)
@@ -622,10 +620,8 @@ async def export_brand_report(
         seller_price = (
             _to_float(latest_change.new_seller_price)
             if use_change
-            else _to_float(p.current_seller_price)
+            else _to_float(snap.seller_price) if snap else None
         )
-        if seller_price is None and snap:
-            seller_price = _to_float(snap.seller_price)
 
         final_price = _to_float(latest_change.new_final_price) if use_change else None
         if final_price is None and snap:

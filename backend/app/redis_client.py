@@ -45,6 +45,15 @@ def cache_delete(key: str) -> None:
         logger.warning(f"Redis cache_delete({key!r}) error: {e}")
 
 
+def cache_ttl(key: str) -> int:
+    """Return remaining TTL in seconds (-2 missing, -1 no expiry)."""
+    try:
+        return _get_client().ttl(key)
+    except Exception as e:
+        logger.warning(f"Redis cache_ttl({key!r}) error: {e}")
+        return -2
+
+
 def acquire_run_lock(user_id: int, ttl: int = 10860) -> bool:
     """
     Попытка захватить эксклюзивную блокировку прогона для пользователя.

@@ -67,8 +67,19 @@ class TestRunRepricerDryRun:
             "(должны быть Decimal, не int/float)"
         )
 
-    def test_priority_run_refreshes_cached_own_and_competitor_catalog(
-        self, db_session, test_user, test_product, test_product_config
+    @pytest.mark.parametrize(
+        ("force_catalog_refresh", "catalog_ttl"),
+        [(True, 3600), (False, 1199)],
+        ids=["priority-forces-refresh", "regular-refreshes-near-expiry"],
+    )
+    def test_run_refreshes_cached_own_and_competitor_catalog(
+        self,
+        db_session,
+        test_user,
+        test_product,
+        test_product_config,
+        force_catalog_refresh,
+        catalog_ttl,
     ):
         competitor_nm_id = 987654321
         test_product_config.strategy = "competitor"
@@ -102,11 +113,15 @@ class TestRunRepricerDryRun:
         engine = RepricerEngine(
             db_session,
             user_id=test_user.id,
-            force_catalog_refresh=True,
+            force_catalog_refresh=force_catalog_refresh,
         )
         with patch(
             "app.services.repricer_engine.cache_get", return_value=cached_payload
-        ), patch("app.services.repricer_engine.cache_set") as cache_set, patch(
+        ), patch(
+            "app.services.repricer_engine.cache_ttl", return_value=catalog_ttl
+        ) as cache_ttl, patch(
+            "app.services.repricer_engine.cache_set"
+        ) as cache_set, patch(
             "app.services.repricer_engine.catalog_parser.parse_batch_ids",
             new=parse_batch,
         ):
@@ -125,6 +140,14 @@ class TestRunRepricerDryRun:
         cached_keys = [call.args[0] for call in cache_set.call_args_list]
         assert f"wb_catalog:{competitor_nm_id}" in cached_keys
         assert f"wb_catalog:{test_product.nm_id}" in cached_keys
+        assert all(call.kwargs["ttl"] == 7200 for call in cache_set.call_args_list)
+        if force_catalog_refresh:
+            cache_ttl.assert_not_called()
+        else:
+            assert {call.args[0] for call in cache_ttl.call_args_list} == {
+                f"wb_catalog:{competitor_nm_id}",
+                f"wb_catalog:{test_product.nm_id}",
+            }
 
     def test_total_products_at_least_one(
         self, db_session, test_user, test_account, test_product, test_product_config
