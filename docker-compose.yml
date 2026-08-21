@@ -405,42 +405,6 @@ services:
     networks:
       - wb_network
 
-  postgres_exporter_ai_ads:
-    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
-    container_name: pg_exporter_ai_ads
-    environment:
-      # Connects to ai_ads stack via shared external network ai_ads_manager_default
-      DATA_SOURCE_NAME: "postgresql://${AI_ADS_POSTGRES_USER:-postgres}:${AI_ADS_POSTGRES_PASSWORD}@postgres:5432/${AI_ADS_POSTGRES_DB:-ai_ads_db}?sslmode=disable"
-    expose:
-      - "9187"
-    deploy:
-      resources:
-        limits:
-          memory: 64m
-          cpus: "0.1"
-    restart: unless-stopped
-    networks:
-      - wb_network
-      - ai_ads_default
-
-  redis_exporter_ai_ads:
-    image: oliver006/redis_exporter:v1.66.0
-    container_name: redis_exporter_ai_ads
-    environment:
-      REDIS_ADDR: "redis://redis:6379"
-      REDIS_PASSWORD: "${AI_ADS_REDIS_PASSWORD}"
-    expose:
-      - "9121"
-    deploy:
-      resources:
-        limits:
-          memory: 32m
-          cpus: "0.1"
-    restart: unless-stopped
-    networks:
-      - wb_network
-      - ai_ads_default
-
   grafana:
     image: grafana/grafana:10.4.0
     container_name: wb_repricer_grafana
@@ -479,8 +443,3 @@ volumes:
 networks:
   wb_network:
     driver: bridge
-  # External network from ai_ads_manager compose — exporters use it to reach
-  # ai_ads postgres/redis directly. Created automatically when ai_ads stack runs.
-  ai_ads_default:
-    name: ai_ads_manager_default
-    external: true
