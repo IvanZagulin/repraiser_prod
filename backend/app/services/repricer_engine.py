@@ -14,6 +14,7 @@ from app.models import (
     Product, ProductConfig, Account, PriceSnapshot,
     RepricerRun, PriceChange, WBSubjectCommission
 )
+from app.config import settings
 from app.models.app_setting import AppSetting
 from app.services import (
     catalog_parser, create_wb_client, create_ozon_client, telegram_notifier
@@ -266,6 +267,28 @@ class RepricerEngine:
     _CLOSED_LOOP_CORRECTION_SETTLE_SEC = 5
     _CATALOG_SINGLE_FALLBACK_MAX_PER_RUN = 300
     _CATALOG_SINGLE_FALLBACK_MAX_FAILURES = 20
+    # ── Пропуск товаров в акции WB (SKIPPED_PROMO) ─────────────────────────
+    # Зачем добавлялось: в 4:00 из 1С выгружаются цены, посчитанные по марже
+    # 27% (20% по «Просвещению»). Размер скидки в акции WB считает от цены,
+    # которую до этого наценил репрайсер, — она выше. После выгрузки из 1С
+    # база становится ниже, процент скидки остаётся прежним, и акционная цена
+    # уезжает вниз вместе с маржой. Чтобы репрайсер не разгонял базу товарам
+    # в акциях, он их полностью пропускал.
+    #
+    # Почему выключено: `is_in_promo` в каталоге WB — это просто непустой
+    # список `promotions` (акции, в которых товар числится), он взведён
+    # примерно у 2/3 ассортимента. С порогом в 1% скидки продавца под скип
+    # попадало ~8000 активных товаров, и они переставали переоцениваться
+    # вообще — ни конкурент, ни РРЦ, ни защита маржи не отрабатывали, потому
+    # что проверка стоит до вызова стратегии.
+    #
+    # Механизм оставлен в коде и включается через PROMO_SKIP_ENABLED=true;
+    # порог настраивается через PROMO_DISCOUNT_SKIP_THRESHOLD.
+    # Для исходной задачи (не разгонять базу перед выгрузкой из 1С) лучше
+    # подходит признак реального реверта цены со стороны WB — детектор
+    # Promo-lock в _decide_product.
+    _PROMO_SKIP_ENABLED = bool(settings.PROMO_SKIP_ENABLED)
+    _PROMO_DISCOUNT_SKIP_THRESHOLD = Decimal(str(settings.PROMO_DISCOUNT_SKIP_THRESHOLD))
 
     def _competitor_target_final(self, config, competitor_price: Decimal) -> Decimal:
         """Return target final buyer price for competitor strategy."""
@@ -285,6 +308,25 @@ class RepricerEngine:
     def _has_rrp_target(self, config, spp: Decimal) -> bool:
         seller_price_direct, rrp = self._resolve_rrp(config, spp)
         return bool(seller_price_direct or rrp)
+
+    def _is_discounted_wb_promo(self, current_data: Dict, account: Account) -> bool:
+        """Return True when a WB promo has a seller discount above the threshold.
+
+        Выключено по умолчанию — см. комментарий у _PROMO_SKIP_ENABLED.
+        """
+        if not self._PROMO_SKIP_ENABLED:
+            return False
+        if self._marketplace(account) != "wb" or not current_data.get("is_in_promo"):
+            return False
+        try:
+            seller_discount = Decimal(str(current_data.get("discount") or 0))
+        except (TypeError, ValueError, ArithmeticError):
+            logger.warning(
+                "Некорректная скидка продавца для promo-check: %r",
+                current_data.get("discount"),
+            )
+            return False
+        return seller_discount > self._PROMO_DISCOUNT_SKIP_THRESHOLD
 
     def _calculate_seller_price_from_final(
         self,
@@ -1183,6 +1225,19 @@ class RepricerEngine:
                 _reason = "CATALOG_UNAVAILABLE"
                 logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": _reason, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
                 return _reason
+
+        if self._is_discounted_wb_promo(current_data, account):
+            seller_discount = Decimal(str(current_data.get("discount") or 0))
+            logger.info(
+                "Пропускаем nm_id=%s: товар в акции WB, скидка продавца %s%% > %s%%",
+                product.nm_id,
+                seller_discount,
+                self._PROMO_DISCOUNT_SKIP_THRESHOLD,
+            )
+            self._save_price_snapshot(product, current_data)
+            _reason = "SKIPPED_PROMO"
+            logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id, "nm_id": product.nm_id, "sku": product.seller_sku, "reason": _reason, "duration_ms": int((time.monotonic() - _t0) * 1000)}))
+            return _reason
         
         # Загружаем скидку кошелька из кеша (загружается один раз на прогон)
         wallet_pct = Decimal((self._user_settings or {}).get("wb_wallet_discount_pct", "0"))
@@ -1551,6 +1606,19 @@ class RepricerEngine:
                     return {"product": product, "needs_update": False, "skip_code": "OUT_OF_STOCK",
                             "current_data": current_data, "new_price": None, "limit_reason": None,
                             "reason_msg": "Нет остатка", "_t0": _t0}
+
+        if self._is_discounted_wb_promo(current_data, account):
+            seller_discount = Decimal(str(current_data.get("discount") or 0))
+            logger.info(
+                "Пропускаем nm_id=%s: товар в акции WB, скидка продавца %s%% > %s%%",
+                product.nm_id,
+                seller_discount,
+                self._PROMO_DISCOUNT_SKIP_THRESHOLD,
+            )
+            return {"product": product, "needs_update": False, "skip_code": "SKIPPED_PROMO",
+                    "current_data": current_data, "new_price": None, "limit_reason": None,
+                    "reason_msg": f"Товар в акции WB со скидкой продавца {seller_discount}%",
+                    "_t0": _t0}
 
         wallet_pct = (self._user_settings or {}).get("wb_wallet_discount_pct", 0) if marketplace == "wb" else 0
         try:
@@ -2397,7 +2465,7 @@ class RepricerEngine:
                             "Run #%d was marked '%s' externally — aborting at chunk %d/%d",
                             run.id, run.status, chunk_idx + 1, total_chunks,
                         )
-                        break
+                        return run
 
             # === ФАЗА 4: closed-loop verify+correct обновлённых competitor-товаров ===
             # WB пересчитывает СПП за секунды, поэтому доправляем промахи (через
@@ -2408,6 +2476,18 @@ class RepricerEngine:
                     results["updated"] += corrected_n
                 except Exception as e:
                     logger.error("Closed-loop коррекция упала: %s", e, exc_info=True)
+
+            # Scheduler/API могут пометить прогон failed/cancelled между
+            # контрольными точками. Не перезаписываем внешний терминальный
+            # статус обратно в completed при финализации живой Celery-задачи.
+            self.db.refresh(run)
+            if run.status != "running":
+                logger.warning(
+                    "Run #%d was marked '%s' externally — preserving terminal status",
+                    run.id,
+                    run.status,
+                )
+                return run
 
             # Обновляем статус прогона
             _duration_ms = int((time.monotonic() - _run_start) * 1000)

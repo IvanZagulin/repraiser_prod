@@ -96,6 +96,47 @@ class TestRoundUp:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Discounted WB promo guard
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestDiscountedWbPromoGuard:
+    """Guard is disabled by default; these tests force it on explicitly."""
+
+    def setup_method(self):
+        self.engine = _make_engine()
+        self.engine._PROMO_SKIP_ENABLED = True
+        self.engine._PROMO_DISCOUNT_SKIP_THRESHOLD = Decimal("1")
+        self.wb_account = SimpleNamespace(marketplace="wb")
+        self.ozon_account = SimpleNamespace(marketplace="ozon")
+
+    def test_guard_disabled_by_default(self):
+        engine = _make_engine()
+        assert engine._PROMO_SKIP_ENABLED is False
+        data = {"is_in_promo": True, "discount": Decimal("35")}
+        assert engine._is_discounted_wb_promo(data, self.wb_account) is False
+
+    def test_promo_with_zero_discount_is_allowed(self):
+        data = {"is_in_promo": True, "discount": Decimal("0")}
+        assert self.engine._is_discounted_wb_promo(data, self.wb_account) is False
+
+    def test_promo_with_one_percent_discount_is_allowed(self):
+        data = {"is_in_promo": True, "discount": Decimal("1")}
+        assert self.engine._is_discounted_wb_promo(data, self.wb_account) is False
+
+    def test_promo_above_one_percent_discount_is_skipped(self):
+        data = {"is_in_promo": True, "discount": Decimal("1.01")}
+        assert self.engine._is_discounted_wb_promo(data, self.wb_account) is True
+
+    def test_discount_without_promo_is_allowed(self):
+        data = {"is_in_promo": False, "discount": Decimal("35")}
+        assert self.engine._is_discounted_wb_promo(data, self.wb_account) is False
+
+    def test_non_wb_promo_is_allowed(self):
+        data = {"is_in_promo": True, "discount": Decimal("35")}
+        assert self.engine._is_discounted_wb_promo(data, self.ozon_account) is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # _apply_limits — min/max clamping
 # ═══════════════════════════════════════════════════════════════════════════════
 

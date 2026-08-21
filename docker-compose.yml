@@ -80,6 +80,9 @@ services:
       SMTP_FROM: ${SMTP_FROM}
       APP_URL: ${APP_URL:-https://qvaz.quasar-x.ru}
       FERNET_KEY: ${FERNET_KEY}
+      # Пропуск товаров в акции WB — выключен, см. RepricerEngine._PROMO_SKIP_ENABLED
+      PROMO_SKIP_ENABLED: ${PROMO_SKIP_ENABLED:-false}
+      PROMO_DISCOUNT_SKIP_THRESHOLD: ${PROMO_DISCOUNT_SKIP_THRESHOLD:-1}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -131,6 +134,9 @@ services:
       SMTP_FROM: ${SMTP_FROM}
       APP_URL: ${APP_URL:-https://qvaz.quasar-x.ru}
       FERNET_KEY: ${FERNET_KEY}
+      # Пропуск товаров в акции WB — выключен, см. RepricerEngine._PROMO_SKIP_ENABLED
+      PROMO_SKIP_ENABLED: ${PROMO_SKIP_ENABLED:-false}
+      PROMO_DISCOUNT_SKIP_THRESHOLD: ${PROMO_DISCOUNT_SKIP_THRESHOLD:-1}
     depends_on:
       db:
         condition: service_healthy

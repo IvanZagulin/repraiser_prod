@@ -55,7 +55,15 @@ class Settings(BaseSettings):
     SMTP_PASS: str = ""
     SMTP_FROM: str = ""
     APP_URL: str = "https://qvaz.quasar-x.ru"
-    
+
+    # Пропуск товаров, участвующих в акции WB (SKIPPED_PROMO).
+    # Подробности и история — в комментарии у RepricerEngine._PROMO_SKIP_ENABLED.
+    # Выключено по умолчанию: механизм останавливал переоценку ~8000 товаров.
+    PROMO_SKIP_ENABLED: bool = False
+    # Порог скидки продавца в %, выше которого товар в акции пропускается.
+    # Работает только при PROMO_SKIP_ENABLED=true.
+    PROMO_DISCOUNT_SKIP_THRESHOLD: float = 1.0
+
     class Config:
         env_file = ".env"
         case_sensitive = True
