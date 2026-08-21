@@ -449,6 +449,7 @@ async def cleanup_stale_runs():
     """
     STALE_MINUTES = 185
     ORPHAN_GRACE_SECONDS = 120
+    ORPHAN_LOCK_GRACE_SECONDS = 3600
     logger.info("Очистка зависших прогонов...")
     db = SessionLocal()
     try:
@@ -580,9 +581,10 @@ async def cleanup_stale_runs():
                     continue
                 ttl = redis_client.ttl(key)
                 # ttl <= 0: уже истёк/без TTL — нечего снимать.
-                # ttl > 10800: лок взят меньше минуты назад (TTL=10860s) —
-                # запись в repricer_runs ещё может не успеть появиться, не трогаем.
-                if ttl <= 0 or ttl > 10800:
+                # Запись repricer_runs создаётся только после catalog pre-fetch,
+                # который на больших кабинетах может занимать много минут.
+                # Не считаем такой lock осиротевшим в течение первого часа.
+                if ttl <= 0 or ttl > 10860 - ORPHAN_LOCK_GRACE_SECONDS:
                     continue
                 redis_client.delete(key)
                 logger.warning(
