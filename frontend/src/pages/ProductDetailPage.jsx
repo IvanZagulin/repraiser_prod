@@ -13,6 +13,7 @@ import {
 import toast from 'react-hot-toast';
 import { getProductDetail, getProductsBySku, runRepricer, updateProductConfig, createProductConfig, getSettings, getProductAuditLog, updateProductCost, deleteProduct, toggleStrategyBySku } from '../api/client';
 import { formatMsk } from '../utils/date';
+import { configCompetitors } from '../utils/competitors';
 import ConfigModal from '../components/ConfigModal';
 
 const getWBImageUrl = (nmId) => {
@@ -163,6 +164,7 @@ export default function ProductDetailPage() {
 
   const { product, config, current_price, margin, stats, snapshots, changes, ozon_live } = data;
   const isOzon = product.account_marketplace === 'ozon';
+  const competitors = configCompetitors(config);
   const imgUrl = product.image_url || (isOzon ? null : getWBImageUrl(product.nm_id));
 
   // Chart data
@@ -580,9 +582,9 @@ export default function ProductDetailPage() {
                     </>
                   ) : (
                     <>
-                      {config.competitors?.length > 0 && (
+                      {competitors.length > 0 && (
                         <div className="space-y-1">
-                          {config.competitors.map((comp, i) => (
+                          {competitors.map((comp, i) => (
                             <a key={i}
                               href={`https://www.wildberries.ru/catalog/${comp.nm_id}/detail.aspx`}
                               target="_blank" rel="noopener noreferrer"

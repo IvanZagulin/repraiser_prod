@@ -2,14 +2,13 @@ import { useState, useEffect, useCallback } from 'react';
 import { X, Plus, Trash2, TrendingUp } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createProductConfig, updateProductConfig, updateProductSppTiers, getSettings } from '../api/client';
+import { configCompetitors } from '../utils/competitors';
 
 
 function initCompetitors(config) {
-  if (config?.competitors && config.competitors.length > 0) {
-    return config.competitors.map(c => ({ nm_id: String(c.nm_id), alias: c.alias || '' }));
-  }
-  if (config?.competitor_nm_id) return [{ nm_id: String(config.competitor_nm_id), alias: '' }];
-  return [{ nm_id: '', alias: '' }];
+  const list = configCompetitors(config).map(c => ({ nm_id: String(c.nm_id), alias: c.alias }));
+  // Пустая строка нужна форме — иначе рендерить нечего.
+  return list.length > 0 ? list : [{ nm_id: '', alias: '' }];
 }
 
 function initTiers(config) {
