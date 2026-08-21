@@ -508,6 +508,7 @@ class ExcelExporter:
             "Артикул продавца",
             "Название",
             "Бренд",
+            "Предмет",
             "nmID",
             "Аккаунт",
             "Статус",
@@ -544,6 +545,7 @@ class ExcelExporter:
                 _safe_str(p.get("seller_sku", "")),
                 _safe_str(p.get("name", "")),
                 _safe_str(p.get("brand", "")),
+                _safe_str(p.get("subject_name", "")),
                 p.get("nm_id", ""),
                 _safe_str(p.get("account_id", "")),
                 status,
@@ -583,7 +585,7 @@ class ExcelExporter:
                     ws.cell(row=row_idx, column=col_idx).fill = fill
 
         # Фиксированные ширины — быстрее auto_size для тысяч строк
-        col_widths = [20, 30, 15, 12, 18, 12, 14, 10, 12, 10, 12, 14, 16, 14, 14, 12, 18, 16, 18]
+        col_widths = [20, 30, 15, 20, 12, 18, 12, 14, 10, 12, 10, 12, 14, 16, 14, 14, 12, 18, 16, 18]
         for i, width in enumerate(col_widths, start=1):
             ws.column_dimensions[get_column_letter(i)].width = width
         ws.freeze_panes = "A2"

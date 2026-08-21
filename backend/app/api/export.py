@@ -189,6 +189,7 @@ async def export_products(
             "seller_sku":           product.seller_sku,
             "name":                 product.name,
             "brand":                product.brand,
+            "subject_name":         product.subject_name,
             "nm_id":                product.nm_id,
             "account_id":         product.account.name if product.account else "",
             "config":               cfg_dict,
@@ -869,4 +870,3 @@ async def get_task_status(
         return {"status": "error", "error": str(result.result)}
     else:
         return {"status": "pending"}
-

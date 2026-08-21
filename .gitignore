@@ -66,5 +66,6 @@ docker-compose.override.yml
 *_fix.py
 node_modules/
 
-# Dated backup files (e.g. file.py.bak-20260530-fix)
+# Dated backup files (e.g. file.py.bak-20260530-fix, file.py.bak.20260617_134021)
 *.bak-*
+*.bak.*
