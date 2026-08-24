@@ -346,6 +346,21 @@ async def create_product(
     seller_sku = product_data.seller_sku
     name = product_data.name
     image_url = None
+    subject_name = None
+
+    # The nightly catalog sync already downloads card metadata and photos.
+    # Reuse that cache during product creation so the request does not wait for
+    # another WB Content API call (which can take 10-15 seconds on retries).
+    if account.marketplace == "wb":
+        catalog_card = db.query(WBCatalog).filter(
+            WBCatalog.account_id == account.id,
+            WBCatalog.nm_id == product_data.nm_id,
+        ).first()
+        if catalog_card:
+            seller_sku = seller_sku or catalog_card.vendor_code
+            name = name or catalog_card.name
+            image_url = catalog_card.image_url
+            subject_name = catalog_card.subject_name
 
     if account.marketplace == "ozon":
         try:
@@ -385,6 +400,7 @@ async def create_product(
                 if not name:
                     name = card_info.get("name") or f"Товар {product_data.nm_id}"
                 image_url = card_info.get("image_url")
+                subject_name = card_info.get("subject_name")
         except Exception as e:
             logger.warning(f"Failed to get card info for nm_id {product_data.nm_id}: {e}")
 
@@ -399,21 +415,11 @@ async def create_product(
         seller_sku=seller_sku,
         name=name,
         image_url=image_url,
+        subject_name=subject_name,
     )
     db.add(product)
     db.commit()
     db.refresh(product)
-
-    if account.marketplace == "wb" and not image_url:
-        try:
-            wb_client = create_wb_client(account.wb_api_token)
-            fetched_url = await wb_client.get_card_photo(product_data.nm_id)
-            if fetched_url:
-                product.image_url = fetched_url
-                db.commit()
-                db.refresh(product)
-        except Exception as e:
-            logger.warning(f"Failed to get photo for nm_id {product_data.nm_id}: {e}")
 
     try:
         log_activity(db, current_user.id, "product_created", product_id=product.id,
@@ -462,6 +468,7 @@ async def search_wb_product(
             "nm_id": catalog_card.nm_id,
             "seller_sku": catalog_card.vendor_code,
             "name": catalog_card.name or "",
+            "image_url": catalog_card.image_url,
         }
 
     wb_client = create_wb_client(account.wb_api_token)
@@ -475,10 +482,15 @@ async def search_wb_product(
 
     if cards:
         card = cards[0]
+        photos = card.get("photos") or []
+        image_url = None
+        if photos:
+            image_url = photos[0].get("c246x328") or photos[0].get("big")
         return {
             "nm_id": card.get("nmID"),
             "seller_sku": card.get("vendorCode"),
             "name": card.get("title", ""),
+            "image_url": image_url,
         }
 
     try:
