@@ -71,13 +71,12 @@ def test_create_product_does_not_fetch_photo_synchronously_when_cache_has_no_pho
                 "nm_id": 1229563361,
                 "seller_sku": "READY-SKU",
                 "name": "Already found product",
+                "image_url": "https://basket-46.wbbasket.ru/card.webp",
             },
         )
 
     assert response.status_code == 201
-    assert response.json()["image_url"].endswith(
-        "/1229563361/images/c246x328/1.webp"
-    )
+    assert response.json()["image_url"] == "https://basket-46.wbbasket.ru/card.webp"
     wb_client_factory.assert_not_called()
 
 
