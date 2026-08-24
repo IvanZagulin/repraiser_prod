@@ -31,27 +31,6 @@ router = APIRouter()
 limiter = Limiter(key_func=get_real_ip)
 
 
-def _wb_image_url(nm_id: int) -> str:
-    """Build the standard WB CDN URL without making a network request."""
-    nm_id = int(nm_id)
-    vol = nm_id // 100_000
-    part = nm_id // 1_000
-    basket_limits = (
-        (143, "01"), (287, "02"), (431, "03"), (719, "04"),
-        (1007, "05"), (1061, "06"), (1115, "07"), (1169, "08"),
-        (1313, "09"), (1601, "10"), (1655, "11"), (1919, "12"),
-        (2045, "13"), (2189, "14"), (2405, "15"), (2621, "16"),
-        (2837, "17"), (3053, "18"), (3261, "19"), (3473, "20"),
-        (3721, "21"), (4001, "22"), (4281, "23"), (4601, "24"),
-        (5001, "25"),
-    )
-    basket = next((value for limit, value in basket_limits if vol <= limit), "26")
-    return (
-        f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/"
-        f"{nm_id}/images/c246x328/1.webp"
-    )
-
-
 def _normalize_text(value) -> str:
     return " ".join(str(value or "").strip().casefold().replace("ё", "е").split())
 
@@ -367,7 +346,7 @@ async def create_product(
 
     seller_sku = product_data.seller_sku
     name = product_data.name
-    image_url = None
+    image_url = product_data.image_url
     subject_name = None
 
     # The nightly catalog sync already downloads card metadata and photos.
@@ -381,7 +360,7 @@ async def create_product(
         if catalog_card:
             seller_sku = seller_sku or catalog_card.vendor_code
             name = name or catalog_card.name
-            image_url = catalog_card.image_url
+            image_url = catalog_card.image_url or image_url
             subject_name = catalog_card.subject_name
 
     if account.marketplace == "ozon":
@@ -421,7 +400,7 @@ async def create_product(
                     seller_sku = card_info.get("seller_sku") or str(product_data.nm_id)
                 if not name:
                     name = card_info.get("name") or f"Товар {product_data.nm_id}"
-                image_url = card_info.get("image_url")
+                image_url = card_info.get("image_url") or image_url
                 subject_name = card_info.get("subject_name")
         except Exception as e:
             logger.warning(f"Failed to get card info for nm_id {product_data.nm_id}: {e}")
@@ -430,11 +409,6 @@ async def create_product(
         seller_sku = str(product_data.nm_id)
     if not name:
         name = f"Товар {product_data.nm_id}"
-    if account.marketplace == "wb" and not image_url:
-        # Store a deterministic CDN URL immediately. This keeps product
-        # creation fast even for a newly-created card not in last night's cache.
-        image_url = _wb_image_url(product_data.nm_id)
-
     product = Product(
         account_id=product_data.account_id,
         nm_id=product_data.nm_id,
@@ -539,7 +513,7 @@ async def search_wb_product(
                 "nm_id": card.get("nmID"),
                 "seller_sku": card.get("vendorCode"),
                 "name": card.get("title", ""),
-                "image_url": image_url or _wb_image_url(card.get("nmID")),
+                "image_url": image_url,
             }
 
     if catalog_nm_id is not None:

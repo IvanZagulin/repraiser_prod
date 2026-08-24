@@ -88,6 +88,7 @@ class ProductCreate(ProductBase):
     """Схема создания товара"""
     nm_id: int = Field(..., gt=0, description="WB nmID or Ozon product_id")
     account_id: int = Field(..., gt=0, description="ID аккаунта")
+    image_url: Optional[str] = Field(None, max_length=500, description="URL фото из поиска/каталога")
 
 
 class ProductResponse(ProductBase):

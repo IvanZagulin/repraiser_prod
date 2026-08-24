@@ -67,6 +67,7 @@ export default function ProductModal({ onClose }) {
         nm_id: found.nm_id,
         seller_sku: found.seller_sku,
         name: found.name,
+        image_url: found.image_url || null,
       });
       toast.success('Товар добавлен');
       onClose();
