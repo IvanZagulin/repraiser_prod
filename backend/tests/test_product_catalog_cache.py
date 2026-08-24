@@ -1,4 +1,6 @@
-from unittest.mock import patch
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from app.models.product import Product
 from app.models.wb_catalog import WBCatalog
@@ -73,5 +75,57 @@ def test_create_product_does_not_fetch_photo_synchronously_when_cache_has_no_pho
         )
 
     assert response.status_code == 201
-    assert response.json()["image_url"] is None
+    assert response.json()["image_url"].endswith(
+        "/1229563361/images/c246x328/1.webp"
+    )
     wb_client_factory.assert_not_called()
+
+
+def test_numeric_wb_article_outside_seller_catalog_returns_clear_error(
+    client, test_account
+):
+    wb_client = SimpleNamespace(
+        search_cards=AsyncMock(side_effect=asyncio.TimeoutError())
+    )
+    public_product = SimpleNamespace(name="Public WB product")
+
+    with (
+        patch("app.api.products.create_wb_client", return_value=wb_client),
+        patch(
+            "app.services.catalog_parser.catalog_parser.parse_product",
+            new=AsyncMock(return_value=public_product),
+        ),
+    ):
+        response = client.get(
+            "/api/products/search-wb",
+            params={"account_id": test_account.id, "text": "1229563360"},
+        )
+
+    assert response.status_code == 404
+    assert "не найден в выбранном кабинете" in response.json()["detail"]
+
+
+def test_numeric_seller_sku_uses_exact_content_card_and_returns_photo(
+    client, test_account
+):
+    matching_card = {
+        "nmID": 1394057535,
+        "vendorCode": "3895399",
+        "title": "Seller card",
+        "photos": [{"c246x328": "https://basket.example/seller.webp"}],
+    }
+    wb_client = SimpleNamespace(search_cards=AsyncMock(return_value=[matching_card]))
+
+    with patch("app.api.products.create_wb_client", return_value=wb_client):
+        response = client.get(
+            "/api/products/search-wb",
+            params={"account_id": test_account.id, "text": "3895399"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "nm_id": 1394057535,
+        "seller_sku": "3895399",
+        "name": "Seller card",
+        "image_url": "https://basket.example/seller.webp",
+    }

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status, Query, B
 from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import desc, or_, cast, String, func, and_
 from slowapi import Limiter
+import asyncio
 import logging
 
 from app.database import get_db
@@ -28,6 +29,27 @@ from app.utils import get_real_ip
 logger = logging.getLogger(__name__)
 router = APIRouter()
 limiter = Limiter(key_func=get_real_ip)
+
+
+def _wb_image_url(nm_id: int) -> str:
+    """Build the standard WB CDN URL without making a network request."""
+    nm_id = int(nm_id)
+    vol = nm_id // 100_000
+    part = nm_id // 1_000
+    basket_limits = (
+        (143, "01"), (287, "02"), (431, "03"), (719, "04"),
+        (1007, "05"), (1061, "06"), (1115, "07"), (1169, "08"),
+        (1313, "09"), (1601, "10"), (1655, "11"), (1919, "12"),
+        (2045, "13"), (2189, "14"), (2405, "15"), (2621, "16"),
+        (2837, "17"), (3053, "18"), (3261, "19"), (3473, "20"),
+        (3721, "21"), (4001, "22"), (4281, "23"), (4601, "24"),
+        (5001, "25"),
+    )
+    basket = next((value for limit, value in basket_limits if vol <= limit), "26")
+    return (
+        f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/"
+        f"{nm_id}/images/c246x328/1.webp"
+    )
 
 
 def _normalize_text(value) -> str:
@@ -408,6 +430,10 @@ async def create_product(
         seller_sku = str(product_data.nm_id)
     if not name:
         name = f"Товар {product_data.nm_id}"
+    if account.marketplace == "wb" and not image_url:
+        # Store a deterministic CDN URL immediately. This keeps product
+        # creation fast even for a newly-created card not in last night's cache.
+        image_url = _wb_image_url(product_data.nm_id)
 
     product = Product(
         account_id=product_data.account_id,
@@ -451,6 +477,7 @@ async def search_wb_product(
 
     text_clean = text.strip()
     catalog_conditions = [WBCatalog.vendor_code == text_clean]
+    catalog_nm_id = None
     try:
         catalog_nm_id = int(text_clean)
         catalog_conditions.append(WBCatalog.nm_id == catalog_nm_id)
@@ -473,50 +500,69 @@ async def search_wb_product(
 
     wb_client = create_wb_client(account.wb_api_token)
 
+    search_error = None
     try:
-        cards = await wb_client.search_cards(text_search=text_clean, limit=100)
-    except WBAPIError as e:
-        import logging
-        logging.getLogger(__name__).error(f"WB API search error: {e}")
-        raise HTTPException(status_code=502, detail="Ошибка при обращении к WB API")
+        # Do not let an unhealthy WB Content API freeze the modal for 15s.
+        cards = await asyncio.wait_for(
+            wb_client.search_cards(text_search=text_clean, limit=100),
+            timeout=2.0,
+        )
+    except (WBAPIError, asyncio.TimeoutError) as e:
+        search_error = e
+        cards = []
+        logger.warning("WB card search failed for %s: %s", text_clean, e)
 
     if cards:
-        card = cards[0]
-        photos = card.get("photos") or []
-        image_url = None
-        if photos:
-            image_url = photos[0].get("c246x328") or photos[0].get("big")
-        return {
-            "nm_id": card.get("nmID"),
-            "seller_sku": card.get("vendorCode"),
-            "name": card.get("title", ""),
-            "image_url": image_url,
-        }
+        if catalog_nm_id is not None:
+            card = next(
+                (
+                    item for item in cards
+                    if item.get("nmID") == catalog_nm_id
+                    or str(item.get("vendorCode") or "") == text_clean
+                ),
+                None,
+            )
+        else:
+            card = next(
+                (
+                    item for item in cards
+                    if str(item.get("vendorCode") or "") == text_clean
+                ),
+                cards[0],
+            )
+        if card:
+            photos = card.get("photos") or []
+            image_url = None
+            if photos:
+                image_url = photos[0].get("c246x328") or photos[0].get("big")
+            return {
+                "nm_id": card.get("nmID"),
+                "seller_sku": card.get("vendorCode"),
+                "name": card.get("title", ""),
+                "image_url": image_url or _wb_image_url(card.get("nmID")),
+            }
 
-    try:
-        nm_id_int = int(text_clean)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="Товар не найден в WB")
+    if catalog_nm_id is not None:
+        try:
+            public_product = await asyncio.wait_for(
+                catalog_parser.parse_product(catalog_nm_id),
+                timeout=3.0,
+            )
+        except Exception as e:
+            public_product = None
+            logger.warning("WB public catalog lookup failed for %s: %s", catalog_nm_id, e)
+        if public_product:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "Товар есть на WB, но не найден в выбранном "
+                    "кабинете продавца"
+                ),
+            )
 
-    try:
-        prices = await wb_client.get_prices(nm_ids=[nm_id_int])
-    except WBAPIError as e:
-        import logging
-        logging.getLogger(__name__).error(f"WB API get_prices error: {e}")
+    if search_error:
         raise HTTPException(status_code=502, detail="Ошибка при обращении к WB API")
-
-    if not prices:
-        raise HTTPException(status_code=404, detail="Товар не найден в WB")
-
-    price_data = prices[0]
-    catalog_product = await catalog_parser.parse_product(nm_id_int)
-    name = catalog_product.name if catalog_product else ""
-
-    return {
-        "nm_id": price_data.nm_id,
-        "seller_sku": price_data.vendor_code,
-        "name": name,
-    }
+    raise HTTPException(status_code=404, detail="Товар не найден в WB")
 
 
 @router.get("/search-ozon")
