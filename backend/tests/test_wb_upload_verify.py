@@ -68,6 +68,15 @@ class TestVerifyBatchUpdate:
         assert len(result) == 1001
         assert client._make_request.await_args_list[1].kwargs["params"]["offset"] == 1000
 
+    def test_deadline_stops_polling(self):
+        """history-эндпоинты WB часто висят: проверка не должна тянуться десятки минут."""
+        client = _client()
+        client._make_request = AsyncMock(return_value={"data": {"historyGoods": None}})
+        with _no_sleep():
+            result = asyncio.run(client.verify_batch_update(55, max_wait=0))
+        assert result == {}
+        client._make_request.assert_not_awaited()
+
     def test_unknown_after_all_attempts(self):
         client = _client()
         client._make_request = AsyncMock(return_value={"data": {"historyGoods": None}})
