@@ -456,6 +456,7 @@ class WBAPIClient:
         max_attempts: int = 18,
         delay: float = 5.0,
         expected_nm_ids: Optional[List[int]] = None,
+        max_wait: float = 120.0,
     ) -> Dict[int, Tuple[bool, str]]:
         """
         Статусы по каждому товару для задачи загрузки цен.
@@ -474,7 +475,12 @@ class WBAPIClient:
             return {}
 
         last_pending = 0
+        # Общий лимит по времени: history-эндпоинты WB часто отвечают таймаутом,
+        # и без него 18 попыток × повторы по 30 с растягивали проверку на десятки минут.
+        deadline = time.monotonic() + max_wait
         for attempt in range(1, max_attempts + 1):
+            if time.monotonic() >= deadline:
+                break
             await asyncio.sleep(3 if attempt == 1 else delay)
             goods = await self._history_goods(upload_id)
             if goods is None:
@@ -527,6 +533,7 @@ class WBAPIClient:
                 data = await self._make_request(
                     'GET', '/api/v2/history/goods/task',
                     params={'uploadID': upload_id, 'limit': limit, 'offset': offset},
+                    max_retries=1,
                 )
             except Exception as e:
                 logger.warning("Не удалось получить статусы задачи %s: %s", upload_id, e)
@@ -540,7 +547,7 @@ class WBAPIClient:
     async def _history_task(self, upload_id: int) -> Optional[dict]:
         """Итог задачи из /history/tasks (status 3 — обработана без ошибок)."""
         try:
-            data = await self._make_request('GET', '/api/v2/history/tasks', params={'uploadID': upload_id})
+            data = await self._make_request('GET', '/api/v2/history/tasks', params={'uploadID': upload_id}, max_retries=1)
         except Exception as e:
             logger.warning("Не удалось получить итог задачи %s: %s", upload_id, e)
             return None

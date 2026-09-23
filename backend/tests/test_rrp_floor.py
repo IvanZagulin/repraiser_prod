@@ -139,10 +139,17 @@ class TestOutOfStock:
 
     def test_oos_uses_last_snapshot_spp_and_only_raises(self, db_session, test_product, test_product_config, fake_cache):
         _rrp_config(db_session, test_product_config)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         db_session.add(PriceSnapshot(
             product_id=test_product.id, seller_price=Decimal("1000"), final_price=Decimal("700"),
             discount=Decimal("0"), spp=Decimal("30"), total_quantity=3,
-            snapshot_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=2),
+            snapshot_at=now - timedelta(days=2),
+        ))
+        # «Прогнозный» снимок старой логики для товара без остатка (СПП = 0) — игнорируется
+        db_session.add(PriceSnapshot(
+            product_id=test_product.id, seller_price=Decimal("928"), final_price=Decimal("928"),
+            discount=Decimal("0"), spp=Decimal("0"), total_quantity=0,
+            snapshot_at=now - timedelta(hours=1),
         ))
         db_session.commit()
         engine = _engine(db_session)
