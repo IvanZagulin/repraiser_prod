@@ -119,7 +119,8 @@ class TestRunStatuses:
             )
 
         assert response.status_code == 200
-        assert dispatch.call_args.kwargs["priority"] == 9
+        # Redis-брокер: 0 — наивысший приоритет (kombu опрашивает очереди 0, 3, 6, 9)
+        assert dispatch.call_args.kwargs["priority"] == 0
         assert dispatch.call_args.kwargs["kwargs"] == {"priority": True}
 
     def test_full_manual_run_keeps_normal_priority(self, client, test_product):
@@ -127,7 +128,7 @@ class TestRunStatuses:
             response = client.post("/api/repricer/run", json={"dry_run": False})
 
         assert response.status_code == 200
-        assert dispatch.call_args.kwargs["priority"] == 0
+        assert dispatch.call_args.kwargs["priority"] == 5  # task_default_priority
         assert dispatch.call_args.kwargs["kwargs"] == {"priority": False}
 
 

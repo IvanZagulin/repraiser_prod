@@ -14,6 +14,7 @@ from app.database import SessionLocal
 from app.redis_client import (
     acquire_product_locks,
     acquire_run_lock,
+    refresh_run_lock,
     release_product_locks,
     release_run_lock,
 )
@@ -27,6 +28,31 @@ _MANUAL_LOCK_MAX_RETRIES = 90
 _PRIORITY_LOCK_RETRY_DELAY_SEC = 2
 _PRIORITY_LOCK_MAX_RETRIES = 60
 _PRIORITY_PRODUCT_LOCK_TTL_SEC = 900
+# Блокировка прогона живёт 10 минут и продлевается каждую минуту, пока воркер
+# жив. Раньше она ставилась на 3 часа: после падения воркера (OOM, SIGKILL при
+# деплое) переоценка стояла до 3 часов, в том числе после ночной выгрузки 1С.
+_RUN_LOCK_HEARTBEAT_TTL_SEC = 600
+_RUN_LOCK_HEARTBEAT_SEC = 60
+
+
+class _RunLockHeartbeat:
+    def __init__(self, user_id: int):
+        import threading
+        self._user_id = user_id
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name=f"run-lock-hb-{user_id}", daemon=True)
+
+    def _loop(self):
+        while True:
+            refresh_run_lock(self._user_id, _RUN_LOCK_HEARTBEAT_TTL_SEC)
+            if self._stop.wait(_RUN_LOCK_HEARTBEAT_SEC):
+                return
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
 
 
 # ─── Graceful shutdown ────────────────────────────────────────────────────────
@@ -140,9 +166,14 @@ def _graceful_shutdown_guard(
         # под worker'ами pytest-xdist может выкинуть ValueError; молча skip.
         pass
 
+    heartbeat = _RunLockHeartbeat(user_id) if owns_user_lock else None
+    if heartbeat:
+        heartbeat.start()
     try:
         yield
     finally:
+        if heartbeat:
+            heartbeat.stop()
         _run_state.user_id = None
         _run_state.run_id = None
         _run_state.owns_user_lock = True

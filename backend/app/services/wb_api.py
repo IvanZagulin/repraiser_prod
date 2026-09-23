@@ -181,6 +181,7 @@ class WBAPIClient:
         retry_on_429: bool = True,
         max_retries: int = 5,
         retry_on_5xx: bool = True,
+        retry_on_timeout: bool = True,
     ) -> dict:
         """
         ?????????? HTTP ??????? ? ?????????? ??????.
@@ -276,7 +277,12 @@ class WBAPIClient:
                     else:
                         raise WBAPIError(f"API ?????? ??? {response.status_code}: {response.text}")
 
-                except httpx.TimeoutException:
+                except httpx.TimeoutException as e:
+                    # Неидемпотентный POST (upload/task) после отправки не
+                    # повторяем: WB мог уже принять задачу. Безопасно повторить
+                    # можно только таймаут установки соединения.
+                    if not retry_on_timeout and not isinstance(e, httpx.ConnectTimeout):
+                        raise WBAPIError(f"Timeout при запросе к WB API (без повтора): {e!r}")
                     if retry_count >= max_retries:
                         raise WBAPIError("Timeout при запросе к WB API")
                     logger.warning(
@@ -290,6 +296,8 @@ class WBAPIClient:
                     retry_count += 1
                     continue
                 except httpx.RequestError as e:
+                    if not retry_on_timeout and not isinstance(e, httpx.ConnectError):
+                        raise WBAPIError(f"Ошибка соединения с WB API (без повтора): {e!r}")
                     if retry_count >= max_retries:
                         raise WBAPIError(f"Ошибка соединения с WB API: {e}")
                     logger.warning(
@@ -406,11 +414,17 @@ class WBAPIClient:
         )
 
         last_response = None
+        upload_ids: List[int] = []
         for idx, chunk in enumerate(chunks):
             try:
                 payload = {"data": chunk}
-                data = await self._make_request('POST', '/api/v2/upload/task', json_data=payload)
+                data = await self._make_request(
+                    'POST', '/api/v2/upload/task', json_data=payload,
+                    retry_on_5xx=False, retry_on_timeout=False,
+                )
                 task_id = data.get('data', {}).get('id')
+                if task_id:
+                    upload_ids.append(task_id)
                 if data.get('data', {}).get('alreadyExists'):
                     logger.info(
                         "???? %d/%d: ?????? ??? ?????????? ? WB (task_id=%s)",
@@ -431,79 +445,107 @@ class WBAPIClient:
                 logger.error("?????? ?????????? ??? (???? %d/%d): %s", idx + 1, len(chunks), e)
                 raise
 
+        if last_response is not None:
+            # Все uploadID (при >1000 товаров раньше проверялся только последний чанк)
+            last_response = {**last_response, "_upload_ids": upload_ids}
         return last_response
 
     async def verify_batch_update(
         self,
         upload_id: int,
-        max_attempts: int = 5,
+        max_attempts: int = 18,
         delay: float = 5.0,
+        expected_nm_ids: Optional[List[int]] = None,
     ) -> Dict[int, Tuple[bool, str]]:
         """
-        ?????????? WB ? per-nm ??????? ?????? batch-?????????? ???.
+        Статусы по каждому товару для задачи загрузки цен.
 
-        WB ???????????? POST /upload/task ?????????? ? ????? ?????????
-        ????????? ?????? (????????, ??? ???????? ???? ????? ??? ? 2 ????
-        ??? ??? price < cost). ?????? ??????? ?????? ????? ?
-        /history/goods/task?uploadID=<id>. ????? ?????????? ????????? ???,
-        ???? ???? pending ??????.
+        WB обрабатывает POST /upload/task асинхронно и может отклонить часть
+        товаров (карантин, снижение больше чем вдвое, цена ниже себестоимости).
+        Статусы по товарам — в /history/goods/task, пока задача в обработке,
+        там пусто. Ждём до ~90 с (раньше 23 с — и вся пачка писалась как
+        ошибка WB, хотя WB цены применял). Если по товарам пусто, но итог
+        задачи в /history/tasks «успешно N из N» — все ожидаемые товары ок.
 
         Returns:
-            dict {nm_id: (success, error_text)}. ?????? dict ???? ??????
-            ?? ??????? ?? max_attempts ???????.
+            dict {nm_id: (success, error_text)}. Пустой dict — статус не получен.
         """
         if not upload_id:
             return {}
 
         last_pending = 0
         for attempt in range(1, max_attempts + 1):
-            if attempt > 1:
-                await asyncio.sleep(delay)
-            else:
-                await asyncio.sleep(3)  # ?????? ?????: WB ????? ????? ????????? ????
-            try:
-                data = await self._make_request(
-                    'GET',
-                    '/api/v2/history/goods/task',
-                    params={'uploadID': upload_id, 'limit': 1000, 'offset': 0},
-                )
-            except Exception as e:
-                logger.warning(f"?? ??????? ???????? ?????? ?????? {upload_id}: {e}")
+            await asyncio.sleep(3 if attempt == 1 else delay)
+            goods = await self._history_goods(upload_id)
+            if goods is None:
                 continue
 
-            goods = (data.get('data') or {}).get('historyGoods') or []
-            if not goods:
-                continue
-
-            pending = [g for g in goods if g.get('status') in (None, 0, 1)]
-            if pending:
-                last_pending = len(pending)
-                logger.info(
-                    f"?????? {upload_id}: {last_pending}/{len(goods)} ??????? ??? ? ?????????"
-                )
-                continue
-
-            result: Dict[int, Tuple[bool, str]] = {}
-            for g in goods:
-                nm_id = g.get('nmID')
-                if nm_id is None:
+            if goods:
+                pending = [g for g in goods if g.get('status') in (None, 0, 1)]
+                if pending:
+                    last_pending = len(pending)
+                    logger.info("Задача %s: %d/%d товаров ещё в обработке", upload_id, last_pending, len(goods))
                     continue
-                status = g.get('status')
-                err = g.get('errorText') or ""
-                # status==2: ??????? ?????????
-                ok = (status == 2) and not err
-                result[int(nm_id)] = (ok, err)
-            logger.info(
-                f"?????? {upload_id}: ????????? ??????? ???????? ??? {len(result)} ???????"
-            )
-            return result
+
+                result: Dict[int, Tuple[bool, str]] = {}
+                for g in goods:
+                    nm_id = g.get('nmID')
+                    if nm_id is None:
+                        continue
+                    err = g.get('errorText') or ""
+                    ok = (g.get('status') == 2) and not err
+                    prev = result.get(int(nm_id))
+                    # Для многоразмерных товаров строк несколько: ошибка любого размера — ошибка
+                    result[int(nm_id)] = (ok and (prev is None or prev[0]), err or (prev[1] if prev else ""))
+                logger.info("Задача %s: получены статусы для %d товаров", upload_id, len(result))
+                return result
+
+            if expected_nm_ids:
+                task = await self._history_task(upload_id)
+                if (
+                    task
+                    and task.get('status') == 3
+                    and task.get('overAllGoodsNumber')
+                    and task.get('overAllGoodsNumber') == task.get('successGoodsNumber')
+                ):
+                    logger.info("Задача %s: WB применил все %s товаров", upload_id, task.get('successGoodsNumber'))
+                    return {int(nm): (True, "") for nm in expected_nm_ids}
 
         logger.warning(
-            f"?????? {upload_id} ?? ??????????? ?? {max_attempts} ??????? "
-            f"(???????? {last_pending} pending) ? ??????? ??????????"
+            "Задача %s не подтверждена за %d попыток (последний раз в обработке: %d) — статус неизвестен",
+            upload_id, max_attempts, last_pending,
         )
         return {}
-    
+
+    async def _history_goods(self, upload_id: int) -> Optional[List[dict]]:
+        """Все строки /history/goods/task (с пагинацией). None — ошибка запроса."""
+        goods: List[dict] = []
+        offset = 0
+        limit = 1000
+        while True:
+            try:
+                data = await self._make_request(
+                    'GET', '/api/v2/history/goods/task',
+                    params={'uploadID': upload_id, 'limit': limit, 'offset': offset},
+                )
+            except Exception as e:
+                logger.warning("Не удалось получить статусы задачи %s: %s", upload_id, e)
+                return None
+            page = (data.get('data') or {}).get('historyGoods') or []
+            goods.extend(page)
+            if len(page) < limit:
+                return goods
+            offset += limit
+
+    async def _history_task(self, upload_id: int) -> Optional[dict]:
+        """Итог задачи из /history/tasks (status 3 — обработана без ошибок)."""
+        try:
+            data = await self._make_request('GET', '/api/v2/history/tasks', params={'uploadID': upload_id})
+        except Exception as e:
+            logger.warning("Не удалось получить итог задачи %s: %s", upload_id, e)
+            return None
+        return data.get('data') or None
+
     async def verify_price_update(
         self,
         nm_id: int,

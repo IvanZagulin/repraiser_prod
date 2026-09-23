@@ -2,6 +2,8 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
+from celery.exceptions import Retry
+
 from app.celery_app import celery_app
 from app.database import SessionLocal
 from app.redis_client import acquire_catalog_sync_lock, release_catalog_sync_lock
@@ -212,6 +214,11 @@ def sync_wb_catalog_task(self, account_id: int):
 
         return {"status": "ok", "synced": count}
 
+    except Retry:
+        # self.retry(countdown=3600) выше бросает Retry — он наследует Exception,
+        # и раньше перехватывался здесь с повторным self.retry(): в очереди
+        # оказывались две повторные задачи, и их число удваивалось.
+        raise
     except Exception as exc:
         db.rollback()
         logger.error(f"[catalog.sync] account_id={account_id}: ошибка — {exc}", exc_info=True)

@@ -134,7 +134,8 @@ class RepricerEngine:
             "brand_min_margin_rules",
         ]
         result: Dict = {
-            "min_margin_pct": "0.0", "wb_wallet_discount_pct": "0",
+            # Кошелёк по умолчанию 3% — как в API настроек и в SPP Guard.
+            "min_margin_pct": "0.0", "wb_wallet_discount_pct": "3.0",
             "commission_type": "pct", "commission_value": "0.0",
             "logistics_type": "rub", "logistics_value": "0.0",
             "acquiring_type": "pct", "acquiring_value": "0.0",
@@ -2238,80 +2239,6 @@ class RepricerEngine:
         wb_config_ids                = [r[1] for r in id_rows if (r[3] or "wb") == "wb"]
         direct_competitor_nm_ids     = {r[2] for r in id_rows if r[2] and (r[3] or "wb") == "wb"}
 
-        # Шаг 2: Pre-fetch цен конкурентов батчами перед основным циклом.
-        # Собираем все уникальные nm_id конкурентов, исключаем уже закешированные,
-        # затем делаем batch-запросы к WB (100 товаров за раз) и кладём в Redis-кеш.
-        # _cached_parse_product в цикле ниже будет читать только из кеша.
-        if all_product_ids:
-            from app.models.competitor_entry import CompetitorEntry
-            competitor_nm_ids: set[int] = set(direct_competitor_nm_ids)
-            # Один запрос вместо N: строим карту config_id -> [nm_id] и заодно
-            # собираем уникальные nm_id конкурентов для прогрева каталога.
-            self._competitor_entries_map = {}
-            if wb_config_ids:
-                rows = self.db.query(
-                    CompetitorEntry.product_config_id, CompetitorEntry.nm_id
-                ).filter(
-                    CompetitorEntry.product_config_id.in_(wb_config_ids)
-                ).all()
-                for cfg_id, nm in rows:
-                    self._competitor_entries_map.setdefault(cfg_id, []).append(nm)
-                    competitor_nm_ids.add(nm)
-            cold_ids = (
-                list(competitor_nm_ids)
-                if self._force_catalog_refresh
-                else [
-                    nm_id for nm_id in competitor_nm_ids
-                    if self._catalog_needs_refresh(nm_id)
-                ]
-            )
-            if cold_ids:
-                refresh_kind = "принудительно свежих" if self._force_catalog_refresh else "холодных"
-                logger.info(
-                    "Pre-fetch конкурентов: %d %s из %d уникальных",
-                    len(cold_ids), refresh_kind, len(competitor_nm_ids),
-                )
-                batch_results = await catalog_parser.parse_batch_ids(cold_ids)
-                for nm_id, product_data in batch_results.items():
-                    if product_data is not None:
-                        self._catalog_cache_put(nm_id, product_data)
-                logger.info(f"Pre-fetch завершён: {sum(1 for v in batch_results.values() if v)} / {len(cold_ids)}")
-
-            # Глобальный pre-fetch ВСЕХ собственных товаров одним батчем.
-            # Убирает тысячи одиночных HTTP-запросов из основного цикла.
-            all_own_nm_ids = list({r[0] for r in self.db.execute(
-                select(Product.nm_id).filter(Product.id.in_(all_product_ids))
-            ).all()})
-            own_cold = (
-                all_own_nm_ids
-                if self._force_catalog_refresh
-                else [
-                    nm for nm in all_own_nm_ids
-                    if self._catalog_needs_refresh(nm)
-                ]
-            )
-            if own_cold:
-                refresh_kind = "принудительно свежих" if self._force_catalog_refresh else "холодных"
-                logger.info(
-                    "Глобальный pre-fetch: %d %s из %d собственных товаров",
-                    len(own_cold), refresh_kind, len(all_own_nm_ids),
-                )
-                own_results = await catalog_parser.parse_batch_ids(own_cold)
-                cached_count = 0
-                for nm_id, product_data in own_results.items():
-                    if product_data is not None:
-                        self._catalog_cache_put(nm_id, product_data)
-                        cached_count += 1
-                if cached_count == 0 and len(own_cold) > 10:
-                    logger.warning("Глобальный pre-fetch: 0 успехов, повтор через 10 сек...")
-                    await asyncio.sleep(10)
-                    own_results = await catalog_parser.parse_batch_ids(own_cold)
-                    for nm_id, product_data in own_results.items():
-                        if product_data is not None:
-                            self._catalog_cache_put(nm_id, product_data)
-                            cached_count += 1
-                logger.info(f"Глобальный pre-fetch завершён: {cached_count}/{len(own_cold)} закешировано")
-
         if not all_product_ids:
             logger.info("Нет активных товаров для обработки — прогон не создаётся")
             # Если был создан run из API (queued), помечаем его завершённым
@@ -2362,6 +2289,82 @@ class RepricerEngine:
 
         owned_product_lock_ids: set[int] = set()
         try:
+            # Запись о прогоне создаётся до загрузки каталога: иначе ручной запуск
+            # видел «лок есть, running-прогона нет» и снимал лок живого прогона.
+            # Шаг 2: Pre-fetch цен конкурентов батчами перед основным циклом.
+            # Собираем все уникальные nm_id конкурентов, исключаем уже закешированные,
+            # затем делаем batch-запросы к WB (100 товаров за раз) и кладём в Redis-кеш.
+            # _cached_parse_product в цикле ниже будет читать только из кеша.
+            if all_product_ids:
+                from app.models.competitor_entry import CompetitorEntry
+                competitor_nm_ids: set[int] = set(direct_competitor_nm_ids)
+                # Один запрос вместо N: строим карту config_id -> [nm_id] и заодно
+                # собираем уникальные nm_id конкурентов для прогрева каталога.
+                self._competitor_entries_map = {}
+                if wb_config_ids:
+                    rows = self.db.query(
+                        CompetitorEntry.product_config_id, CompetitorEntry.nm_id
+                    ).filter(
+                        CompetitorEntry.product_config_id.in_(wb_config_ids)
+                    ).all()
+                    for cfg_id, nm in rows:
+                        self._competitor_entries_map.setdefault(cfg_id, []).append(nm)
+                        competitor_nm_ids.add(nm)
+                cold_ids = (
+                    list(competitor_nm_ids)
+                    if self._force_catalog_refresh
+                    else [
+                        nm_id for nm_id in competitor_nm_ids
+                        if self._catalog_needs_refresh(nm_id)
+                    ]
+                )
+                if cold_ids:
+                    refresh_kind = "принудительно свежих" if self._force_catalog_refresh else "холодных"
+                    logger.info(
+                        "Pre-fetch конкурентов: %d %s из %d уникальных",
+                        len(cold_ids), refresh_kind, len(competitor_nm_ids),
+                    )
+                    batch_results = await catalog_parser.parse_batch_ids(cold_ids)
+                    for nm_id, product_data in batch_results.items():
+                        if product_data is not None:
+                            self._catalog_cache_put(nm_id, product_data)
+                    logger.info(f"Pre-fetch завершён: {sum(1 for v in batch_results.values() if v)} / {len(cold_ids)}")
+
+                # Глобальный pre-fetch ВСЕХ собственных товаров одним батчем.
+                # Убирает тысячи одиночных HTTP-запросов из основного цикла.
+                all_own_nm_ids = list({r[0] for r in self.db.execute(
+                    select(Product.nm_id).filter(Product.id.in_(all_product_ids))
+                ).all()})
+                own_cold = (
+                    all_own_nm_ids
+                    if self._force_catalog_refresh
+                    else [
+                        nm for nm in all_own_nm_ids
+                        if self._catalog_needs_refresh(nm)
+                    ]
+                )
+                if own_cold:
+                    refresh_kind = "принудительно свежих" if self._force_catalog_refresh else "холодных"
+                    logger.info(
+                        "Глобальный pre-fetch: %d %s из %d собственных товаров",
+                        len(own_cold), refresh_kind, len(all_own_nm_ids),
+                    )
+                    own_results = await catalog_parser.parse_batch_ids(own_cold)
+                    cached_count = 0
+                    for nm_id, product_data in own_results.items():
+                        if product_data is not None:
+                            self._catalog_cache_put(nm_id, product_data)
+                            cached_count += 1
+                    if cached_count == 0 and len(own_cold) > 10:
+                        logger.warning("Глобальный pre-fetch: 0 успехов, повтор через 10 сек...")
+                        await asyncio.sleep(10)
+                        own_results = await catalog_parser.parse_batch_ids(own_cold)
+                        for nm_id, product_data in own_results.items():
+                            if product_data is not None:
+                                self._catalog_cache_put(nm_id, product_data)
+                                cached_count += 1
+                    logger.info(f"Глобальный pre-fetch завершён: {cached_count}/{len(own_cold)} закешировано")
+
             total_count = len(all_product_ids)
             logger.info(f"Найдено {total_count} товаров для обработки")
             run.total_products = total_count
@@ -2571,25 +2574,41 @@ class RepricerEngine:
                                 resp = await client.update_prices(wb_updates)
                                 cache_delete(f"wb_auth_failures:{account.id}")
                                 upload_id = (resp.get("data") or {}).get("id")
-                                if resp.get("_already_queued"):
+                                upload_ids = resp.get("_upload_ids") or ([upload_id] if upload_id else [])
+                                if not upload_ids:
+                                    # «Задача уже существует» без id — проверить нечем
                                     for u in updates:
                                         _ok.add(u["_product_pk"])
+                                        cache_delete(f"wb_catalog:{u['nmID']}")
                                     logger.info(
-                                        "Batch update: %d цен — задача уже в очереди WB",
+                                        "Batch update: %d цен — задача уже в очереди WB, статус не проверить",
                                         len(updates),
                                     )
                                     return _ok, _fail, _errors
-                                statuses = await client.verify_batch_update(upload_id)
+                                # Каждый uploadID проверяем со своим списком товаров
+                                # (раньше при >1000 проверялся только последний чанк).
+                                nm_chunks = [
+                                    [u["nmID"] for u in wb_updates[i:i + 1000]]
+                                    for i in range(0, len(wb_updates), 1000)
+                                ]
+                                statuses = {}
+                                for idx, uid in enumerate(upload_ids):
+                                    expected = nm_chunks[idx] if len(upload_ids) == len(nm_chunks) else None
+                                    statuses.update(await client.verify_batch_update(uid, expected_nm_ids=expected))
                             logger.info(
                                 "Batch update: %d цен отправлено (uploadID=%s, статусов=%d)",
-                                len(updates), upload_id, len(statuses),
+                                len(updates), upload_ids, len(statuses),
                             )
                             for u in updates:
                                 nm = u["nmID"]
                                 st = statuses.get(nm)
                                 if st is None:
-                                    _fail.add(u["_product_pk"])
-                                    _errors[u["_product_pk"]] = "Статус задачи WB не получен (таймаут опроса)"
+                                    # WB не подтвердил статус за ~90 с. Раньше это писалось
+                                    # как ошибка WB, хотя цены применялись. Считаем цену
+                                    # отправленной: closed-loop перечитает фактическую цену.
+                                    _ok.add(u["_product_pk"])
+                                    cache_delete(f"wb_catalog:{nm}")
+                                    logger.warning("nm_id=%s: статус WB не подтверждён (uploadID=%s)", nm, upload_ids)
                                 elif st[0]:
                                     _ok.add(u["_product_pk"])
                                     cache_delete(f"wb_catalog:{nm}")

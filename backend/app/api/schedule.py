@@ -1,7 +1,7 @@
 """Schedule configuration router — manage repricer run schedule."""
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy.orm import Session
 from typing import Optional
 from slowapi import Limiter
@@ -63,6 +63,13 @@ class ScheduleUpdate(BaseModel):
             raise ValueError("work_end_hour must be 1-24")
         return v
 
+    @model_validator(mode="after")
+    def validate_window(self):
+        # Окно «22 → 6» планировщик не поддерживает: репрайсер не запускался бы никогда.
+        if self.work_start_hour >= self.work_end_hour:
+            raise ValueError("work_start_hour must be less than work_end_hour (overnight windows are not supported)")
+        return self
+
     @field_validator("paused_days")
     @classmethod
     def validate_paused_days(cls, v):
@@ -122,12 +129,12 @@ def update_schedule(
     )
 
     if schedule:
-        schedule.interval_minutes = body.interval_minutes
-        schedule.work_start_hour = body.work_start_hour
-        schedule.work_end_hour = body.work_end_hour
-        schedule.timezone = body.timezone
-        schedule.paused_days = body.paused_days
-        schedule.is_active = body.is_active
+        # Меняем только присланные поля: раньше частичный запрос сбрасывал
+        # остальные на значения по умолчанию (интервал 60, окно 0-24).
+        for field in body.model_fields_set:
+            setattr(schedule, field, getattr(body, field))
+        if schedule.work_start_hour >= schedule.work_end_hour:
+            raise HTTPException(status_code=422, detail="work_start_hour must be less than work_end_hour")
     else:
         schedule = RepricerSchedule(
             user_id=current_user.id,

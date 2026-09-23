@@ -21,6 +21,17 @@ limiter = Limiter(key_func=get_real_ip)
 # Schemas
 # ---------------------------------------------------------------------------
 
+# Поля конфигурации, которые можно менять массово
+_BULK_CONFIG_FIELDS = {
+    "is_active", "min_price", "max_price",
+    "rrp_price", "rrp_tolerance", "rrp_consider_wallet",
+    "competitor_nm_id", "competitor_offset_type", "competitor_offset_direction",
+    "competitor_offset_value", "competitor_select_rule", "match_competitor_basic",
+    "night_price_enabled", "night_start_msk", "night_end_msk", "night_seller_price",
+    "skip_margin_check",
+}
+
+
 class BulkStrategyBody(BaseModel):
     product_ids: List[int]
     strategy: str  # "rrp" | "competitor"
@@ -74,7 +85,35 @@ def bulk_strategy(
     if body.strategy not in ("rrp", "competitor"):
         raise HTTPException(status_code=422, detail="strategy must be 'rrp' or 'competitor'")
 
+    unknown = set(body.config) - _BULK_CONFIG_FIELDS
+    if unknown:
+        # Раньше setattr() применялся к любому атрибуту конфига (product_id, id,
+        # wb_blocked_until …) — можно было перенести конфиг на другой товар.
+        raise HTTPException(status_code=422, detail=f"Недопустимые поля: {sorted(unknown)}")
+    cfg_values = dict(body.config)
+    for field in ("min_price", "max_price", "rrp_price"):
+        value = cfg_values.get(field)
+        if value is not None and float(value) < 0:
+            raise HTTPException(status_code=422, detail=f"{field} не может быть отрицательным")
+    if (
+        cfg_values.get("min_price") is not None and cfg_values.get("max_price") is not None
+        and float(cfg_values["max_price"]) < float(cfg_values["min_price"])
+    ):
+        raise HTTPException(status_code=422, detail="max_price меньше min_price")
+
     products = _validate_ownership(db, body.product_ids, current_user)
+
+    if body.strategy == "rrp" and not cfg_values.get("rrp_price"):
+        # Стратегия РРЦ без РРЦ молча не переоценивалась («РРЦ не настроен»)
+        missing_rrp = [
+            p.seller_sku or str(p.nm_id) for p in products
+            if not (p.config and (p.config.rrp_price or p.config.rrp_spp_tiers))
+        ]
+        if missing_rrp:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Для стратегии РРЦ укажите РРЦ: нет РРЦ у {len(missing_rrp)} товаров ({', '.join(missing_rrp[:20])})",
+            )
 
     updated = 0
     created = 0
@@ -82,21 +121,18 @@ def bulk_strategy(
         cfg = product.config
         if cfg:
             cfg.strategy = body.strategy
-            # Apply extra config fields
-            for key, value in body.config.items():
-                if hasattr(cfg, key):
-                    setattr(cfg, key, value)
+            for key, value in cfg_values.items():
+                setattr(cfg, key, value)
             updated += 1
         else:
             cfg = ProductConfig(
                 product_id=product.id,
                 strategy=body.strategy,
                 is_active=True,
-                min_price=body.config.get("min_price", 0),
+                min_price=cfg_values.get("min_price", 0),
             )
-            for key, value in body.config.items():
-                if hasattr(cfg, key):
-                    setattr(cfg, key, value)
+            for key, value in cfg_values.items():
+                setattr(cfg, key, value)
             db.add(cfg)
             created += 1
 

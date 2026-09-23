@@ -23,8 +23,6 @@ from app.config import settings
 from app.services.telegram import telegram_notifier
 from app.services.proxy_pool import proxy_pool
 from app.utils.schedule_slots import (
-    is_interval_slot,
-    next_interval_slot,
     run_started_in_slot,
 )
 
@@ -39,13 +37,20 @@ def _get_redis() -> redis_lib.Redis:
     return _redis_client
 
 
-def _is_run_locked(user_id: int) -> bool:
-    """Проверяет, идёт ли уже прогон для пользователя (без захвата лока)."""
+def _run_lock_state(user_id: int):
+    """True — лок есть, False — нет, None — Redis недоступен (неизвестно)."""
     try:
         return bool(_get_redis().exists(f"repricer:run_lock:{user_id}"))
     except Exception as e:
         logger.warning(f"Redis exists check failed for user={user_id}: {e}")
-        return False  # при недоступности Redis — разрешаем (воркер сам защитится)
+        return None
+
+
+def _is_run_locked(user_id: int) -> bool:
+    """Проверяет, идёт ли уже прогон для пользователя (без захвата лока)."""
+    # При недоступности Redis разрешаем постановку задачи — воркер сам не
+    # захватит лок (acquire_run_lock fail-closed).
+    return bool(_run_lock_state(user_id))
 
 # Настройка логирования
 logging.basicConfig(
@@ -155,16 +160,11 @@ def _user_should_run(db, user_id: int) -> bool:
         tz = ZoneInfo("Europe/Moscow")
         now_user = datetime.now(tz)
 
-    if not is_interval_slot(now_user, interval_minutes):
-        next_slot = next_interval_slot(now_user, interval_minutes)
-        logger.info(
-            f"  user={user_id}: ждём ровный слот "
-            f"({now_user.strftime('%H:%M')}, следующий {next_slot.strftime('%H:%M')}, "
-            f"интервал={interval_minutes} мин)"
-        )
-        return False
-
-    # Не ставим повторную scheduled-задачу в один и тот же ровный слот.
+    # Запускаем на любом тике внутри слота, если в этом слоте ещё не было
+    # scheduled-прогона. Раньше требовалось попасть ровно в минуту слота: если
+    # тик опоздал или прошлый прогон ещё держал лок, слот терялся целиком и
+    # цены после ночной выгрузки 1С восстанавливались на 30 минут позже.
+    # Не ставим повторную scheduled-задачу в один и тот же слот.
     last_run = db.execute(
         text("""
             SELECT started_at FROM repricer_runs
@@ -516,7 +516,8 @@ async def cleanup_stale_runs():
             for run_id, user_id, run_type in orphan_rows:
                 if run_type != "scheduled":
                     continue
-                if _is_run_locked(user_id):
+                # None (Redis недоступен) — не знаем, жив ли прогон: не трогаем
+                if _run_lock_state(user_id) is not False:
                     continue
 
                 updated = db.execute(
@@ -586,7 +587,9 @@ async def cleanup_stale_runs():
                 # Запись repricer_runs создаётся только после catalog pre-fetch,
                 # который на больших кабинетах может занимать много минут.
                 # Не считаем такой lock осиротевшим в течение первого часа.
-                if ttl <= 0 or ttl > 10860 - ORPHAN_LOCK_GRACE_SECONDS:
+                # Локи с heartbeat (TTL <= 10 мин) истекают сами после смерти
+                # воркера — их не трогаем, чистим только старые трёхчасовые.
+                if ttl <= 0 or ttl <= 600 or ttl > 10860 - ORPHAN_LOCK_GRACE_SECONDS:
                     continue
                 redis_client.delete(key)
                 logger.warning(
@@ -602,6 +605,12 @@ async def cleanup_stale_runs():
 
 
 async def cleanup_old_price_changes():
+    """Удаляет price_changes старше 60 дней (в отдельном потоке: DELETE и
+    VACUUM синхронные и раньше замораживали event loop планировщика)."""
+    await asyncio.to_thread(_cleanup_old_price_changes_sync)
+
+
+def _cleanup_old_price_changes_sync():
     """Удаляет price_changes старше 60 дней — таблица растёт ~500k строк/день
     и без чистки разнесёт диск (видели 7GB / 17M строк за месяц).
 
@@ -729,15 +738,18 @@ def setup_scheduler() -> AsyncIOScheduler:
     )
     logger.info("Задача 'cleanup_stale_runs' зарегистрирована (каждые 15 мин.)")
 
+    # Фиксированный дневной час (09:15 UTC = 12:15 МСК). Раньше — раз в 24 ч от
+    # старта контейнера, то есть в случайное время, в том числе ночью, когда
+    # после выгрузки 1С прогоны критичны.
     scheduler.add_job(
         cleanup_old_price_changes,
-        trigger=IntervalTrigger(hours=24),
+        trigger=CronTrigger(hour=9, minute=15, timezone="UTC"),
         id="cleanup_old_price_changes",
-        name="Cleanup Old Price Changes (daily, 60d retention)",
+        name="Cleanup Old Price Changes (daily 09:15 UTC, 60d retention)",
         replace_existing=True,
         max_instances=1,
     )
-    logger.info("Задача 'cleanup_old_price_changes' зарегистрирована (раз в сутки)")
+    logger.info("Задача 'cleanup_old_price_changes' зарегистрирована (ежедневно 09:15 UTC)")
 
     # cleanup_old_snapshots убрана — bash cron (cleanup_prices.sh, 02:00 UTC)
     # чистит snapshots за 30 дней + дедуплицирует, это лучше и полнее.

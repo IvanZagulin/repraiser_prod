@@ -26,10 +26,19 @@ class ProductData:
         self.nm_id = raw_data.get('id')
         self.name = raw_data.get('name', '')
 
-        # Парсинг цены (цены в копейках → рубли)
-        sizes = raw_data.get('sizes', [])
-        if sizes:
-            price_data = sizes[0].get('price', {})
+        # Парсинг цены (цены в копейках → рубли). Раньше бралась только
+        # sizes[0]: у распроданного первого размера нет цены → final=0, и у
+        # конкурента «в наличии» оказывалась цена 0. Берём самый дешёвый размер
+        # с ценой, из размеров с остатком — если такие есть.
+        sizes = raw_data.get('sizes') or []
+        priced = [sz for sz in sizes if (sz.get('price') or {}).get('product')]
+        in_stock = [
+            sz for sz in priced
+            if any((st.get('qty') or 0) > 0 for st in (sz.get('stocks') or []))
+        ]
+        chosen = min(in_stock or priced, key=lambda sz: sz['price']['product']) if priced else None
+        if chosen:
+            price_data = chosen.get('price', {})
             self.seller_price = Decimal(price_data.get('basic', 0)) / 100
             self.final_price = Decimal(price_data.get('product', 0)) / 100
         else:
