@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     
     # WB API
     WB_API_BASE_URL: str = "https://discounts-prices-api.wildberries.ru"
-    WB_CATALOG_BASE_URL: str = "https://card.wb.ru"
+    WB_CATALOG_BASE_URL: str = "https://www.wildberries.ru/__internal/card"
     
     # Repricer settings
     RETRY_ATTEMPTS: int = 5  # Для парсинга через прокси

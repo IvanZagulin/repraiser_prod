@@ -514,6 +514,8 @@ async def cleanup_stale_runs():
 
             orphan_fixed = 0
             for run_id, user_id, run_type in orphan_rows:
+                if run_type != "scheduled":
+                    continue
                 if _is_run_locked(user_id):
                     continue
 
@@ -685,19 +687,20 @@ def setup_scheduler() -> AsyncIOScheduler:
         id="repricer_job",
         name="Repricer Tick (every 5 min)",
         replace_existing=True,
-        max_instances=1
+        max_instances=1,
+        misfire_grace_time=300
     )
     logger.info("Задача 'repricer_job' зарегистрирована (каждые 5 минут)")
 
-    scheduler.add_job(
-        health_check_proxies,
-        trigger=IntervalTrigger(minutes=30),
-        id="proxy_health_check",
-        name="Proxy Health Check",
-        replace_existing=True,
-        max_instances=1,
-    )
-    logger.info("Задача 'proxy_health_check' зарегистрирована (каждые 30 мин)")
+    # scheduler.add_job(
+    #     health_check_proxies,
+    #     trigger=IntervalTrigger(minutes=30),
+    #     id="proxy_health_check",
+    #     name="Proxy Health Check",
+    #     replace_existing=True,
+    #     max_instances=1,
+    # )
+    logger.info("proxy_health_check отключен (парсинг идет через SSH-туннель)")
 
     scheduler.add_job(
         catalog_sync_job,

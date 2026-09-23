@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import logging
 import time
@@ -25,6 +25,7 @@ from app.redis_client import (
     cache_get,
     cache_set,
     cache_ttl,
+    cache_delete,
     release_product_locks,
 )
 from app.services.activity_logger import log_activity
@@ -661,9 +662,12 @@ class RepricerEngine:
                     logger.warning("nm_id=%s: каталог недоступен — пропускаем переоценку", product.nm_id)
                     return {"catalog_stale": True}
 
-            # Истинный СПП WB = скидка от цены после скидки продавца до финальной цены
+            # Истинный СПП WB: используем spp из каталога если доступен,
+            # исключая искажение при десинхронизации времени кеша каталога и цен WB API.
             discounted_price = price_data.discounted_price
-            if discounted_price > 0 and catalog_product.final_price > 0:
+            if catalog_product and getattr(catalog_product, "spp", None) is not None:
+                true_spp = Decimal(str(catalog_product.spp))
+            elif discounted_price > 0 and catalog_product.final_price > 0:
                 true_spp = round((1 - catalog_product.final_price / discounted_price) * 100)
                 true_spp = Decimal(str(max(0, true_spp)))
             elif catalog_product.total_quantity == 0:
@@ -1183,6 +1187,17 @@ class RepricerEngine:
             return _reason
 
         # Проверка min_price (обязательное поле)
+        # Защита от скачка СПП: если товар был недавно откачен защитным механизмом —
+        # пропускаем до истечения кулдауна (до следующего цикла переоценки).
+        try:
+            spp_cooldown = cache_get(f"spp_revert_cooldown:{product.id}")
+            if spp_cooldown:
+                return {"product": product, "needs_update": False, "skip_code": "COOLDOWN_SPP_GUARD",
+                        "current_data": None, "new_price": None, "limit_reason": None,
+                        "reason_msg": "Товар на защитном кулдауне после отката из-за скачка СПП", "_t0": _t0}
+        except Exception as _cd_err:
+            logger.debug("SPP cooldown check failed for product_id=%s: %s", product.id, _cd_err)
+
         if config.min_price is None:
             logger.error(f"min_price не установлен для {product.seller_sku}")
             _reason = "SKIPPED_INACTIVE"
@@ -1507,7 +1522,7 @@ class RepricerEngine:
             cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=self._COMPETITOR_COOLDOWN_HOURS)
             recent = self.db.query(PriceChange).filter(
                 PriceChange.product_id == product.id,
-                PriceChange.reason_code.in_(["UPDATED", "CORRECTED", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX", "CLAMPED_TO_MARGIN"]),
+                PriceChange.reason_code.in_(["UPDATED", "CORRECTED", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX", "CLAMPED_TO_MARGIN", "REVERTED_SPP_SPIKE"]),
                 PriceChange.changed_at >= cutoff,
             ).first()
             if recent:
@@ -1774,17 +1789,19 @@ class RepricerEngine:
         return reason_code
 
     async def _verify_and_correct_competitor(self, run, items: list) -> int:
-        """Closed-loop PHASE 4: перепарсивает факт у ВСЕХ обновлённых competitor-
-        товаров.
+        """Closed-loop PHASE 4: перепарсивает факт у ВСЕХ обновлённых товаров (RRP + Competitor).
 
-        Две задачи:
+        Задачи:
         1. ВСЕГДА обновляет snapshot РЕАЛЬНОЙ final_price (а не предсказанной) —
            иначе UI показывает фантомную цену СПП.
-        2. Если факт ушёл от цели competitor — доправляет вверх или вниз.
+        2. SPP GUARD: если фактическая цена просела НИЖЕ РРЦ (с учетом кошелька)
+           или НИЖЕ конкурента — немедленно откатывает цену назад (REVERTED_SPP_SPIKE)
+           и устанавливает защитный кулдаун на 1 час.
+        3. Для competitor: если факт ушёл от цели (но не просел в демпинг) — доправляет.
         """
         if not items or not self._CLOSED_LOOP_ENABLED:
             return 0
-        logger.info("Closed-loop: %d обновлённых competitor-товаров, пауза %dс на пересчёт СПП",
+        logger.info("Closed-loop: %d обновлённых товаров, пауза %dс на пересчёт СПП",
                     len(items), self._CLOSED_LOOP_SETTLE_SEC)
         await asyncio.sleep(self._CLOSED_LOOP_SETTLE_SEC)
 
@@ -1798,6 +1815,10 @@ class RepricerEngine:
         corrective: dict = {}
         plan: dict = {}
         snapshots_updated = 0
+        reverts_count = 0
+        corrections_count = 0
+
+        wallet_pct = Decimal(str((self._user_settings or {}).get("wb_wallet_discount_pct", "3.0")))
 
         for nm, it in by_nm.items():
             pd = fresh.get(nm)
@@ -1810,7 +1831,7 @@ class RepricerEngine:
             if actual_final <= 0 or new_seller <= 0:
                 continue
 
-            # Обновляем snapshot РЕАЛЬНОЙ финальной ценой и СПП.
+            # Обновляем snapshot РЕАЛЬНОЙ финальной ценой и СПП
             snap = dict(it["current_data"])
             snap["seller_price"] = new_seller
             snap["final_price"] = actual_final
@@ -1824,41 +1845,120 @@ class RepricerEngine:
             except Exception as e:
                 logger.error("Closed-loop: ошибка обновления snapshot для nm=%s: %s", nm, e)
 
+            ratio = actual_final / new_seller
+            if ratio <= 0:
+                continue
+
+            strategy = it.get("strategy") or getattr(it["config"], "strategy", None)
+
+            # -------------------------------------------------------------
+            # 1. ЗАЩИТА РРЦ (Стратегия RRP): проверка цены с кошельком vs РРЦ
+            # -------------------------------------------------------------
+            if strategy == 'rrp':
+                rrp = getattr(it["config"], "rrp_price", None)
+                if not rrp or rrp <= 0:
+                    continue
+                rrp = Decimal(str(rrp))
+                consider_wallet = getattr(it["config"], "rrp_consider_wallet", False)
+                wallet_factor = Decimal("1") - wallet_pct / Decimal("100") if (consider_wallet and wallet_pct > 0) else Decimal("1")
+                actual_effective = actual_final * wallet_factor
+                target_final = rrp / wallet_factor
+
+                # Проверка нарушения: цена с кошельком ниже РРЦ
+                if actual_effective < (rrp - self._TARGET_EPSILON_RUB):
+                    # Экстренный откат: возврат к старой цене продавца
+                    old_seller = Decimal(str(it.get("old_seller_price") or 0))
+                    # Расчет минимальной безопасной цены продавца с учетом текущего реального СПП/скидки
+                    safe_calculated = Decimal(self._round_up(target_final / ratio * Decimal("1.005")))
+                    revert_price = max(old_seller, safe_calculated)
+                    try:
+                        revert_price, _lr = self._apply_limits(
+                            revert_price, it["config"],
+                            seller_discount=(it["current_data"].get("discount") or Decimal(0)),
+                        )
+                    except Exception:
+                        pass
+                    if revert_price != new_seller:
+                        corrective.setdefault(it["token"], []).append({"nmID": nm, "price": int(revert_price)})
+                        spp_str = f"{actual_spp}%" if actual_spp is not None else "?"
+                        msg = (
+                            f"SPP Guard: факт с кошельком {actual_effective:.1f}₽ < РРЦ {rrp}₽ (СПП {spp_str}). "
+                            f"Откат цены продавца {new_seller}₽ → {revert_price}₽"
+                        )
+                        plan[nm] = (it, revert_price, target_final, actual_final, ratio, "REVERTED_SPP_SPIKE", msg)
+                        reverts_count += 1
+                        try:
+                            cache_set(f"spp_revert_cooldown:{it['product'].id}", "1", expire=3600)
+                        except Exception:
+                            pass
+                        logger.warning("SPP Guard REVERT (RRP) for nm=%s: %s", nm, msg)
+                continue
+
+            # -------------------------------------------------------------
+            # 2. СТРАТЕГИЯ КОНКУРЕНТ (Competitor): проверка vs конкурента
+            # -------------------------------------------------------------
             comp = it.get("competitor_price")
             if not comp:
                 continue
             comp = Decimal(str(comp))
             target_final = self._competitor_target_final(it["config"], comp)
 
-            if abs(actual_final - target_final) <= self._TARGET_EPSILON_RUB:
-                continue
-
-            ratio = actual_final / new_seller
-            if ratio <= 0:
-                continue
-            corrected = Decimal(self._round_up(target_final / ratio))
-            if corrected < new_seller * Decimal("0.55"):
-                corrected = Decimal(self._round_up(new_seller * Decimal("0.55") + Decimal("1")))
-            if corrected > new_seller * Decimal("3"):
-                logger.warning(
-                    "Closed-loop: аномальная коррекция nm=%s (seller=%s→%s, ratio=%.4f), пропускаем",
-                    nm, new_seller, corrected, ratio,
-                )
-                continue
-            try:
-                corrected, _lr = self._apply_limits(
-                    corrected, it["config"],
-                    seller_discount=(it["current_data"].get("discount") or Decimal(0)),
-                )
-            except Exception:
-                pass
-            if corrected == new_seller:
-                continue
-            corrective.setdefault(it["token"], []).append({"nmID": nm, "price": int(corrected)})
-            plan[nm] = (it, corrected, target_final, actual_final, ratio)
+            # Проверка нарушения: цена ниже целевой/конкурента
+            if actual_final < (target_final - self._TARGET_EPSILON_RUB):
+                # Экстренный откат
+                old_seller = Decimal(str(it.get("old_seller_price") or 0))
+                safe_calculated = Decimal(self._round_up(target_final / ratio * Decimal("1.005")))
+                revert_price = max(old_seller, safe_calculated)
+                try:
+                    revert_price, _lr = self._apply_limits(
+                        revert_price, it["config"],
+                        seller_discount=(it["current_data"].get("discount") or Decimal(0)),
+                    )
+                except Exception:
+                    pass
+                if revert_price != new_seller:
+                    corrective.setdefault(it["token"], []).append({"nmID": nm, "price": int(revert_price)})
+                    spp_str = f"{actual_spp}%" if actual_spp is not None else "?"
+                    msg = (
+                        f"SPP Guard: факт {actual_final:.1f}₽ < цели {target_final:.1f}₽ (СПП {spp_str}). "
+                        f"Откат цены продавца {new_seller}₽ → {revert_price}₽"
+                    )
+                    plan[nm] = (it, revert_price, target_final, actual_final, ratio, "REVERTED_SPP_SPIKE", msg)
+                    reverts_count += 1
+                    try:
+                        cache_set(f"spp_revert_cooldown:{it['product'].id}", "1", expire=3600)
+                    except Exception:
+                        pass
+                    logger.warning("SPP Guard REVERT (Competitor) for nm=%s: %s", nm, msg)
+            elif abs(actual_final - target_final) > self._TARGET_EPSILON_RUB:
+                # Обычная Closed-loop корректировка (цена выше цели)
+                corrected = Decimal(self._round_up(target_final / ratio))
+                if corrected < new_seller * Decimal("0.55"):
+                    corrected = Decimal(self._round_up(new_seller * Decimal("0.55") + Decimal("1")))
+                if corrected > new_seller * Decimal("3"):
+                    logger.warning(
+                        "Closed-loop: аномальная коррекция nm=%s (seller=%s→%s, ratio=%.4f), пропускаем",
+                        nm, new_seller, corrected, ratio,
+                    )
+                    continue
+                try:
+                    corrected, _lr = self._apply_limits(
+                        corrected, it["config"],
+                        seller_discount=(it["current_data"].get("discount") or Decimal(0)),
+                    )
+                except Exception:
+                    pass
+                if corrected != new_seller:
+                    corrective.setdefault(it["token"], []).append({"nmID": nm, "price": int(corrected)})
+                    msg = (
+                        f"Closed-loop: факт {actual_final}₽ != цели {target_final:.2f}₽ → "
+                        f"seller {new_seller}→{corrected}"
+                    )
+                    plan[nm] = (it, corrected, target_final, actual_final, ratio, "CORRECTED", msg)
+                    corrections_count += 1
 
         if not corrective:
-            logger.info("Closed-loop: snapshots обновлено=%d, коррекция не нужна (все у цели)", snapshots_updated)
+            logger.info("Closed-loop: snapshots обновлено=%d, коррекция/откат не требуются", snapshots_updated)
             try:
                 self.db.commit()
             except Exception as e:
@@ -1873,8 +1973,9 @@ class RepricerEngine:
                     await client.update_prices(updates)
                 for u in updates:
                     applied.add(u["nmID"])
+                    cache_delete(f"wb_catalog:{u['nmID']}")
             except Exception as e:
-                logger.error("Closed-loop: ошибка отправки коррекции: %s", e)
+                logger.error("Closed-loop: ошибка отправки пакета в WB: %s", e)
 
         verified_after_correction: dict = {}
         if applied:
@@ -1886,7 +1987,7 @@ class RepricerEngine:
                 logger.error("Closed-loop: повторный парсинг после коррекции упал: %s", e)
 
         n = 0
-        for nm, (it, corrected, target_final, actual_final, ratio) in plan.items():
+        for nm, (it, corrected, target_final, actual_final, ratio, reason_code, reason_msg) in plan.items():
             if nm not in applied:
                 continue
             product = it["product"]
@@ -1914,9 +2015,8 @@ class RepricerEngine:
                                           competitor_nm_id=it.get("competitor_nm_id"),
                                           competitor_price=it.get("competitor_price"))
                 self._save_price_change(
-                    run, product, base, corrected, corrected_final, "CORRECTED",
-                    f"Closed-loop: факт {actual_final}₽ != цели {target_final:.2f}₽ → "
-                    f"seller {it['new_price']}→{corrected}",
+                    run, product, base, corrected, corrected_final, reason_code,
+                    reason_msg,
                 )
                 n += 1
             except Exception as e:
@@ -1926,8 +2026,45 @@ class RepricerEngine:
         except Exception as e:
             logger.error("Closed-loop: commit упал: %s", e)
             self.db.rollback()
-        logger.info("Closed-loop: snapshots обновлено=%d, доправлено к цели=%d", snapshots_updated, n)
+        logger.info(
+            "Closed-loop / SPP Guard: snapshots=%d, откатов (SPP Guard)=%d, доправок (Closed-loop)=%d, итого отправлено=%d",
+            snapshots_updated, reverts_count, corrections_count, n
+        )
         return n
+
+    def _update_stage(self, run, stage_name: str, stage_idx: int, total_stages: int = 5, details: str = ""):
+        """Сохраняет текущий этап выполнения прогона в БД для UI"""
+        try:
+            stages = [
+                {"id": 1, "name": "Проверка каталога WB", "key": "preflight"},
+                {"id": 2, "name": "Базовые цены WB API", "key": "wb_prices"},
+                {"id": 3, "name": "Парсинг цен в каталоге", "key": "catalog"},
+                {"id": 4, "name": "Расчет и отправка цен", "key": "pricing_upload"},
+                {"id": 5, "name": "Контроль применения (Closed-loop)", "key": "closed_loop"},
+            ]
+            for s in stages:
+                if s["id"] < stage_idx:
+                    s["status"] = "completed"
+                elif s["id"] == stage_idx:
+                    s["status"] = "running"
+                    s["details"] = details
+                else:
+                    s["status"] = "pending"
+            
+            if stage_idx > total_stages:
+                run.current_stage = stage_name
+            else:
+                run.current_stage = f"[{stage_idx}/{total_stages}] {stage_name}"
+            run.stage_progress = {
+                "current_stage": stage_name,
+                "stage_idx": min(stage_idx, total_stages),
+                "total_stages": total_stages,
+                "details": details,
+                "stages": stages
+            }
+            self.db.commit()
+        except Exception as e:
+            logger.warning("Не удалось обновить этап в БД: %s", e)
 
     async def run_repricer(
         self,
@@ -2127,14 +2264,14 @@ class RepricerEngine:
 
             # Pre-flight: проверяем доступность каталога WB (SSH-туннель)
             if not dry_run:
+                self._update_stage(run, "Проверка каталога WB", 1, 5, "Шлюз Angie WAF активен")
                 await self._preflight_catalog_check()
 
-            # Загружаем цены: для маленьких прогонов точечно, для больших — все разом
+            # Загружаем цены: быстрый точечный POST-запрос только по переоцениваемым товарам
             if not dry_run:
-                if total_count <= 500:
-                    logger.info("Малый прогон (%d товаров): точечный pre-fetch цен", total_count)
-                else:
-                    await self._prefetch_all_prices_once()
+                self._update_stage(run, "Базовые цены WB API", 2, 5, f"Точечный запрос цен для {total_count} товаров")
+                logger.info("Быстрый точечный pre-fetch цен для %d целевых товаров", total_count)
+                # Цены для чанков загрузятся автоматически батчами через get_prices_by_articles
 
             total_chunks = (total_count + CHUNK_SIZE - 1) // CHUNK_SIZE
             # Накопитель для closed-loop: ВСЕ обновлённые competitor-товары.
@@ -2188,6 +2325,11 @@ class RepricerEngine:
                     pass
 
                 # === ФАЗА 1: вычисляем решения параллельно (50 товаров одновременно) ===
+                if not dry_run:
+                    self._update_stage(
+                        run, "Парсинг цен в каталоге", 3, 5,
+                        f"Чанк {chunk_idx + 1}/{total_chunks} ({min(chunk_start + CHUNK_SIZE, total_count)}/{total_count} товаров)"
+                    )
                 pending_updates = {}  # (marketplace, account_id) -> {account, updates}
                 _sem = asyncio.Semaphore(50)
 
@@ -2238,6 +2380,10 @@ class RepricerEngine:
                 update_errors: dict = {}
 
                 if not dry_run and pending_updates:
+                    self._update_stage(
+                        run, "Расчет и отправка цен", 4, 5,
+                        f"Выгрузка обновлений для чанка {chunk_idx + 1}/{total_chunks}"
+                    )
                     from app.services.wb_api import WBAuthError
                     from datetime import timedelta
                     from app.services.ozon_api import OzonAuthError
@@ -2311,6 +2457,7 @@ class RepricerEngine:
                                     _errors[u["_product_pk"]] = "Статус задачи WB не получен (таймаут опроса)"
                                 elif st[0]:
                                     _ok.add(u["_product_pk"])
+                                    cache_delete(f"wb_catalog:{nm}")
                                 else:
                                     _fail.add(u["_product_pk"])
                                     err_text = st[1] or "WB отклонил цену"
@@ -2394,10 +2541,8 @@ class RepricerEngine:
                         )
                         if reason_code in ["UPDATED", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX", "CLAMPED_TO_MARGIN"]:
                             results["updated"] += 1
-                            # Цена применена для competitor-товара — ставим в
-                            # очередь на closed-loop verify+correct. Примитивы
-                            # снимаем сейчас (объекты живые до expire_all ниже).
-                            if dec.get("snap_competitor_price") and not dry_run:
+                            # Цена применена — ставим в очередь на closed-loop verify + SPP guard (и RRP, и Competitor).
+                            if not dry_run:
                                 competitor_updates.append({
                                     "product": product,
                                     "nm_id": product.nm_id,
@@ -2405,10 +2550,12 @@ class RepricerEngine:
                                     "config": product.config,
                                     "new_price": dec["new_price"],
                                     "current_data": dec["current_data"],
+                                    "old_seller_price": dec["current_data"].get("seller_price") if dec.get("current_data") else None,
+                                    "strategy": getattr(product.config, "strategy", None),
                                     "competitor_price": dec.get("snap_competitor_price"),
                                     "competitor_nm_id": dec.get("snap_competitor_nm_id"),
                                 })
-                        elif reason_code in ["SKIPPED_PROMO", "SKIPPED_INACTIVE", "NO_CHANGE", "COMPETITOR_OOS", "OUT_OF_STOCK", "COOLDOWN"]:
+                        elif reason_code in ["SKIPPED_PROMO", "SKIPPED_INACTIVE", "NO_CHANGE", "COMPETITOR_OOS", "OUT_OF_STOCK", "COOLDOWN", "COOLDOWN_SPP_GUARD"]:
                             results["skipped"] += 1
                         else:
                             results["errors"] += 1
@@ -2471,6 +2618,10 @@ class RepricerEngine:
             # WB пересчитывает СПП за секунды, поэтому доправляем промахи (через
             # порог СПП) в том же прогоне, не дожидаясь следующего часа.
             if competitor_updates and not dry_run:
+                self._update_stage(
+                    run, "Контроль применения (Closed-loop)", 5, 5,
+                    f"Проверка СПП для {len(competitor_updates)} товаров"
+                )
                 try:
                     corrected_n = await self._verify_and_correct_competitor(run, competitor_updates)
                     results["updated"] += corrected_n
@@ -2504,7 +2655,22 @@ class RepricerEngine:
                 and active_products > 100
                 and catalog_unavailable_pct > 50
             )
-            run.updated_count = results['updated']
+            # Считаем уникальные товары без задвоения Closed-loop доправок
+            try:
+                from sqlalchemy import func, distinct
+                from app.models.price_change import PriceChange
+                unique_updated = self.db.query(func.count(distinct(PriceChange.product_id))).filter(
+                    PriceChange.run_id == run.id,
+                    PriceChange.reason_code.in_(["UPDATED", "CORRECTED", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX", "CLAMPED_TO_MARGIN"])
+                ).scalar()
+                run.updated_count = unique_updated if unique_updated is not None else results['updated']
+            except Exception:
+                run.updated_count = results['updated']
+            self._update_stage(
+                run, "Завершено", 6, 5,
+                f"Обработано {total_count} товаров: {run.updated_count} обновлено, {results['skipped']} пропущено"
+            )
+            run.current_stage = "Завершено"
             run.skipped_count = results['skipped']
             run.error_count = results['errors']
             run.status = "failed" if catalog_outage else "completed"

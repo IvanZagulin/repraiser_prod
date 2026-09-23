@@ -39,6 +39,8 @@ class RepricerRunResponse(BaseModel):
     error_count: int
     status: str
     error_message: Optional[str]
+    current_stage: Optional[str] = None
+    stage_progress: Optional[dict] = None
     started_at: datetime
     completed_at: Optional[datetime]
     

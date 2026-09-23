@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from app.database import Base
@@ -28,6 +28,8 @@ class RepricerRun(Base):
     # Статус
     status = Column(String(20), default="running", nullable=False, comment="Статус: running, completed, failed")
     error_message = Column(Text, nullable=True, comment="Сообщение об ошибке")
+    current_stage = Column(String(150), nullable=True, comment="Текущий этап выполнения")
+    stage_progress = Column(JSON, nullable=True, comment="Детали этапов")
 
     # Метаданные
     started_at = Column(DateTime, default=_utcnow, nullable=False, index=True)
