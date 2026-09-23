@@ -132,7 +132,8 @@ async def test_catalog_cache_miss_uses_limited_single_fallback():
 
     assert result is not None
     assert result["final_price"] == Decimal("357")
-    assert result["spp"] == Decimal("51")
+    # Чистый СПП из пары цен каталога: 1 - 357 / (730 * (1 - 0%)) = 51.10%
+    assert result["spp"] == Decimal("51.10")
     parse_product.assert_awaited_once_with(product.nm_id)
     cache_set.assert_called_once_with(
         f"wb_catalog:{product.nm_id}",
