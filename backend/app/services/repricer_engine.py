@@ -892,10 +892,13 @@ class RepricerEngine:
                 pass
         try:
             cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=self._LAST_SPP_LOOKBACK_DAYS)
+            # Только снимки товара в наличии: для товара без остатка старая логика
+            # писала «прогнозный» снимок с СПП = 0 (цена покупателя = цене продавца).
             snap = self.db.query(PriceSnapshot).filter(
                 PriceSnapshot.product_id == product.id,
                 PriceSnapshot.final_price > 0,
                 PriceSnapshot.seller_price > 0,
+                PriceSnapshot.total_quantity > 0,
                 PriceSnapshot.snapshot_at >= cutoff,
             ).order_by(PriceSnapshot.snapshot_at.desc()).first()
         except Exception as e:
