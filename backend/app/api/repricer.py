@@ -117,7 +117,7 @@ async def manual_run(
             body.dry_run,
         ],
         kwargs={"priority": priority},
-        priority=9 if priority else 0,
+        priority=0 if priority else 5,
     )
 
     return RepricerRunResponse.model_validate(run)

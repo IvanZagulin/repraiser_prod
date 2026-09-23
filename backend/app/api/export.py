@@ -562,23 +562,28 @@ async def import_strategy(
             results['updated'] += 1
         else:
             if not config_data.get('strategy'):
-                if config_data.get('is_active', True):
+                if config_data.get('is_active') is not False:
                     results['errors'].append(
                         f"Товар {config_data['seller_sku']}: strategy обязателен для новой активной стратегии"
                     )
                     continue
                 config_data['strategy'] = 'rrp'
             if config_data.get('min_price') is None:
-                if config_data.get('is_active', True):
+                if config_data.get('is_active') is not False:
                     results['errors'].append(
                         f"Товар {config_data['seller_sku']}: min_price обязателен для новой активной стратегии"
                     )
                     continue
                 config_data['min_price'] = 0
-            config = ProductConfig(
-                product_id=product.id,
-                **{k: v for k, v in config_data.items() if k not in ('seller_sku', 'account_id', 'account_name_or_id')}
-            )
+            new_values = {
+                k: v for k, v in config_data.items()
+                if k not in ('seller_sku', 'account_id', 'account_name_or_id') and v is not None
+            }
+            # РРЦ по умолчанию выдерживаем с учётом кошелька WB — как у всех
+            # действующих РРЦ-товаров. Без кошелька покупатель платит на 3% меньше РРЦ.
+            if new_values.get('strategy') == 'rrp' and 'rrp_consider_wallet' not in new_values:
+                new_values['rrp_consider_wallet'] = True
+            config = ProductConfig(product_id=product.id, **new_values)
             db.add(config)
             results['created'] += 1
 
@@ -692,6 +697,7 @@ async def import_rrp_spp(
                 is_active=True,
                 min_price=first_row_min if first_row_min is not None else _D("0"),
                 skip_margin_check=bool(first_skip),
+                rrp_consider_wallet=True,
             )
             db.add(config)
             db.flush()

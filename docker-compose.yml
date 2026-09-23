@@ -110,6 +110,8 @@ services:
         max-file: "3"
     networks:
       - wb_network
+    volumes:
+      - /home/ivanz/wb-auth:/app/wb-auth:ro
 
   celery_worker:
     build:
@@ -170,6 +172,8 @@ services:
         max-file: "3"
     networks:
       - wb_network
+    volumes:
+      - /home/ivanz/wb-auth:/app/wb-auth:ro
 
   scheduler:
     build:

@@ -1,3 +1,5 @@
+import os
+import re
 import asyncio
 import logging
 import time
@@ -24,10 +26,19 @@ class ProductData:
         self.nm_id = raw_data.get('id')
         self.name = raw_data.get('name', '')
 
-        # Парсинг цены (цены в копейках → рубли)
-        sizes = raw_data.get('sizes', [])
-        if sizes:
-            price_data = sizes[0].get('price', {})
+        # Парсинг цены (цены в копейках → рубли). Раньше бралась только
+        # sizes[0]: у распроданного первого размера нет цены → final=0, и у
+        # конкурента «в наличии» оказывалась цена 0. Берём самый дешёвый размер
+        # с ценой, из размеров с остатком — если такие есть.
+        sizes = raw_data.get('sizes') or []
+        priced = [sz for sz in sizes if (sz.get('price') or {}).get('product')]
+        in_stock = [
+            sz for sz in priced
+            if any((st.get('qty') or 0) > 0 for st in (sz.get('stocks') or []))
+        ]
+        chosen = min(in_stock or priced, key=lambda sz: sz['price']['product']) if priced else None
+        if chosen:
+            price_data = chosen.get('price', {})
             self.seller_price = Decimal(price_data.get('basic', 0)) / 100
             self.final_price = Decimal(price_data.get('product', 0)) / 100
         else:
@@ -76,21 +87,95 @@ class ProductData:
 
 
 _HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Accept': 'application/json',
-    'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Accept': '*/*',
+    'Accept-Language': 'ru,en;q=0.9,en-GB;q=0.8,en-US;q=0.7,ru-RU;q=0.6',
+    'authorization': 'Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2lkLndiLnJ1Iiwic3ViIjoiNDcwOTEyNjMiLCJhdWQiOlsiaHR0cHM6Ly93d3cud2lsZGJlcnJpZXMucnUiXSwiZXhwIjoxNzkyNTc1NjgzLCJuYmYiOjE3ODk5ODM2ODMsImlhdCI6MTc4OTk4MzY4MywidXNlciI6IjQ3MDkxMjYzIiwic2hhcmRfa2V5IjoiMTEiLCJjbGllbnRfaWQiOiJtYXJrZXRwbGFjZV93ZWIiLCJzZXNzaW9uX2lkIjoiODc2Y2I3MDM0NTIwNDE4ZmI4NjJkZWY0MzYxMGUwMzgiLCJ2YWxpZGF0aW9uX2tleSI6ImE1ZmFhNjgzMDM0ZDIxYmZlNzZhYWFkZTkyNzJhNDI3MGI3NGVjMWE2OTBhMjA1NWQ2YWJhODUyMjQ0ZDQ1NGQiLCJhcHBsaWNhdGlvbiI6IndiX21hcmtldHBsYWNlIiwic2NvcGUiOlsib3BlbmlkIiwicGhvbmUiLCJyZWFkOnByb2ZpbGUiLCJyZWFkOmVtYWlsIl0sInVzZXJfcmVnaXN0cmF0aW9uX2R0IjoxNjc0NzM3NDM1LCJ0eXBlIjoiYWNjZXNzX3Rva2VuIiwidmVyc2lvbiI6NX0.LNRiluE44Fu5T9rY_JOYZyYQlGul75supURvj9YmsgoL2_H2BWLaRUW_dXf0fj86hIusdBb4K-W3e38MBNKuwfQyxgE7UWXPV5fP2obZxyWFzjKpB2h6b5OtVJmhhnVn7CASC1PQVHZJMl4sdK1GoLN0SBe4PIpCfU6R4NIZkZdXh4sJYtPXZVZGyRa-qFVHzz-Qp9QELs-RVFDQvgLuLaTcysE6s8yMYeKswTLKEOtt-np2v1_8O-bOT_hRsGF-j0kCB7giGRx07vnOqmr1hOWxaOsLiQOKkjxNp8fJjSnriIZp9WWrYRYOC3vPtvYkdQHoCvyktc7e0-4HHMm_IQ',
+    'deviceid': 'site_c1013e8f4fce4ae3b5cc9618547f1ef6',
+    'priority': 'u=1, i',
+    'sec-ch-ua': '"Microsoft Edge";v="153", "Not_A Brand";v="8", "Chromium";v="153"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-origin',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 Edg/153.0.0.0',
     'Referer': 'https://www.wildberries.ru/',
+    'Origin': 'https://www.wildberries.ru',
+    'x-requested-with': 'XMLHttpRequest',
+    'x-spa-version': '14.25.3',
 }
+
+_DEFAULT_COOKIES = {
+    "external-locale": "ru",
+    "_wbauid": "7866194451782997876",
+    "_cp": "1",
+    "device_id": "c3c5454a-f49c-4cfc-a2d7-e406034220ef",
+    "feedbacks_link_accepted": "1",
+    "routeb": "1784530343.631.373.438960|28979c6168ec4738f0fcb8539a6d5f12",
+    "isAuthAccessToken": "true",
+    "x_wbaas_token": "1.1000.9adaf7767ce0498dbcc50ddc8addc6b9.MTV8MmEwMzo2ZjAxOjE6Mjo6MjozYzU0fE1vemlsbGEvNS4wIChXaW5kb3dzIE5UIDEwLjA7IFdpbjY0OyB4NjQpIEFwcGxlV2ViS2l0LzUzNy4zNiAoS0hUTUwsIGxpa2UgR2Vja28pIENocm9tZS8xNTMuMC4wLjAgU2FmYXJpLzUzNy4zNiBFZGcvMTUzLjAuMC4wfDE3OTAyNDI4ODF8cmV1c2FibGV8MnxleUpvWVhOb0lqb2lJbjA9fDF8M3wxNzkwMTEzMjgxfDF8SnhjPQ==.MEUCIQDUnvmmlGBM2l02A3Xiv2WHjPYtckfAxB1Bv/lHvo4cDgIgUml7IECQ+wPPAxCQNWlZy+6HokxQ/beHdVT79hdwv14=",
+    "wbx-validation-key": "e138f5f1-529e-425e-af77-55f8e99876d9",
+    "x-supplier-id-external": "d32f8224-6682-4fb6-bd5e-057f076a969e",
+    "__zzatw-wb": "MDA0dC0yYBwREFsKEH49WgsbSl1pCENQGC9LXz1uLWEPJ3wjYnwgGWsvC1RDMmUIPkBNOTM5NGZwVydgTmIfQ1pVfyUiFX1sH0FLVCNyM3dlaXceViUTFmcPRyJ1F0hAGxI6aCU6f1JpGWUzDldjGAsmVDVfP30sGRp4bSlScX9NfXY3PmJ+MQ9pOSRjCh9+OFoLDWk3XBQ8dWU+SHZzKUBtI19QXSRLUT9FbllGaXUVF0M8HHsNKkNtLToZUXYQQlh4cBpEN0AYfxVZUnUpbn06MBtFV08cThQldFpPelghRXt0WVYQPRdAcyYtX28iHV95FCFMR0lrZU5TQixmG3EVTQgNND1aciIPWzklWAgSPwsmIBp3ayhXDQtkQUdtbxt/Nl0cOWMRCxl+OmNdRkc3FSR7dSYKCTU3YnAvTCB7SykWRxsyYV5GaXUVCwoNGUVDb3cmQWslYURdVXVbSjNZHkZ0ayhWPQtiQ3J2eTJwVxlRDxZhDhYYRRcje0I3Yhk4QhgvPV8/YngiD2lIYChDVVIJKxoRenAlS3FPLH12X30beylOIA0lVBMhP05y5q2lDg==",
+    "cfidsw-wb": "HwDUScMEm+mXXd4p306aoSQDkCiZVXC/GDkRNpymG6fqZK6DXi7z/xIQYivVqxPCLApM47xvMl6s+xn1rVB5MsudZH6F42TmRlSykL7vcbOiePnHBiWGYh3qjvQjRPkL6FmvVekvMppSHXUo/upDElcjz17Rwey3GC6ppH9nSw==",
+}
+
+
+AUTH_REQUEST_PATHS = [
+    "/app/wb-auth/request.txt",
+    "/home/ivanz/wb-auth/request.txt",
+    "/app/wb_auth_request.txt",
+]
+
+
+def load_auth_session() -> tuple[dict, dict]:
+    """Загружает свежие куки и заголовки из wb-auth файла сессии"""
+    cookies = dict(_DEFAULT_COOKIES)
+    headers = dict(_HEADERS)
+    for p in AUTH_REQUEST_PATHS:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    text = f.read()
+                c_m = re.search(r"-H 'cookie:\s*([^']+)'", text)
+                if c_m:
+                    cookies.update(dict(item.split("=", 1) for item in c_m.group(1).split("; ") if "=" in item))
+                for h in ['deviceid', 'user-agent', 'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform']:
+                    m_h = re.search(r"-H '" + h + r":\s*([^']+)'", text, re.IGNORECASE)
+                    if m_h:
+                        headers[h] = m_h.group(1)
+                break
+            except Exception as e:
+                logger.warning("Ошибка чтения %s: %s", p, e)
+    return cookies, headers
+
+
+def get_cookies() -> dict:
+    """Возвращает куки для каталога"""
+    raw = getattr(settings, 'WB_CATALOG_COOKIES', '')
+    if raw:
+        try:
+            return dict(item.split("=", 1) for item in raw.split("; ") if "=" in item)
+        except Exception:
+            pass
+    cookies, _ = load_auth_session()
+    return cookies
+
+
+def get_headers() -> dict:
+    """Возвращает заголовки для каталога"""
+    _, headers = load_auth_session()
+    return headers
 
 
 class CatalogParser:
     """
     Парсер каталога WB.
-    Пытается получить данные через прокси (если настроены),
-    при отсутствии прокси делает прямой запрос.
+    Пытается получить данные через CATALOG_PROXY_URL, затем через пул SOCKS5,
+    при отсутствии — напрямую.
     """
 
-    _BACKOFF_STEPS = [5 * 60, 15 * 60, 30 * 60]  # 5мин → 15мин → 30мин
+    _BACKOFF_STEPS = [5 * 60, 15 * 60, 30 * 60]
 
     def __init__(self):
         self.max_retries = settings.RETRY_ATTEMPTS
@@ -99,43 +184,33 @@ class CatalogParser:
         self._consecutive_blocks = 0
 
     def _build_url(self, nm_id: int) -> str:
-        """
-        URL для получения данных товара.
-        card.wb.ru — публичный API WB, не требует куки/авторизации.
-        """
-        base = settings.WB_CATALOG_BASE_URL  # https://card.wb.ru
+        base = settings.WB_CATALOG_BASE_URL.rstrip('/')
         return (
             f"{base}/cards/v4/detail"
-            f"?appType=1&curr=rub&dest=-1257786&nm={nm_id}"
+            f"?appType=1&curr=rub&dest=-4039466&nm={nm_id}"
         )
 
     def _build_batch_url(self, nm_ids: list[int]) -> str:
-        """URL для батчевого запроса — WB принимает nm=id1;id2;id3 (до 100 шт.)."""
-        base = settings.WB_CATALOG_BASE_URL
+        base = settings.WB_CATALOG_BASE_URL.rstrip('/')
         nm_param = ";".join(str(n) for n in nm_ids)
-        return f"{base}/cards/v4/detail?appType=1&curr=rub&dest=-1257786&nm={nm_param}"
+        return f"{base}/cards/v4/detail?appType=1&curr=rub&dest=-4039466&nm={nm_param}"
 
     @staticmethod
     def _extract_products(data: dict) -> list:
-        """
-        Поддерживает обе структуры ответа:
-        - {"products": [...]}          (wildberries.ru/__internal)
-        - {"data": {"products": [...]}} (card.wb.ru — старый формат)
-        """
         if 'products' in data:
             return data['products']
         return data.get('data', {}).get('products', [])
 
     async def _request_via_catalog_proxy(self, url: str) -> Optional[dict]:
-        """Запрос через CATALOG_PROXY_URL (HTTP/SOCKS5 прокси на рабочем сервере)"""
         proxy_url = settings.CATALOG_PROXY_URL
         if not proxy_url:
             return None
         try:
             async with AsyncSession(
                 timeout=15,
-                headers=_HEADERS,
-                impersonate="edge101",
+                headers=get_headers(),
+                cookies=get_cookies(),
+                impersonate="chrome124",
                 proxy=proxy_url,
             ) as client:
                 response = await client.get(url)
@@ -148,20 +223,17 @@ class CatalogParser:
             return None
 
     async def _request_with_proxy(self, url: str, proxy: ProxyConfig) -> Optional[dict]:
-        """Запрос через прокси из пула (curl_cffi для обхода TLS fingerprinting)"""
         try:
             async with AsyncSession(
                 timeout=15,
-                headers=_HEADERS,
-                impersonate="edge101",
+                headers=get_headers(),
+                cookies=get_cookies(),
+                impersonate="chrome124",
                 proxy=proxy.url,
             ) as client:
                 response = await client.get(url)
                 if response.status_code == 200:
                     return response.json()
-                if response.status_code == 403:
-                    logger.warning(f"403 через прокси {proxy} (капча?)")
-                    proxy_pool.mark_as_dead(proxy)
                 else:
                     logger.warning(f"Код {response.status_code} через прокси {proxy}")
                 return None
@@ -171,22 +243,17 @@ class CatalogParser:
             return None
 
     async def _request_direct(self, url: str) -> Optional[dict]:
-        """Прямой запрос без прокси"""
         import random
         now = time.monotonic()
         if now < self._blocked_until:
-            logger.debug(
-                "WB catalog direct blocked by circuit breaker (%ss left, last_status=%s)",
-                int(self._blocked_until - now),
-                self._last_block_status,
-            )
             return None
-        await asyncio.sleep(random.uniform(0.05, 0.15))  # антибот WB
+        await asyncio.sleep(random.uniform(0.05, 0.15))
         try:
             async with AsyncSession(
-                timeout=5,
-                headers=_HEADERS,
-                impersonate="edge101",
+                timeout=10,
+                headers=get_headers(),
+                cookies=get_cookies(),
+                impersonate="chrome124",
             ) as client:
                 response = await client.get(url)
                 if response.status_code == 200:
@@ -198,24 +265,14 @@ class CatalogParser:
                     self._consecutive_blocks += 1
                     self._blocked_until = time.monotonic() + backoff
                     self._last_block_status = response.status_code
-                    logger.warning(
-                        "Прямой запрос: код %s для %s; circuit breaker на %d мин (шаг %d)",
-                        response.status_code, url, backoff // 60, self._consecutive_blocks,
-                    )
                     return None
-                logger.warning(f"Прямой запрос: код {response.status_code} для {url}")
                 return None
         except Exception as e:
             logger.error(f"Ошибка прямого запроса: {e}")
             return None
 
     async def parse_product(self, nm_id: int) -> Optional[ProductData]:
-        """
-        Парсинг товара. Приоритет: CATALOG_PROXY_URL → direct → SOCKS5 pool.
-        """
         url = self._build_url(nm_id)
-        logger.info(f"Парсинг товара nm_id={nm_id}")
-
         data = await self._request_via_catalog_proxy(url)
         if data is None:
             data = await self._request_direct(url)
@@ -233,7 +290,6 @@ class CatalogParser:
         return self._parse_response(nm_id, data)
 
     def _parse_response(self, nm_id: int, data: dict) -> Optional[ProductData]:
-        """Парсинг JSON-ответа каталога"""
         try:
             products = self._extract_products(data)
             if not products:
@@ -253,12 +309,6 @@ class CatalogParser:
         delay_between_chunks: float = 0.05,
         concurrency: int = 10,
     ) -> Dict[int, Optional[ProductData]]:
-        """
-        Батчевый парсинг: объединяет nm_ids в чанки по chunk_size и делает
-        один HTTP-запрос на чанк вместо N отдельных. Чанки выполняются параллельно
-        (до concurrency одновременных запросов).
-        Неудавшиеся чанки повторяются до 2 раз.
-        """
         if not nm_ids:
             return {}
 
@@ -329,7 +379,6 @@ class CatalogParser:
         return result
 
     async def parse_multiple(self, nm_ids: list[int]) -> Dict[int, Optional[ProductData]]:
-        """Последовательный парсинг товаров — каждый через следующий прокси по кругу"""
         logger.info(f"Парсинг {len(nm_ids)} товаров (последовательно)")
         parsed_data = {}
         for nm_id in nm_ids:

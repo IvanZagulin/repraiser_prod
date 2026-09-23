@@ -348,29 +348,48 @@ class TestStrategyCompetitorCorridor:
 
 
 class TestStrategyRRPTarget:
-    def test_rrp_reprices_inside_old_tolerance(self):
+    @staticmethod
+    def _rrp(final, rrp="1000", spp="0", discount="0", seller=None):
         engine = _make_engine_with_settings()
         config = SimpleNamespace(
-            rrp_price=Decimal("1000"),
+            rrp_price=Decimal(rrp),
             rrp_tolerance=Decimal("10"),
             rrp_consider_wallet=False,
             rrp_spp_tiers=[],
         )
         current_data = {
-            "seller_price": Decimal("1005"),
-            "final_price": Decimal("1005"),
-            "discount": Decimal("0"),
-            "spp": Decimal("0"),
+            "seller_price": Decimal(str(seller or final)),
+            "final_price": Decimal(str(final)),
+            "discount": Decimal(discount),
+            "spp": Decimal(spp),
         }
         product = SimpleNamespace(nm_id=111, seller_sku="SKU")
+        return asyncio.run(engine._strategy_rrp(product, config, current_data))
 
-        new_seller, reason_code, reason_msg = asyncio.run(
-            engine._strategy_rrp(product, config, current_data)
-        )
+    def test_rrp_no_change_inside_corridor(self):
+        """РРЦ … РРЦ+1% — цену не трогаем (раньше дёргалась на копейки каждый прогон)."""
+        new_seller, reason_code, _msg = self._rrp(final="1005")
+        assert reason_code == "NO_CHANGE"
+        assert new_seller is None
 
+    def test_rrp_reprices_above_corridor_with_rounding_margin(self):
+        new_seller, reason_code, reason_msg = self._rrp(final="1020")
         assert reason_code == "CALCULATED"
-        assert new_seller == Decimal("1000")
-        assert "целевая финальная 1000" in reason_msg
+        # ceil(1000) + 1 ₽ запаса на округление WB вниз
+        assert new_seller == Decimal("1001")
+        assert "целевая финальная 1001" in reason_msg
+
+    def test_rrp_raises_when_below_rrp(self):
+        new_seller, reason_code, _msg = self._rrp(final="990")
+        assert reason_code == "CALCULATED"
+        assert new_seller == Decimal("1001")
+
+    def test_rrp_seller_discount_not_double_counted(self):
+        """СПП в current_data — чистый (без скидки продавца): делим на скидку один раз."""
+        new_seller, reason_code, _msg = self._rrp(final="900", seller="1600", spp="30", discount="20")
+        assert reason_code == "CALCULATED"
+        # 1001 / 0.7 / 0.8 = 1787.5 → 1788; покупатель: 1788*0.8*0.7 = 1001.28 >= 1000
+        assert new_seller == Decimal("1788")
 
     def test_ozon_rrp_targets_seller_price_directly(self):
         engine = _make_engine_with_settings()
@@ -494,10 +513,12 @@ class TestCorrectUnstableProducts:
             n = asyncio.run(engine._verify_and_correct_competitor(run, items))
 
         assert n == 1
+        # Факт 1588 ниже цели 1593 больше допуска → откат SPP Guard к минимальной
+        # безопасной цене (не к max(старая, безопасная)).
         assert fake_client.calls == [[{"nmID": test_product.nm_id, "price": 2422}]]
         assert parse_calls == [[test_product.nm_id], [test_product.nm_id]]
         changes = db_session.query(PriceChange).filter(
-            PriceChange.run_id == run.id, PriceChange.reason_code == "CORRECTED"
+            PriceChange.run_id == run.id, PriceChange.reason_code == "REVERTED_SPP_SPIKE"
         ).all()
         assert len(changes) == 1
         assert changes[0].new_seller_price == Decimal("2422")
@@ -629,7 +650,8 @@ class TestCompetitorCooldownSnapshots:
             decision = asyncio.run(engine._decide_product(test_product, run, dry_run=False))
 
         assert decision["needs_update"] is True
-        assert decision["new_price"] == Decimal("1200")
+        # ceil(900) + 1 ₽ запаса = 901 → 901 / 0.75 = 1201.3 → 1202
+        assert decision["new_price"] == Decimal("1202")
         assert "[Fallback РРЦ при OOS конкурента]" in decision["reason_msg"]
 
     def test_oos_during_cooldown_saves_fresh_snapshot(self, db_session, test_product, test_product_config):

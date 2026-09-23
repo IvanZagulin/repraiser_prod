@@ -825,8 +825,11 @@ class ExcelImporter:
 
         configs = []
 
-        def to_bool(val, default=True):
-            if val is None:
+        def to_bool(val, default=None):
+            # Пустая ячейка = «не менять» (None). Раньше пустое «активен»
+            # включало выключенные товары, а пустой «кошелёк» выключал учёт
+            # кошелька — РРЦ начинала выдерживаться на 3% ниже.
+            if val is None or not str(val).strip():
                 return default
             return str(val).strip().lower() in ("true", "1", "да", "yes")
 
@@ -851,13 +854,13 @@ class ExcelImporter:
                         "max_price":                     Decimal(str(row[4])) if row[4] is not None and str(row[4]).strip() else None,
                         "rrp_price":                     Decimal(str(row[5])) if row[5] is not None and str(row[5]).strip() else None,
                         "rrp_tolerance":                 Decimal(str(row[6])) if row[6] is not None and str(row[6]).strip() else None,
-                        "rrp_consider_wallet":           to_bool(row[7], default=False),
+                        "rrp_consider_wallet":           to_bool(row[7]),
                         "competitor_nm_id":              int(row[8])  if row[8]  else None,
                         "competitor_offset_type":        str(row[9]).strip().lower()  if row[9]  else None,
                         "competitor_offset_direction":   str(row[10]).strip().lower() if row[10] else None,
                         "competitor_offset_value":       Decimal(str(row[11])) if row[11] is not None and str(row[11]).strip() else None,
                         "account_name_or_id":          str(row[12]).strip() if len(row) > 12 and row[12] is not None and str(row[12]).strip() else None,
-                        "night_price_enabled":         to_bool(row[13], default=False) if len(row) > 13 and row[13] is not None else False,
+                        "night_price_enabled":         to_bool(row[13]) if len(row) > 13 else None,
                         "night_start_msk":             str(row[14]).strip() if len(row) > 14 and row[14] is not None and str(row[14]).strip() else None,
                         "night_end_msk":               str(row[15]).strip() if len(row) > 15 and row[15] is not None and str(row[15]).strip() else None,
                         "night_seller_price":          Decimal(str(row[16])) if len(row) > 16 and row[16] is not None and str(row[16]).strip() else None,
@@ -872,13 +875,13 @@ class ExcelImporter:
                         "max_price":                     Decimal(str(row[4])) if row[4] is not None and str(row[4]).strip() else None,
                         "rrp_price":                     Decimal(str(row[5])) if row[5] is not None and str(row[5]).strip() else None,
                         "rrp_tolerance":                 Decimal(str(row[6])) if row[6] is not None and str(row[6]).strip() else None,
-                        "rrp_consider_wallet":           False,
+                        "rrp_consider_wallet":           None,  # колонки нет — не меняем
                         "competitor_nm_id":              int(row[7])  if row[7]  else None,
                         "competitor_offset_type":        str(row[8]).strip().lower()  if row[8]  else None,
                         "competitor_offset_direction":   str(row[9]).strip().lower()  if row[9]  else None,
                         "competitor_offset_value":       Decimal(str(row[10])) if row[10] is not None and str(row[10]).strip() else None,
                         "account_name_or_id":          str(row[11]).strip() if len(row) > 11 and row[11] is not None and str(row[11]).strip() else None,
-                        "night_price_enabled":         to_bool(row[12], default=False) if len(row) > 12 and row[12] is not None else False,
+                        "night_price_enabled":         to_bool(row[12]) if len(row) > 12 else None,
                         "night_start_msk":             str(row[13]).strip() if len(row) > 13 and row[13] is not None and str(row[13]).strip() else None,
                         "night_end_msk":               str(row[14]).strip() if len(row) > 14 and row[14] is not None and str(row[14]).strip() else None,
                         "night_seller_price":          Decimal(str(row[15])) if len(row) > 15 and row[15] is not None and str(row[15]).strip() else None,

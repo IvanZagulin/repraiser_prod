@@ -70,6 +70,15 @@ def acquire_run_lock(user_id: int, ttl: int = 10860) -> bool:
         return False  # если Redis недоступен — запрещаем запуск (safer than allowing concurrent runs)
 
 
+def refresh_run_lock(user_id: int, ttl: int) -> bool:
+    """Продлить блокировку прогона (heartbeat живого воркера)."""
+    try:
+        return bool(_get_client().expire(f"repricer:run_lock:{user_id}", ttl))
+    except Exception as e:
+        logger.warning(f"Redis refresh_run_lock(user={user_id}) error: {e}")
+        return False
+
+
 def release_run_lock(user_id: int) -> None:
     """Освободить блокировку прогона для пользователя."""
     try:

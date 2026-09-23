@@ -857,6 +857,19 @@ async def delete_product(
 
 # === ProductConfig endpoints ===
 
+def _ensure_rrp_target(config: ProductConfig) -> None:
+    """Активная стратегия РРЦ без РРЦ и без ступеней СПП молча не переоценивалась."""
+    if (
+        config.strategy == "rrp"
+        and config.is_active
+        and not config.rrp_price
+        and not (config.rrp_spp_tiers or [])
+    ):
+        raise HTTPException(status_code=422, detail="Для стратегии РРЦ укажите РРЦ или ступени СПП")
+    if config.max_price is not None and config.min_price is not None and config.max_price < config.min_price:
+        raise HTTPException(status_code=422, detail="max_price меньше min_price")
+
+
 @router.post("/{product_id}/config", response_model=ProductConfigResponse,
              status_code=status.HTTP_201_CREATED)
 @limiter.limit("30/minute")
@@ -875,6 +888,7 @@ async def create_product_config(
         raise HTTPException(status_code=400, detail="Ozon competitor strategy is not supported yet")
 
     config = ProductConfig(product_id=product_id, **config_data.model_dump(exclude={"competitors"}))
+    _ensure_rrp_target(config)
     db.add(config)
     db.flush()
 
@@ -919,6 +933,11 @@ async def update_product_config(
                 new_value=str(value) if value is not None else None,
             ))
         setattr(product.config, field, value)
+    try:
+        _ensure_rrp_target(product.config)
+    except HTTPException:
+        db.rollback()
+        raise
 
     if config_data.competitors is not None:
         db.query(CompetitorEntry).filter(
@@ -969,6 +988,27 @@ async def update_spp_tiers(
         raise HTTPException(status_code=404, detail="Стратегия не настроена")
 
     # Validate tiers
+    def _num(value, field, i):
+        try:
+            return _D(str(value))
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Ступень {i+1}: некорректное значение {field}")
+
+    ranges = []
+    for i, t in enumerate(tiers):
+        if t.get("spp_min") in (None, "", "null"):
+            raise HTTPException(status_code=400, detail=f"Ступень {i+1}: укажите «СПП от»")
+        lo = _num(t["spp_min"], "spp_min", i)
+        hi = None if t.get("spp_max") in (None, "", "null") else _num(t["spp_max"], "spp_max", i)
+        if hi is not None and hi <= lo:
+            raise HTTPException(status_code=400, detail=f"Ступень {i+1}: «СПП до» должно быть больше «СПП от»")
+        ranges.append((lo, hi, i))
+    ranges.sort(key=lambda r: r[0])
+    for (lo1, hi1, i1), (lo2, _hi2, i2) in zip(ranges, ranges[1:]):
+        # Перекрытие ступеней: побеждала первая по spp_min, вторая молча не работала
+        if hi1 is None or hi1 > lo2:
+            raise HTTPException(status_code=400, detail=f"Ступени {i1+1} и {i2+1} перекрываются по СПП")
+
     for i, t in enumerate(tiers):
         sp = t.get("seller_price")
         rp = t.get("rrp_price")

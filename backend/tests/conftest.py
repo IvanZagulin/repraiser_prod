@@ -67,6 +67,52 @@ TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=TEST_ENG
 # Fixtures
 # ---------------------------------------------------------------------------
 
+class _EngineCache:
+    """In-memory stand-in for the Redis cache used by the repricer engine."""
+
+    def __init__(self):
+        import time as _time
+        self._time = _time
+        self.store = {}
+
+    def get(self, key):
+        item = self.store.get(key)
+        if item is None:
+            return None
+        value, expires = item
+        if expires is not None and expires < self._time.time():
+            self.store.pop(key, None)
+            return None
+        return value
+
+    def set(self, key, value, ttl=180):
+        self.store[key] = (value, self._time.time() + ttl)
+
+    def delete(self, key):
+        self.store.pop(key, None)
+
+    def ttl(self, key):
+        item = self.store.get(key)
+        if item is None:
+            return -2
+        return int(item[1] - self._time.time())
+
+
+@pytest.fixture(autouse=True)
+def engine_cache():
+    """Each test gets its own empty engine cache.
+
+    The engine keeps state in Redis between runs (price observations, WB
+    quarantine / SPP Guard holds). With a shared Redis that state leaked
+    between tests using the same nm_id. Tests may still patch these
+    functions themselves — their patch wins.
+    """
+    from unittest.mock import patch
+    cache = _EngineCache()
+    with patch("app.services.repricer_engine.cache_get", side_effect=cache.get),          patch("app.services.repricer_engine.cache_set", side_effect=cache.set),          patch("app.services.repricer_engine.cache_delete", side_effect=cache.delete),          patch("app.services.repricer_engine.cache_ttl", side_effect=cache.ttl):
+        yield cache
+
+
 @pytest.fixture(scope="session", autouse=True)
 def create_tables():
     """Create all tables once at the start of the test session."""
