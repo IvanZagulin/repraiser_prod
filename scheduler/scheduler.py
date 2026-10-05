@@ -52,6 +52,60 @@ def _is_run_locked(user_id: int) -> bool:
     # захватит лок (acquire_run_lock fail-closed).
     return bool(_run_lock_state(user_id))
 
+
+# Удаляет ключ, только если в нём всё ещё то значение, которое мы прочитали.
+_RELEASE_IF_OWNER_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+end
+return 0
+"""
+# Лок взят позже старта зависшего прогона больше чем на это — он чужой.
+_STALE_LOCK_MATCH_SLACK_SEC = 300
+
+
+def _has_live_run(db, user_id: int, stale_minutes: int) -> bool:
+    """Есть ли у пользователя другой running-прогон моложе порога зависания."""
+    row = db.execute(
+        text("""
+            SELECT 1 FROM repricer_runs
+            WHERE user_id = :uid
+              AND status = 'running'
+              AND started_at >= NOW() - MAKE_INTERVAL(mins => :minutes)
+            LIMIT 1
+        """),
+        {"uid": user_id, "minutes": stale_minutes},
+    ).fetchone()
+    return row is not None
+
+
+def _release_lock_of_stale_run(user_id: int, started_at) -> None:
+    """Снимает run-лок зависшего прогона, но не лок нового живого прогона.
+
+    Лок нового формата хранит время захвата: если он взят заметно позже
+    старта зависшего прогона, это лок другого прогона — не трогаем.
+    """
+    from app.redis_client import run_lock_acquired_at
+
+    key = f"repricer:run_lock:{user_id}"
+    try:
+        r = _get_redis()
+        owner = r.get(key)
+        if owner is None:
+            return
+        acquired_at = run_lock_acquired_at(owner)
+        if acquired_at is not None and started_at is not None:
+            started_ts = started_at.replace(tzinfo=timezone.utc).timestamp()
+            if acquired_at > started_ts + _STALE_LOCK_MATCH_SLACK_SEC:
+                logger.info(
+                    f"  user={user_id}: run-лок взят после старта зависшего прогона — "
+                    "принадлежит другому прогону, не снимаем"
+                )
+                return
+        r.eval(_RELEASE_IF_OWNER_SCRIPT, 1, key, owner)
+    except Exception as e:
+        logger.warning(f"Failed to release Redis lock for user {user_id}: {e}")
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
@@ -461,23 +515,24 @@ async def cleanup_stale_runs():
                     completed_at = NOW()
                 WHERE status = 'running'
                   AND started_at < NOW() - MAKE_INTERVAL(mins => :minutes)
-                RETURNING id, user_id, run_type
+                RETURNING id, user_id, run_type, started_at
             """),
             {"minutes": STALE_MINUTES}
         )
         rows = result.fetchall()
         db.commit()
         if rows:
-            for run_id, user_id, run_type in rows:
+            for run_id, user_id, run_type, started_at in rows:
                 logger.warning(f"  Зависший прогон id={run_id} user={user_id} → failed")
-                # Освобождаем Redis-лок если он ещё жив
-                try:
-                    _get_redis().delete(f"repricer:run_lock:{user_id}")
-                except Exception as e:
-                    logger.warning(f"Failed to delete Redis lock for user {user_id}: {e}")
+                # Пока зависшая запись висела, лок мог уже взять новый живой
+                # прогон. Раньше лок удалялся безусловно и тут же запускался
+                # recovery — получались два полных прогона параллельно.
+                live_other = _has_live_run(db, user_id, STALE_MINUTES)
+                if not live_other:
+                    _release_lock_of_stale_run(user_id, started_at)
 
                 restarted = False
-                if run_type == "scheduled" and user_id is not None:
+                if run_type == "scheduled" and user_id is not None and not live_other:
                     try:
                         restarted = _dispatch_recovery_run(db, user_id)
                     except Exception as e:
@@ -591,7 +646,12 @@ async def cleanup_stale_runs():
                 # воркера — их не трогаем, чистим только старые трёхчасовые.
                 if ttl <= 0 or ttl <= 600 or ttl > 10860 - ORPHAN_LOCK_GRACE_SECONDS:
                     continue
-                redis_client.delete(key)
+                owner = redis_client.get(key)
+                if owner is None:
+                    continue
+                # CAS: не удаляем лок, если его успел перехватить новый прогон
+                if not redis_client.eval(_RELEASE_IF_OWNER_SCRIPT, 1, key, owner):
+                    continue
                 logger.warning(
                     f"  Осиротевший Redis-лок user={uid} снят "
                     f"(running-записи нет, оставался TTL={ttl}s)"

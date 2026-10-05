@@ -452,8 +452,10 @@ from app.models.price_snapshot import PriceSnapshot
 
 
 class _FakeClient:
-    def __init__(self):
+    def __init__(self, rejected=None):
         self.calls = []
+        # nm_id -> текст отказа WB (например, карантин)
+        self.rejected = rejected or {}
 
     async def __aenter__(self):
         return self
@@ -464,6 +466,13 @@ class _FakeClient:
     async def update_prices(self, updates):
         self.calls.append(updates)
         return {"data": {"id": "task-1"}}
+
+    async def verify_batch_update(self, upload_id, expected_nm_ids=None, **kw):
+        nm_ids = expected_nm_ids or [u["nmID"] for u in self.calls[-1]]
+        return {
+            nm: (False, self.rejected[nm]) if nm in self.rejected else (True, "")
+            for nm in nm_ids
+        }
 
 
 class TestCorrectUnstableProducts:

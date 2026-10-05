@@ -139,8 +139,9 @@ async def manual_run_sync(
 
     # Тот же run-лок, что и у Celery-задачи: без него синхронный запуск идёт
     # параллельно с автоматическим прогоном (инцидент 2026-06-10).
-    from app.redis_client import acquire_run_lock, release_run_lock
-    if not acquire_run_lock(current_user.id):
+    from app.redis_client import acquire_run_lock, new_run_lock_owner, release_run_lock
+    lock_owner = new_run_lock_owner("run-sync")
+    if not acquire_run_lock(current_user.id, owner=lock_owner):
         raise HTTPException(status_code=409, detail="Прогон репрайсера уже идёт — дождитесь завершения")
 
     try:
@@ -151,7 +152,7 @@ async def manual_run_sync(
             dry_run=body.dry_run,
         )
     finally:
-        release_run_lock(current_user.id)
+        release_run_lock(current_user.id, owner=lock_owner)
 
     try:
         log_activity(db, current_user.id, "repricer_run", details={"run_id": run.id, "run_type": "manual", "dry_run": body.dry_run, "status": run.status})

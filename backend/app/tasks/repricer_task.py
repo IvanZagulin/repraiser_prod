@@ -14,9 +14,11 @@ from app.database import SessionLocal
 from app.redis_client import (
     acquire_product_locks,
     acquire_run_lock,
+    new_run_lock_owner,
     refresh_run_lock,
     release_product_locks,
     release_run_lock,
+    release_stale_run_lock,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,18 +35,31 @@ _PRIORITY_PRODUCT_LOCK_TTL_SEC = 900
 # деплое) переоценка стояла до 3 часов, в том числе после ночной выгрузки 1С.
 _RUN_LOCK_HEARTBEAT_TTL_SEC = 600
 _RUN_LOCK_HEARTBEAT_SEC = 60
+# Лок без записи running в БД снимаем, только если он старше этого: свежий
+# прогон ещё может не успеть создать запись.
+_STALE_RUN_LOCK_MIN_AGE_SEC = 120
 
 
 class _RunLockHeartbeat:
-    def __init__(self, user_id: int):
+    def __init__(self, user_id: int, owner: Optional[str] = None):
         import threading
         self._user_id = user_id
+        self._owner = owner
+        self._lost_logged = False
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name=f"run-lock-hb-{user_id}", daemon=True)
 
     def _loop(self):
         while True:
-            refresh_run_lock(self._user_id, _RUN_LOCK_HEARTBEAT_TTL_SEC)
+            ok = refresh_run_lock(self._user_id, _RUN_LOCK_HEARTBEAT_TTL_SEC, owner=self._owner)
+            if not ok and self._owner and not self._lost_logged:
+                # Лок истёк или его снял/перехватил кто-то другой: второй прогон
+                # может стартовать параллельно — это надо видеть в логах.
+                self._lost_logged = True
+                logger.error(
+                    "[Celery] user=%s: run-лок потерян (владелец %s) — heartbeat не продлил его",
+                    self._user_id, self._owner,
+                )
             if self._stop.wait(_RUN_LOCK_HEARTBEAT_SEC):
                 return
 
@@ -78,6 +93,7 @@ class _RunState:
     user_id: Optional[int] = None
     run_id: Optional[int] = None
     owns_user_lock: bool = True
+    lock_owner: Optional[str] = None
 
 
 _run_state = _RunState()
@@ -120,7 +136,7 @@ def _abort_current_run(reason: str) -> None:
 
     if _run_state.owns_user_lock:
         try:
-            release_run_lock(uid)
+            release_run_lock(uid, owner=_run_state.lock_owner)
         except Exception as e:
             logger.error(f"[shutdown] release_run_lock (user={uid}): {e}")
 
@@ -130,6 +146,7 @@ def _graceful_shutdown_guard(
     user_id: int,
     run_id: Optional[int] = None,
     owns_user_lock: bool = True,
+    lock_owner: Optional[str] = None,
 ):
     """Контекст: ставит SIGTERM/SIGINT хендлеры, при выходе восстанавливает прежние.
 
@@ -139,6 +156,7 @@ def _graceful_shutdown_guard(
     _run_state.user_id = user_id
     _run_state.run_id = run_id
     _run_state.owns_user_lock = owns_user_lock
+    _run_state.lock_owner = lock_owner
     prev_term = signal.getsignal(signal.SIGTERM)
     prev_int = signal.getsignal(signal.SIGINT)
 
@@ -166,7 +184,7 @@ def _graceful_shutdown_guard(
         # под worker'ами pytest-xdist может выкинуть ValueError; молча skip.
         pass
 
-    heartbeat = _RunLockHeartbeat(user_id) if owns_user_lock else None
+    heartbeat = _RunLockHeartbeat(user_id, lock_owner) if owns_user_lock else None
     if heartbeat:
         heartbeat.start()
     try:
@@ -177,6 +195,7 @@ def _graceful_shutdown_guard(
         _run_state.user_id = None
         _run_state.run_id = None
         _run_state.owns_user_lock = True
+        _run_state.lock_owner = None
         if handlers_installed:
             try:
                 signal.signal(signal.SIGTERM, prev_term)
@@ -208,6 +227,7 @@ def run_repricer_for_user(
     priority_owner = None
     priority_product_ids: set[int] = set()
     lock_acquired = False
+    run_lock_owner = new_run_lock_owner(f"task:{self.request.id or 'local'}")
 
     if priority:
         # Explicit small/manual runs bypass the coarse user lock, but reserve
@@ -251,7 +271,7 @@ def run_repricer_for_user(
                 max_retries=_PRIORITY_LOCK_MAX_RETRIES,
             )
     else:
-        lock_acquired = acquire_run_lock(user_id)
+        lock_acquired = acquire_run_lock(user_id, owner=run_lock_owner)
 
     if not priority and not lock_acquired and existing_run_id:
         db = SessionLocal()
@@ -266,13 +286,16 @@ def run_repricer_for_user(
                 .count()
             )
             if running_count == 0:
-                logger.warning(
-                    "[Celery] user=%s: run lock exists but DB has no running runs; "
-                    "releasing stale lock and retrying once",
-                    user_id,
-                )
-                release_run_lock(user_id)
-                lock_acquired = acquire_run_lock(user_id)
+                # Свежий лок не трогаем: прогон мог стартовать секунду назад и
+                # ещё не создать запись в БД. Снимаем только старый лок и только
+                # если он не сменил владельца между чтением и удалением.
+                if release_stale_run_lock(user_id, _STALE_RUN_LOCK_MIN_AGE_SEC):
+                    logger.warning(
+                        "[Celery] user=%s: run lock existed but DB has no running runs; "
+                        "stale lock released, retrying once",
+                        user_id,
+                    )
+                    lock_acquired = acquire_run_lock(user_id, owner=run_lock_owner)
             if not lock_acquired:
                 run = db.query(RepricerRun).filter(RepricerRun.id == existing_run_id).first()
                 if run and run.status == "queued" and run_type == "manual":
@@ -312,6 +335,7 @@ def run_repricer_for_user(
         user_id,
         existing_run_id,
         owns_user_lock=not priority,
+        lock_owner=None if priority else run_lock_owner,
     ):
         db = None
         try:
@@ -360,6 +384,6 @@ def run_repricer_for_user(
                 release_product_locks(user_id, priority_product_ids, priority_owner)
             elif lock_acquired:
                 try:
-                    release_run_lock(user_id)
+                    release_run_lock(user_id, owner=run_lock_owner)
                 except Exception as e:
                     logger.error(f"[Celery] user={user_id}: release_run_lock failed: {e}")

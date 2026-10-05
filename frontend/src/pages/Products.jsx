@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, Settings, Trash2, Play, Search, LayoutGrid, List, LineChart, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getProducts, deleteProduct, runRepricer, getSettings, fetchPrices, bulkActivate, bulkDelete, bulkStrategy, getAccounts, getProductBrands } from '../api/client';
 import { useProductsStore } from '../store';
 import ProductModal from '../components/ProductModal';
 import ConfigModal from '../components/ConfigModal';
+import { rememberProductsSearch } from '../utils/productsNav';
 import PriceHistoryModal from '../components/PriceHistoryModal';
 
 const PAGE_SIZE = 50;
@@ -34,18 +35,21 @@ export default function Products() {
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [filterStrategy, setFilterStrategy] = useState('all');
+  // Фильтры и страница живут в URL: переживают автообновление, переход в
+  // карточку товара и «Назад», ими можно поделиться ссылкой.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const debouncedSearch = searchParams.get('q') || '';
+  const filterStrategy = searchParams.get('strategy') || 'all';
+  const filterStatus = searchParams.get('status') || 'all';
+  const filterAccount = searchParams.get('account') || '';
+  const filterBrand = searchParams.get('brand') || '';
+  const page = Math.max(1, Number(searchParams.get('page')) || 1);
+  const [searchTerm, setSearchTerm] = useState(debouncedSearch);
   const [walletPct, setWalletPct] = useState(3.0);
   const [viewMode, setViewMode] = useState('grid');
-  const [page, setPage] = useState(1);
   const [totalProducts, setTotalProducts] = useState(0);
   const [fetchingPrices, setFetchingPrices] = useState(false);
   const [selected, setSelected] = useState(new Set());
-  const [filterStatus, setFilterStatus] = useState('all');
-  const [filterAccount, setFilterAccount] = useState('');
-  const [filterBrand, setFilterBrand] = useState('');
   const [accounts, setAccounts] = useState([]);
   const [brands, setBrands] = useState([]);
   const [showBulkStrategy, setShowBulkStrategy] = useState(false);
@@ -54,16 +58,49 @@ export default function Products() {
   const [bulkRrpPrice, setBulkRrpPrice] = useState('');
   const isMounted = useRef(true);
 
+  // Меняет параметры в URL. Смена фильтра сбрасывает страницу на первую.
+  const updateParams = (changes) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      Object.entries(changes).forEach(([key, value]) => {
+        const isDefault = value === '' || value === 'all' || value == null
+          || (key === 'page' && Number(value) <= 1);
+        if (isDefault) next.delete(key);
+        else next.set(key, String(value));
+      });
+      if (!('page' in changes)) next.delete('page');
+      return next;
+    }, { replace: true });
+  };
+
   // Debounce search input
+  const pushedSearchRef = useRef(debouncedSearch);
   useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearch(searchTerm), 350);
+    if (searchTerm.trim() === debouncedSearch) return;
+    const timer = setTimeout(() => {
+      pushedSearchRef.current = searchTerm.trim();
+      updateParams({ q: searchTerm.trim() });
+    }, 350);
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  // Reload when debounced search or strategy changes
+  // Поле поиска следует за URL, если его поменяли не мы (кнопка «Назад»)
   useEffect(() => {
-    loadProducts(1);
-  }, [debouncedSearch, filterStrategy, filterStatus, filterAccount, filterBrand]);
+    if (debouncedSearch === pushedSearchRef.current) return;
+    pushedSearchRef.current = debouncedSearch;
+    setSearchTerm(debouncedSearch);
+  }, [debouncedSearch]);
+
+  useEffect(() => {
+    rememberProductsSearch(searchParams.toString());
+  }, [searchParams]);
+
+  // Перезагрузка при смене фильтров/страницы. Выделение сбрасываем: иначе
+  // массовые действия задевали товары, которых уже не видно на экране.
+  useEffect(() => {
+    setSelected(new Set());
+    loadProducts();
+  }, [debouncedSearch, filterStrategy, filterStatus, filterAccount, filterBrand, page]);
 
   useEffect(() => {
     isMounted.current = true;
@@ -83,42 +120,63 @@ export default function Products() {
     };
   }, []);
 
-  const loadProducts = async (p = page) => {
+  // Параметры запроса строятся в одном месте и для обычной загрузки, и для
+  // автообновления. Раньше автообновление раз в 30 с забывало статус, кабинет
+  // и бренд — список подменялся нефильтрованным, а селекты показывали фильтр.
+  const queryRef = useRef(null);
+  queryRef.current = {
+    page,
+    search: debouncedSearch,
+    strategy: filterStrategy,
+    status: filterStatus,
+    account: filterAccount,
+    brand: filterBrand,
+  };
+  const buildParams = () => {
+    const q = queryRef.current;
+    const params = { page: q.page, page_size: PAGE_SIZE };
+    if (q.search) params.search = q.search;
+    if (q.strategy !== 'all') params.strategy = q.strategy;
+    if (q.status === 'active') params.is_active = true;
+    if (q.status === 'inactive') params.is_active = false;
+    if (q.account) params.account_id = q.account;
+    if (q.brand) params.brand = q.brand;
+    return params;
+  };
+
+  // Ответ на устаревший запрос (фильтр успели сменить) не должен
+  // перезаписать свежий список.
+  const requestSeq = useRef(0);
+  const loadingRef = useRef(false);
+
+  const loadProducts = async () => {
+    const seq = ++requestSeq.current;
+    loadingRef.current = true;
     setLoading(true);
     try {
-      const params = { page: p, page_size: PAGE_SIZE };
-      if (debouncedSearch) params.search = debouncedSearch;
-      if (filterStrategy !== 'all') params.strategy = filterStrategy;
-      if (filterStatus === 'active') params.is_active = true;
-      if (filterStatus === 'inactive') params.is_active = false;
-      if (filterAccount) params.account_id = filterAccount;
-      if (filterBrand) params.brand = filterBrand;
-      const response = await getProducts(params);
+      const response = await getProducts(buildParams());
+      if (!isMounted.current || seq !== requestSeq.current) return;
       setProducts(response.data.products);
       setTotalProducts(response.data.total);
-      setPage(p);
     } catch {
-      toast.error('Ошибка загрузки товаров');
+      if (seq === requestSeq.current) toast.error('Ошибка загрузки товаров');
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) {
+        loadingRef.current = false;
+        setLoading(false);
+      }
     }
   };
 
-  const pageRef = useRef(page);
-  useEffect(() => { pageRef.current = page; }, [page]);
-
-  const searchRef = useRef(debouncedSearch);
-  const strategyRef = useRef(filterStrategy);
-  useEffect(() => { searchRef.current = debouncedSearch; }, [debouncedSearch]);
-  useEffect(() => { strategyRef.current = filterStrategy; }, [filterStrategy]);
+  const modalOpenRef = useRef(false);
+  modalOpenRef.current = showProductModal || showConfigModal || showHistoryModal || showBulkStrategy;
 
   const refreshProductsSilent = async () => {
+    if (loadingRef.current || modalOpenRef.current || document.hidden) return;
+    const seq = ++requestSeq.current;
     try {
-      const params = { page: pageRef.current, page_size: PAGE_SIZE };
-      if (searchRef.current) params.search = searchRef.current;
-      if (strategyRef.current !== 'all') params.strategy = strategyRef.current;
-      const response = await getProducts(params);
-      if (isMounted.current) {
+      const response = await getProducts(buildParams());
+      if (isMounted.current && seq === requestSeq.current) {
         setProducts(response.data.products);
         setTotalProducts(response.data.total);
       }
@@ -129,7 +187,7 @@ export default function Products() {
 
   const handlePageChange = (newPage) => {
     if (newPage < 1 || newPage > totalPages) return;
-    loadProducts(newPage);
+    updateParams({ page: newPage });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -149,7 +207,7 @@ export default function Products() {
       toast.loading('Запуск репрайсера...', { id: 'repricer' });
       await runRepricer([sku]);
       toast.success('Репрайсер завершен', { id: 'repricer' });
-      setTimeout(loadProducts, 2000);
+      setTimeout(() => loadProducts(), 2000);
     } catch {
       toast.error('Ошибка запуска репрайсера', { id: 'repricer' });
     }
@@ -160,7 +218,7 @@ export default function Products() {
     try {
       const res = await fetchPrices();
       toast.success(`Цены обновлены: ${res.data.updated} из ${res.data.total}`);
-      setTimeout(() => loadProducts(page), 1000);
+      setTimeout(() => loadProducts(), 1000);
     } catch {
       toast.error('Ошибка обновления цен');
     } finally {
@@ -289,7 +347,7 @@ export default function Products() {
           </div>
           <select
             value={filterStrategy}
-            onChange={(e) => setFilterStrategy(e.target.value)}
+            onChange={(e) => updateParams({ strategy: e.target.value })}
             className="input w-full sm:w-40"
           >
             <option value="all">Все стратегии</option>
@@ -298,7 +356,7 @@ export default function Products() {
           </select>
           <select
             value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
+            onChange={(e) => updateParams({ status: e.target.value })}
             className="input w-full sm:w-36"
           >
             <option value="all">Все статусы</option>
@@ -307,7 +365,7 @@ export default function Products() {
           </select>
           <select
             value={filterAccount}
-            onChange={(e) => setFilterAccount(e.target.value)}
+            onChange={(e) => updateParams({ account: e.target.value })}
             className="input w-full sm:w-40"
           >
             <option value="">Все кабинеты</option>
@@ -317,7 +375,7 @@ export default function Products() {
           </select>
           <select
             value={filterBrand}
-            onChange={(e) => setFilterBrand(e.target.value)}
+            onChange={(e) => updateParams({ brand: e.target.value })}
             className="input w-full sm:w-44"
           >
             <option value="">Все бренды</option>

@@ -121,6 +121,7 @@ class TestLockGate:
             return fake_run
 
         with patch("app.tasks.repricer_task.acquire_run_lock", side_effect=[False, True]) as mock_acquire, \
+             patch("app.tasks.repricer_task.release_stale_run_lock", return_value=True) as mock_stale, \
              patch("app.tasks.repricer_task.release_run_lock") as mock_release, \
              patch("app.services.repricer_engine.RepricerEngine") as mock_engine_cls:
             mock_engine_cls.return_value.run_repricer = _fake_run_repricer
@@ -132,7 +133,39 @@ class TestLockGate:
         assert result["run_id"] == run.id
         assert result["status"] == "completed"
         assert mock_acquire.call_count == 2
-        assert mock_release.call_count == 2
+        mock_stale.assert_called_once()
+        # Свой лок снимается по своему владельцу
+        owner = mock_acquire.call_args.kwargs["owner"]
+        mock_release.assert_called_once_with(test_user.id, owner=owner)
+
+    def test_fresh_foreign_lock_is_not_released(
+        self, patched_session, db_session, test_user
+    ):
+        """Лок без running-записи, но свежий (прогон только стартовал), не снимается."""
+        run = RepricerRun(
+            user_id=test_user.id,
+            run_type="manual",
+            status="queued",
+            total_products=1,
+            updated_count=0,
+            skipped_count=0,
+            error_count=0,
+        )
+        db_session.add(run)
+        db_session.commit()
+
+        with patch("app.tasks.repricer_task.acquire_run_lock", return_value=False) as mock_acquire, \
+             patch("app.tasks.repricer_task.release_stale_run_lock", return_value=False), \
+             patch("app.tasks.repricer_task.release_run_lock") as mock_release, \
+             patch.object(repricer_task.run_repricer_for_user, "retry", side_effect=RuntimeError("retry")):
+            with pytest.raises(RuntimeError, match="retry"):
+                repricer_task.run_repricer_for_user.apply(
+                    args=(test_user.id, [1]),
+                    kwargs={"run_type": "manual", "existing_run_id": run.id},
+                ).get()
+
+        assert mock_acquire.call_count == 1  # повторный захват не пробовали
+        mock_release.assert_not_called()
 
 
 class TestPriorityProductRun:
@@ -221,7 +254,9 @@ class TestUserValidation:
 
         assert result["status"] == "skipped"
         assert "not found" in result["reason"] or "inactive" in result["reason"]
-        mock_release.assert_called_once_with(999_999)
+        mock_release.assert_called_once()
+        assert mock_release.call_args.args == (999_999,)
+        assert mock_release.call_args.kwargs["owner"].startswith("task:")
 
     def test_skipped_when_user_inactive(self, patched_session, test_user, db_session):
         """Заблокированный пользователь не должен запускать репрайсер."""
@@ -236,7 +271,9 @@ class TestUserValidation:
             ).get()
 
         assert result["status"] == "skipped"
-        mock_release.assert_called_once_with(test_user.id)
+        mock_release.assert_called_once()
+        assert mock_release.call_args.args == (test_user.id,)
+        assert mock_release.call_args.kwargs["owner"].startswith("task:")
 
 
 class TestLockLifecycle:
@@ -261,7 +298,9 @@ class TestLockLifecycle:
 
         assert result["run_id"] == 42
         assert result["status"] == "completed"
-        mock_release.assert_called_once_with(test_user.id)
+        mock_release.assert_called_once()
+        assert mock_release.call_args.args == (test_user.id,)
+        assert mock_release.call_args.kwargs["owner"].startswith("task:")
 
     def test_release_called_on_exception(self, patched_session, test_user):
         """Если движок упал — release всё равно вызывается (finally)."""
@@ -281,7 +320,9 @@ class TestLockLifecycle:
             with pytest.raises(ValueError, match="engine exploded"):
                 result.get()
 
-        mock_release.assert_called_once_with(test_user.id)
+        mock_release.assert_called_once()
+        assert mock_release.call_args.args == (test_user.id,)
+        assert mock_release.call_args.kwargs["owner"].startswith("task:")
 
 
 # ─── Graceful SIGTERM handling ────────────────────────────────────────────────
@@ -317,7 +358,7 @@ class TestAbortCurrentRun:
         try:
             with patch("app.tasks.repricer_task.release_run_lock") as mock_release:
                 _abort_current_run("test: simulated SIGTERM")
-            mock_release.assert_called_once_with(test_user.id)
+            mock_release.assert_called_once_with(test_user.id, owner=None)
         finally:
             _run_state.user_id = None
 
@@ -335,7 +376,7 @@ class TestAbortCurrentRun:
             with patch("app.tasks.repricer_task.release_run_lock") as mock_release:
                 _abort_current_run("test: no run")
             # Даже без прогона lock всё равно отпускаем (защита от висящего ключа)
-            mock_release.assert_called_once_with(test_user.id)
+            mock_release.assert_called_once_with(test_user.id, owner=None)
         finally:
             _run_state.user_id = None
 

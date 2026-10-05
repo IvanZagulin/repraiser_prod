@@ -189,6 +189,9 @@ class CatalogParser:
     """
 
     _BACKOFF_STEPS = [5 * 60, 15 * 60, 30 * 60]
+    # Запас поверх таймаута curl. Таймаут curl срабатывал не всегда: сокет через
+    # SSH-туннель зависал, и прогон 5611 простоял 170 минут на стадии парсинга.
+    _HARD_TIMEOUT_PAD_SEC = 10
 
     def __init__(self):
         self.max_retries = settings.RETRY_ATTEMPTS
@@ -214,42 +217,55 @@ class CatalogParser:
             return data['products']
         return data.get('data', {}).get('products', [])
 
+    async def _fetch(self, url: str, timeout: int, proxy: Optional[str] = None) -> tuple[int, Optional[dict]]:
+        """GET сессией браузера: (код ответа, JSON при 200).
+
+        Весь запрос, включая закрытие сессии, ограничен таймаутом asyncio —
+        зависший сокет даёт asyncio.TimeoutError, а не вечное ожидание.
+        """
+        async def _do() -> tuple[int, Optional[dict]]:
+            async with AsyncSession(
+                timeout=timeout,
+                headers=(_h := get_headers()),
+                cookies=get_cookies(),
+                impersonate=get_impersonate(_h),
+                proxy=proxy,
+            ) as client:
+                response = await client.get(url)
+                if response.status_code == 200:
+                    return 200, response.json()
+                return response.status_code, None
+
+        return await asyncio.wait_for(_do(), timeout=timeout + self._HARD_TIMEOUT_PAD_SEC)
+
     async def _request_via_catalog_proxy(self, url: str) -> Optional[dict]:
         proxy_url = settings.CATALOG_PROXY_URL
         if not proxy_url:
             return None
         try:
-            async with AsyncSession(
-                timeout=15,
-                headers=(_h := get_headers()),
-                cookies=get_cookies(),
-                impersonate=get_impersonate(_h),
-                proxy=proxy_url,
-            ) as client:
-                response = await client.get(url)
-                if response.status_code == 200:
-                    return response.json()
-                logger.warning(f"Catalog proxy: код {response.status_code} для {url}")
-                return None
+            status, data = await self._fetch(url, timeout=15, proxy=proxy_url)
+            if status == 200:
+                return data
+            logger.warning(f"Catalog proxy: код {status} для {url}")
+            return None
+        except asyncio.TimeoutError:
+            logger.warning(f"Catalog proxy: запрос завис дольше {15 + self._HARD_TIMEOUT_PAD_SEC} с — прерван")
+            return None
         except Exception as e:
             logger.warning(f"Catalog proxy ({proxy_url}): ошибка {e}")
             return None
 
     async def _request_with_proxy(self, url: str, proxy: ProxyConfig) -> Optional[dict]:
         try:
-            async with AsyncSession(
-                timeout=15,
-                headers=(_h := get_headers()),
-                cookies=get_cookies(),
-                impersonate=get_impersonate(_h),
-                proxy=proxy.url,
-            ) as client:
-                response = await client.get(url)
-                if response.status_code == 200:
-                    return response.json()
-                else:
-                    logger.warning(f"Код {response.status_code} через прокси {proxy}")
-                return None
+            status, data = await self._fetch(url, timeout=15, proxy=proxy.url)
+            if status == 200:
+                return data
+            logger.warning(f"Код {status} через прокси {proxy}")
+            return None
+        except asyncio.TimeoutError:
+            logger.warning(f"Прокси {proxy}: запрос завис — прерван")
+            proxy_pool.mark_as_dead(proxy)
+            return None
         except Exception as e:
             logger.warning(f"Ошибка прокси {proxy}: {e}")
             proxy_pool.mark_as_dead(proxy)
@@ -262,29 +278,28 @@ class CatalogParser:
             return None
         await asyncio.sleep(random.uniform(0.05, 0.15))
         try:
-            async with AsyncSession(
-                timeout=10,
-                headers=(_h := get_headers()),
-                cookies=get_cookies(),
-                impersonate=get_impersonate(_h),
-            ) as client:
-                response = await client.get(url)
-                if response.status_code == 200:
-                    self._consecutive_blocks = 0
-                    return response.json()
-                if response.status_code in (403, 429):
-                    idx = min(self._consecutive_blocks, len(self._BACKOFF_STEPS) - 1)
-                    backoff = self._BACKOFF_STEPS[idx]
-                    self._consecutive_blocks += 1
-                    self._blocked_until = time.monotonic() + backoff
-                    self._last_block_status = response.status_code
-                    return None
+            status, data = await self._fetch(url, timeout=10)
+            if status == 200:
+                self._consecutive_blocks = 0
+                return data
+            if status in (403, 429):
+                idx = min(self._consecutive_blocks, len(self._BACKOFF_STEPS) - 1)
+                backoff = self._BACKOFF_STEPS[idx]
+                self._consecutive_blocks += 1
+                self._blocked_until = time.monotonic() + backoff
+                self._last_block_status = status
                 return None
+            return None
+        except asyncio.TimeoutError:
+            logger.error("Прямой запрос к каталогу завис — прерван")
+            return None
         except Exception as e:
             logger.error(f"Ошибка прямого запроса: {e}")
             return None
 
-    async def parse_product(self, nm_id: int) -> Optional[ProductData]:
+    async def parse_product(self, nm_id: int, not_found: Optional[set] = None) -> Optional[ProductData]:
+        """Одна карточка. not_found: сюда попадает nm_id, если каталог ответил,
+        но карточки в ответе нет (в отличие от сбоя запроса)."""
         url = self._build_url(nm_id)
         data = await self._request_via_catalog_proxy(url)
         if data is None:
@@ -300,15 +315,20 @@ class CatalogParser:
         if data is None:
             logger.error(f"nm_id={nm_id}: не удалось получить данные")
             return None
-        return self._parse_response(nm_id, data)
+        return self._parse_response(nm_id, data, not_found)
 
-    def _parse_response(self, nm_id: int, data: dict) -> Optional[ProductData]:
+    def _parse_response(self, nm_id: int, data: dict, not_found: Optional[set] = None) -> Optional[ProductData]:
         try:
             products = self._extract_products(data)
-            if not products:
+            # Сверяем id: прокси/WAF может вернуть кешированный ответ по другой
+            # карточке, и её цена приписалась бы не тому товару.
+            raw = next((p for p in products if p.get('id') == nm_id), None)
+            if raw is None:
                 logger.warning(f"nm_id={nm_id} не найден в каталоге")
+                if not_found is not None:
+                    not_found.add(nm_id)
                 return None
-            product_data = ProductData(products[0])
+            product_data = ProductData(raw)
             logger.info(f"✓ Спарсен: {product_data}")
             return product_data
         except (KeyError, IndexError, ValueError) as e:
@@ -321,16 +341,36 @@ class CatalogParser:
         chunk_size: int = 100,
         delay_between_chunks: float = 0.5,
         concurrency: int = 2,
+        deadline_sec: Optional[float] = None,
+        not_found: Optional[set] = None,
     ) -> Dict[int, Optional[ProductData]]:
+        """Батч-парсинг карточек.
+
+        deadline_sec — общий бюджет времени: после него оставшиеся чанки не
+        запрашиваются (None), чтобы недоступный каталог не держал прогон часами.
+        not_found — сюда попадают nm_id, которых нет в успешном ответе каталога
+        (карточка удалена/скрыта), в отличие от сбоя запроса.
+        """
         if not nm_ids:
             return {}
+        deadline = time.monotonic() + deadline_sec if deadline_sec else None
+        budget_logged = False
 
         logger.info(f"Батч-парсинг {len(nm_ids)} товаров (чанки по {chunk_size}, параллельно {concurrency})")
         chunks = [nm_ids[i:i + chunk_size] for i in range(0, len(nm_ids), chunk_size)]
         semaphore = asyncio.Semaphore(concurrency)
 
         async def fetch_chunk(chunk: list[int]) -> Dict[int, Optional[ProductData]]:
+            nonlocal budget_logged
             async with semaphore:
+                if deadline is not None and time.monotonic() > deadline:
+                    if not budget_logged:
+                        budget_logged = True
+                        logger.error(
+                            f"Батч-парсинг: бюджет {deadline_sec:.0f} с исчерпан — "
+                            "оставшиеся чанки пропущены (каталог недоступен?)"
+                        )
+                    return {nm_id: None for nm_id in chunk}
                 # Браузер не шлёт десятки запросов разом: 2 параллельно и пауза
                 # 0.3-0.8 с между запросами, иначе антибот WB быстро отзывает сессию.
                 import random
@@ -361,12 +401,16 @@ class CatalogParser:
                 for nm_id in chunk:
                     raw = products_map.get(nm_id)
                     if raw:
+                        if not_found is not None:
+                            not_found.discard(nm_id)
                         try:
                             chunk_result[nm_id] = ProductData(raw)
                         except Exception as e:
                             logger.error(f"Ошибка парсинга nm_id={nm_id} из батча: {e}")
                             chunk_result[nm_id] = None
                     else:
+                        if not_found is not None:
+                            not_found.add(nm_id)
                         chunk_result[nm_id] = None
                 return chunk_result
 
@@ -379,7 +423,13 @@ class CatalogParser:
 
         # Раунд 2-3: retry неудавшихся чанков
         for retry_round in range(2):
-            failed_ids = [nm for nm, v in result.items() if v is None]
+            if deadline is not None and time.monotonic() > deadline:
+                break
+            # Карточки, которых нет в успешном ответе, повторно не запрашиваем
+            failed_ids = [
+                nm for nm, v in result.items()
+                if v is None and not (not_found is not None and nm in not_found)
+            ]
             if not failed_ids:
                 break
             retry_chunks = [failed_ids[i:i + chunk_size] for i in range(0, len(failed_ids), chunk_size)]

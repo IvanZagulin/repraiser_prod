@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { productsListUrl } from '../utils/productsNav';
 import {
   ArrowLeft, Play, Settings, ExternalLink, TrendingUp, TrendingDown,
   Minus, Package, Shield, Clock, BarChart3, AlertTriangle,
@@ -113,7 +114,7 @@ export default function ProductDetailPage() {
       } catch {}
     } catch {
       toast.error('Ошибка загрузки товара');
-      navigate('/products');
+      navigate(productsListUrl());
     } finally {
       setLoading(false);
     }
@@ -146,7 +147,7 @@ export default function ProductDetailPage() {
     try {
       await deleteProduct(productId);
       toast.success('Товар удален');
-      navigate('/products');
+      navigate(productsListUrl());
     } catch {
       toast.error('Ошибка удаления товара');
     }
@@ -205,7 +206,7 @@ export default function ProductDetailPage() {
       {/* Back button + header */}
       <div className="flex items-center gap-3 mb-6">
         <button
-          onClick={() => navigate('/products')}
+          onClick={() => navigate(productsListUrl())}
           className="btn btn-secondary p-2"
         >
           <ArrowLeft className="w-4 h-4" />
