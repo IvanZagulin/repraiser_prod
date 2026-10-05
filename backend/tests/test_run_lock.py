@@ -104,6 +104,58 @@ class TestLockLifecycle:
         mock_client.delete.assert_called_once_with("repricer:run_lock:1")
 
 
+class TestOwnedRunLock:
+    """Лок с владельцем: продлевается и снимается только свой."""
+
+    def test_owner_is_stored_as_lock_value(self):
+        mock_client = MagicMock()
+        mock_client.set.return_value = True
+        owner = redis_client.new_run_lock_owner("task:abc")
+        with patch.object(redis_client, "_get_client", return_value=mock_client):
+            assert redis_client.acquire_run_lock(user_id=1, owner=owner) is True
+        assert mock_client.set.call_args.args[1] == owner
+
+    def test_release_with_owner_uses_compare_and_delete(self):
+        mock_client = MagicMock()
+        with patch.object(redis_client, "_get_client", return_value=mock_client):
+            redis_client.release_run_lock(user_id=1, owner="task:x:1")
+        mock_client.delete.assert_not_called()
+        args = mock_client.eval.call_args.args
+        assert args[2:] == ("repricer:run_lock:1", "task:x:1")
+
+    def test_refresh_with_foreign_owner_reports_lost_lock(self):
+        mock_client = MagicMock()
+        mock_client.eval.return_value = 0  # в ключе чужое значение
+        with patch.object(redis_client, "_get_client", return_value=mock_client):
+            assert redis_client.refresh_run_lock(1, 600, owner="task:x:1") is False
+        mock_client.expire.assert_not_called()
+
+    def test_acquired_at_is_parsed_from_owner(self):
+        assert redis_client.run_lock_acquired_at("task:abc:uuid:1700000000") == 1700000000.0
+        assert redis_client.run_lock_acquired_at("1") is None
+
+    def test_fresh_lock_is_not_released_as_stale(self):
+        mock_client = MagicMock()
+        mock_client.get.return_value = redis_client.new_run_lock_owner("task:new")
+        with patch.object(redis_client, "_get_client", return_value=mock_client):
+            assert redis_client.release_stale_run_lock(1, min_age_sec=120) is False
+        mock_client.eval.assert_not_called()
+
+    def test_old_lock_is_released_only_if_unchanged(self):
+        mock_client = MagicMock()
+        mock_client.get.return_value = "task:old:uuid:1000"
+        mock_client.eval.return_value = 1
+        with patch.object(redis_client, "_get_client", return_value=mock_client):
+            assert redis_client.release_stale_run_lock(1, min_age_sec=120) is True
+        assert mock_client.eval.call_args.args[2:] == ("repricer:run_lock:1", "task:old:uuid:1000")
+
+    def test_guard_is_active_when_redis_fails(self):
+        mock_client = MagicMock()
+        mock_client.exists.side_effect = redis_lib.ConnectionError("boom")
+        with patch.object(redis_client, "_get_client", return_value=mock_client):
+            assert redis_client.guard_active("wb_quarantine_hold:1") is True
+
+
 class TestProductLocks:
     def test_batch_acquire_returns_only_created_locks(self):
         mock_client = MagicMock()

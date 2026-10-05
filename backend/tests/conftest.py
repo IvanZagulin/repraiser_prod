@@ -108,8 +108,15 @@ def engine_cache():
     functions themselves — their patch wins.
     """
     from unittest.mock import patch
+    from app.services import repricer_engine as _engine_module
     cache = _EngineCache()
-    with patch("app.services.repricer_engine.cache_get", side_effect=cache.get),          patch("app.services.repricer_engine.cache_set", side_effect=cache.set),          patch("app.services.repricer_engine.cache_delete", side_effect=cache.delete),          patch("app.services.repricer_engine.cache_ttl", side_effect=cache.ttl):
+
+    def _guard_active(key):
+        # Через текущий cache_get модуля: если тест подменил его своим
+        # фейком, защитные флаги берутся оттуда же.
+        return _engine_module.cache_get(key) is not None
+
+    with patch("app.services.repricer_engine.cache_get", side_effect=cache.get),          patch("app.services.repricer_engine.cache_set", side_effect=cache.set),          patch("app.services.repricer_engine.cache_delete", side_effect=cache.delete),          patch("app.services.repricer_engine.cache_ttl", side_effect=cache.ttl),          patch("app.services.repricer_engine.guard_active", side_effect=_guard_active):
         yield cache
 
 

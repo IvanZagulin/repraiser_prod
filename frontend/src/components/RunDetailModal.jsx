@@ -5,16 +5,27 @@ import { formatMsk } from '../utils/date';
 import toast from 'react-hot-toast';
 
 const REASON_MAP = {
-  UPDATED:          { label: 'Обновлено',         color: '#16a34a', bg: '#dcfce7' },
-  CLAMPED_TO_MIN:   { label: 'Ограничено мин.',   color: '#d97706', bg: '#fef3c7' },
-  CLAMPED_TO_MAX:   { label: 'Ограничено макс.',  color: '#d97706', bg: '#fef3c7' },
-  NO_CHANGE:        { label: 'Без изменений',     color: '#6b7280', bg: '#f3f4f6' },
-  SKIPPED_INACTIVE: { label: 'Не активен',        color: '#9ca3af', bg: '#f9fafb' },
-  SKIPPED_PROMO:    { label: 'Пропущено',          color: '#9ca3af', bg: '#f3f4f6' },
-  COMPETITOR_OOS:   { label: 'Конкурент не в наличии', color: '#8b5cf6', bg: '#f5f3ff' },
-  PARSE_ERROR:      { label: 'Ошибка парсинга',   color: '#ef4444', bg: '#fef2f2' },
-  WB_API_ERROR:     { label: 'Ошибка WB API',     color: '#ef4444', bg: '#fef2f2' },
+  UPDATED:             { label: 'Обновлено',                   color: '#16a34a', bg: '#dcfce7' },
+  CLAMPED_TO_MIN:      { label: 'Ограничено мин.',             color: '#d97706', bg: '#fef3c7' },
+  CLAMPED_TO_MAX:      { label: 'Ограничено макс.',            color: '#d97706', bg: '#fef3c7' },
+  CLAMPED_TO_MARGIN:   { label: 'Поднято до мин. маржи',       color: '#d97706', bg: '#fef3c7' },
+  CORRECTED:           { label: 'Доправлено после проверки',   color: '#16a34a', bg: '#dcfce7' },
+  REVERTED_SPP_SPIKE:  { label: 'Откат: WB поднял СПП',        color: '#d97706', bg: '#fef3c7' },
+  NO_CHANGE:           { label: 'Без изменений',               color: '#6b7280', bg: '#f3f4f6' },
+  SKIPPED_INACTIVE:    { label: 'Не настроен',                 color: '#9ca3af', bg: '#f9fafb' },
+  SKIPPED_PROMO:       { label: 'В акции WB',                  color: '#9ca3af', bg: '#f3f4f6' },
+  COOLDOWN:            { label: 'Пауза после изменения',       color: '#9ca3af', bg: '#f3f4f6' },
+  OUT_OF_STOCK:        { label: 'Нет остатка',                 color: '#9ca3af', bg: '#f3f4f6' },
+  COMPETITOR_OOS:      { label: 'Конкуренты не в наличии',     color: '#8b5cf6', bg: '#f5f3ff' },
+  COMPETITOR_PARTIAL:  { label: 'Загружены не все конкуренты', color: '#8b5cf6', bg: '#f5f3ff' },
+  CATALOG_UNAVAILABLE: { label: 'Каталог WB недоступен',       color: '#ef4444', bg: '#fef2f2' },
+  PARSE_ERROR:         { label: 'Ошибка расчёта',              color: '#ef4444', bg: '#fef2f2' },
+  WB_API_ERROR:        { label: 'Ошибка WB API',               color: '#ef4444', bg: '#fef2f2' },
 };
+
+// Коды, при которых цена на WB реально менялась
+const UPDATED_CODES = ['UPDATED', 'CLAMPED_TO_MIN', 'CLAMPED_TO_MAX', 'CLAMPED_TO_MARGIN', 'CORRECTED', 'REVERTED_SPP_SPIKE'];
+const ERROR_CODES = ['PARSE_ERROR', 'WB_API_ERROR', 'CATALOG_UNAVAILABLE'];
 
 const ReasonBadge = ({ code }) => {
   const r = REASON_MAP[code] || { label: code, color: '#6b7280', bg: '#f3f4f6' };
@@ -78,13 +89,23 @@ export default function RunDetailModal({ run, onClose }) {
   };
 
   const changes = detail?.changes || [];
-  const filtered = filter === 'all' ? changes : changes.filter((c) => c.reason_code === filter || (filter === 'updated' && ['UPDATED', 'CLAMPED_TO_MIN', 'CLAMPED_TO_MAX'].includes(c.reason_code)) || (filter === 'errors' && ['PARSE_ERROR', 'WB_API_ERROR'].includes(c.reason_code)));
+  const filtered = changes.filter((c) => {
+    if (filter === 'all') return true;
+    if (filter === 'updated') return UPDATED_CODES.includes(c.reason_code);
+    if (filter === 'errors') return ERROR_CODES.includes(c.reason_code);
+    return !UPDATED_CODES.includes(c.reason_code) && !ERROR_CODES.includes(c.reason_code);
+  });
 
-  // Unique reason codes for filter tabs
+  // В историю пишутся только изменения и проблемы; итог по каждому товару
+  // прогона (в т.ч. «без изменений», «нет остатка») — в reason_counts.
+  const reasonCounts = Object.entries(detail?.stage_progress?.reason_counts || {})
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1]);
+
   const reasonGroups = [
     { key: 'all', label: 'Все' },
-    { key: 'updated', label: 'Обновлено' },
-    { key: 'NO_CHANGE', label: 'Без изменений' },
+    { key: 'updated', label: 'Цена изменена' },
+    { key: 'skipped', label: 'Пропущено' },
     { key: 'errors', label: 'Ошибки' },
   ];
 
@@ -134,6 +155,35 @@ export default function RunDetailModal({ run, onClose }) {
                 <p className="text-xl font-bold" style={{ color: s.color }}>{s.value}</p>
               </div>
             ))}
+          </div>
+        )}
+
+        {detail?.error_message && (
+          <p className="text-xs mb-4 px-3 py-2 rounded-lg" style={{ color: '#b91c1c', background: '#fef2f2' }}>
+            {detail.error_message}
+          </p>
+        )}
+
+        {/* Итог по причинам для всех товаров прогона */}
+        {reasonCounts.length > 0 && (
+          <div className="mb-5">
+            <p className="text-xs mb-2" style={{ color: 'var(--text-3)' }}>
+              Итог по всем товарам запуска (в таблице ниже — только изменения цен и проблемы)
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {reasonCounts.map(([code, n]) => {
+                const r = REASON_MAP[code] || { label: code, color: '#6b7280', bg: '#f3f4f6' };
+                return (
+                  <span
+                    key={code}
+                    className="text-xs font-medium px-2 py-0.5 rounded-full"
+                    style={{ color: r.color, background: r.bg }}
+                  >
+                    {r.label}: {n.toLocaleString('ru')}
+                  </span>
+                );
+              })}
+            </div>
           </div>
         )}
 

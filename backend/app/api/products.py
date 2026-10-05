@@ -213,7 +213,10 @@ async def list_products(
             query = query.order_by(margin_expr.desc())
 
     total = query.count()
-    products = query.offset((page - 1) * page_size).limit(page_size).all()
+    # Без ORDER BY Postgres отдаёт строки в произвольном порядке: при OFFSET/LIMIT
+    # товары дублировались и пропадали между страницами, а автообновление
+    # списка перемешивало карточки.
+    products = query.order_by(Product.id).offset((page - 1) * page_size).limit(page_size).all()
 
     # Batch-загрузка последних снимков цен (fix N+1: 1 запрос вместо N)
     product_ids_page = [p.id for p in products]

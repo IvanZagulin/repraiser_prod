@@ -43,7 +43,11 @@ services:
       - wb_network
     volumes:
       - redis_data:/data
-    command: redis-server --requirepass ${REDIS_PASSWORD} --maxmemory 512mb --maxmemory-policy volatile-lru
+    # noeviction: в этом Redis живут run-/product-локи и защитные флаги с TTL
+    # (карантин WB, SPP Guard). volatile-lru вытеснял бы именно их. Кеш
+    # занимает ~10 МБ из 512; при заполнении запись упадёт явно, а не снимет
+    # защиту молча.
+    command: redis-server --requirepass ${REDIS_PASSWORD} --maxmemory 512mb --maxmemory-policy noeviction
     deploy:
       resources:
         limits:

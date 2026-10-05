@@ -1,5 +1,7 @@
 import json
 import logging
+import time
+import uuid
 from typing import Iterable, Optional, Set
 
 import redis as redis_lib
@@ -54,37 +56,17 @@ def cache_ttl(key: str) -> int:
         return -2
 
 
-def acquire_run_lock(user_id: int, ttl: int = 10860) -> bool:
-    """
-    Попытка захватить эксклюзивную блокировку прогона для пользователя.
-    Возвращает True если блокировка получена, False если прогон уже идёт.
-    TTL = 181 мин (чуть больше time_limit=10800s Celery-задачи repricer.run_for_user).
-    Иначе лок истекает раньше задачи и планировщик запускает параллельный прогон
-    (инцидент 2026-06-10: медленный прогон из-за шторма 429 WB пережил свой лок).
+def guard_active(key: str) -> bool:
+    """Установлен ли защитный флаг (удержание снижения цены и т.п.).
+
+    При ошибке Redis возвращает True: снижение лучше отложить, чем молча
+    снять защиту (cache_get в этом случае отдаёт None — «флага нет»).
     """
     try:
-        key = f"repricer:run_lock:{user_id}"
-        return bool(_get_client().set(key, "1", nx=True, ex=ttl))
+        return bool(_get_client().exists(key))
     except Exception as e:
-        logger.error(f"Redis acquire_run_lock(user={user_id}) error: {e} — блокируем запуск во избежание дублирования")
-        return False  # если Redis недоступен — запрещаем запуск (safer than allowing concurrent runs)
-
-
-def refresh_run_lock(user_id: int, ttl: int) -> bool:
-    """Продлить блокировку прогона (heartbeat живого воркера)."""
-    try:
-        return bool(_get_client().expire(f"repricer:run_lock:{user_id}", ttl))
-    except Exception as e:
-        logger.warning(f"Redis refresh_run_lock(user={user_id}) error: {e}")
-        return False
-
-
-def release_run_lock(user_id: int) -> None:
-    """Освободить блокировку прогона для пользователя."""
-    try:
-        _get_client().delete(f"repricer:run_lock:{user_id}")
-    except Exception as e:
-        logger.warning(f"Redis release_run_lock(user={user_id}) error: {e}")
+        logger.warning(f"Redis guard_active({key!r}) error: {e} — считаем флаг установленным")
+        return True
 
 
 _RELEASE_OWNED_LOCK_SCRIPT = """
@@ -93,6 +75,117 @@ if redis.call('get', KEYS[1]) == ARGV[1] then
 end
 return 0
 """
+
+_REFRESH_OWNED_LOCK_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('expire', KEYS[1], ARGV[2])
+end
+return 0
+"""
+
+
+def run_lock_key(user_id: int) -> str:
+    return f"repricer:run_lock:{user_id}"
+
+
+def new_run_lock_owner(kind: str) -> str:
+    """Значение run-лока: «вид:uuid:время захвата (unix)».
+
+    По нему видно, чей лок и когда он взят: планировщик и задача снимают
+    только свой или заведомо старый лок, а не лок живого прогона.
+    """
+    return f"{kind}:{uuid.uuid4().hex}:{int(time.time())}"
+
+
+def run_lock_acquired_at(owner: Optional[str]) -> Optional[float]:
+    """Время захвата из значения лока; None для старого формата («1»)."""
+    if not owner or ":" not in str(owner):
+        return None
+    try:
+        return float(str(owner).rsplit(":", 1)[1])
+    except (TypeError, ValueError):
+        return None
+
+
+def acquire_run_lock(user_id: int, ttl: int = 10860, owner: Optional[str] = None) -> bool:
+    """
+    Попытка захватить эксклюзивную блокировку прогона для пользователя.
+    Возвращает True если блокировка получена, False если прогон уже идёт.
+    TTL = 181 мин (чуть больше time_limit=10800s Celery-задачи repricer.run_for_user).
+    Иначе лок истекает раньше задачи и планировщик запускает параллельный прогон
+    (инцидент 2026-06-10: медленный прогон из-за шторма 429 WB пережил свой лок).
+
+    owner — значение лока (new_run_lock_owner); с ним продление и снятие
+    работают только для своего лока.
+    """
+    try:
+        key = run_lock_key(user_id)
+        return bool(_get_client().set(key, owner or "1", nx=True, ex=ttl))
+    except Exception as e:
+        logger.error(f"Redis acquire_run_lock(user={user_id}) error: {e} — блокируем запуск во избежание дублирования")
+        return False  # если Redis недоступен — запрещаем запуск (safer than allowing concurrent runs)
+
+
+def get_run_lock_owner(user_id: int) -> Optional[str]:
+    """Текущее значение run-лока (None — лока нет). Ошибку Redis пробрасывает."""
+    return _get_client().get(run_lock_key(user_id))
+
+
+def refresh_run_lock(user_id: int, ttl: int, owner: Optional[str] = None) -> bool:
+    """Продлить блокировку прогона (heartbeat живого воркера).
+
+    С owner продлевается только свой лок: False — лок потерян или его уже
+    держит другой прогон.
+    """
+    try:
+        client = _get_client()
+        key = run_lock_key(user_id)
+        if owner is None:
+            return bool(client.expire(key, ttl))
+        return bool(client.eval(_REFRESH_OWNED_LOCK_SCRIPT, 1, key, owner, int(ttl)))
+    except Exception as e:
+        logger.warning(f"Redis refresh_run_lock(user={user_id}) error: {e}")
+        return False
+
+
+def release_run_lock(user_id: int, owner: Optional[str] = None) -> None:
+    """Освободить блокировку прогона для пользователя.
+
+    С owner снимается только свой лок (CAS): если лок уже перехватил другой
+    прогон, он остаётся на месте.
+    """
+    try:
+        client = _get_client()
+        key = run_lock_key(user_id)
+        if owner is None:
+            client.delete(key)
+        else:
+            client.eval(_RELEASE_OWNED_LOCK_SCRIPT, 1, key, owner)
+    except Exception as e:
+        logger.warning(f"Redis release_run_lock(user={user_id}) error: {e}")
+
+
+def release_stale_run_lock(user_id: int, min_age_sec: int) -> bool:
+    """Снять run-лок, только если он взят не меньше min_age_sec назад.
+
+    Возвращает True, если лока больше нет. Свежий лок (прогон только что
+    стартовал и ещё не создал запись в БД) не трогаем. Лок старого формата
+    без времени захвата считаем старым. Снимаем через CAS по прочитанному
+    значению, чтобы не удалить лок, перехваченный между чтением и удалением.
+    """
+    try:
+        client = _get_client()
+        key = run_lock_key(user_id)
+        owner = client.get(key)
+        if owner is None:
+            return True
+        acquired_at = run_lock_acquired_at(owner)
+        if acquired_at is not None and time.time() - acquired_at < min_age_sec:
+            return False
+        return bool(client.eval(_RELEASE_OWNED_LOCK_SCRIPT, 1, key, owner))
+    except Exception as e:
+        logger.warning(f"Redis release_stale_run_lock(user={user_id}) error: {e}")
+        return False
 
 
 def _product_lock_key(user_id: int, product_id: int) -> str:

@@ -3,6 +3,7 @@ import json
 import logging
 import time
 import uuid
+from collections import Counter
 from types import SimpleNamespace
 from typing import Optional, Dict, List, Tuple
 from decimal import Decimal, ROUND_UP, ROUND_FLOOR
@@ -26,6 +27,7 @@ from app.redis_client import (
     cache_set,
     cache_ttl,
     cache_delete,
+    guard_active,
     release_product_locks,
 )
 from app.services.activity_logger import log_activity
@@ -68,8 +70,14 @@ class RepricerEngine:
         self._quarantine_hits: List[Tuple[str, str, int]] = []
         # config_id, для которых каталог конкурентов был недоступен в этом прогоне
         self._competitor_unavailable: set = set()
+        # config_id, для которых загрузились не все конкуренты: цель посчитана
+        # по части списка, поэтому цену по ней только снижаем
+        self._competitor_partial: set = set()
         # Пробный прогон ничего не пишет в БД (снимки/изменения/активность)
         self._dry_run = False
+        # Итоговые коды по всем товарам прогона (в т.ч. не записанным в историю):
+        # сохраняются в stage_progress["reason_counts"] и показываются в UI.
+        self._reason_counts: Counter = Counter()
 
     def _marketplace(self, account: Optional[Account]) -> str:
         return getattr(account, "marketplace", "wb") or "wb"
@@ -278,6 +286,15 @@ class RepricerEngine:
     _CLOSED_LOOP_CORRECTION_SETTLE_SEC = 5
     _CATALOG_SINGLE_FALLBACK_MAX_PER_RUN = 300
     _CATALOG_SINGLE_FALLBACK_MAX_FAILURES = 20
+    # Карточки нет в успешном ответе каталога (удалена/скрыта): помним час и не
+    # считаем это сбоем загрузки — такой конкурент приравнивается к «нет в наличии».
+    _CATALOG_MISSING_TTL_SEC = 3600
+    # Бюджеты времени на батч-парсинг каталога. Обычно своих товаров хватает
+    # минуты; без бюджета упавший туннель держал прогон часами.
+    _CATALOG_PREFETCH_BUDGET_SEC = 15 * 60
+    _CLOSED_LOOP_PARSE_BUDGET_SEC = 5 * 60
+    # Расчёт одного товара (включая одиночный запрос в каталог и WB API).
+    _DECIDE_TIMEOUT_SEC = 300
     # ── Пропуск товаров в акции WB (SKIPPED_PROMO) ─────────────────────────
     # Зачем добавлялось: в 4:00 из 1С выгружаются цены, посчитанные по марже
     # 27% (20% по «Просвещению»). Размер скидки в акции WB считает от цены,
@@ -313,6 +330,8 @@ class RepricerEngine:
     # Повышение до РРЦ одним шагом (ночная выгрузка 1С роняет цену на ~22%,
     # при старом лимите +25% товар оставался ниже РРЦ до следующего прогона).
     _RRP_MAX_RAISE_RATIO = Decimal("1.6")
+    # Повышение за один прогон для стратегии «конкурент».
+    _COMPETITOR_MAX_RAISE_RATIO = Decimal("1.25")
     # Каталог WB отдаёт новую цену продавца со старой ценой покупателя ещё
     # какое-то время после изменения. Из такой пары СПП выходит ложным
     # (45-56% вместо 31%), и движок то разгонял цену вдвое, то ронял её ниже
@@ -352,6 +371,19 @@ class RepricerEngine:
     _WB_AUTH_FAILS_TO_DEACTIVATE = 3
     _WB_AUTH_FAIL_WINDOW_SEC = 2 * 3600
     _TOKEN_NOTIFY_DEDUP_SEC = 6 * 3600
+    # Коды «товар пропущен» (не ошибка). Всё остальное, кроме обновлений, —
+    # ошибка прогона (PARSE_ERROR, WB_API_ERROR).
+    _SKIP_CODES = frozenset({
+        "SKIPPED_PROMO", "SKIPPED_INACTIVE", "SKIPPED_QUARANTINE", "NO_CHANGE",
+        "COMPETITOR_OOS", "COMPETITOR_PARTIAL", "OUT_OF_STOCK", "COOLDOWN",
+        "COOLDOWN_SPP_GUARD", "CATALOG_UNAVAILABLE",
+    })
+    _UPDATED_CODES = ("UPDATED", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX", "CLAMPED_TO_MARGIN")
+    # Повторяющиеся пропуски пишем в историю не чаще раза в 6 часов на товар:
+    # ~740 товаров с конкурентами без остатка дали бы ~35 тыс. строк в сутки.
+    # Счётчики прогона (reason_counts) учитывают все.
+    _SKIP_LOG_DEDUP_SEC = 6 * 3600
+    _DEDUP_SKIP_CODES = ("COMPETITOR_OOS", "CATALOG_UNAVAILABLE", "COMPETITOR_PARTIAL")
 
     def _competitor_target_final(self, config, competitor_price: Decimal) -> Decimal:
         """Return target final buyer price for competitor strategy."""
@@ -437,41 +469,38 @@ class RepricerEngine:
         seller_price = final_price / (spp_factor * discount_factor)
         return Decimal(self._round_up(seller_price))
     
-    async def _preflight_catalog_check(self, max_wait: int = 300, interval: int = 30) -> None:
-        """Check catalog proxy availability, retry up to max_wait seconds."""
-        import httpx
-        from app.config import settings
-        proxy_url = getattr(settings, "CATALOG_PROXY_URL", "")
-        if not proxy_url:
-            return
-        parts = proxy_url.rstrip("/").rsplit("@", 1)
-        host_part = parts[-1] if parts else proxy_url
-        test_url = f"http://{host_part}/cards/v4/detail?appType=1&curr=rub&dest=-1257786&nm=282199514"
-        auth = None
-        if len(parts) == 2:
-            cred = parts[0].replace("http://", "").replace("https://", "")
-            user_pass = cred.split(":", 1)
-            if len(user_pass) == 2:
-                auth = (user_pass[0], user_pass[1])
+    async def _preflight_catalog_check(
+        self,
+        sample_nm_ids: Optional[List[int]] = None,
+        max_wait: int = 300,
+        interval: int = 30,
+    ) -> bool:
+        """Проверяет, что каталог WB отвечает через CATALOG_PROXY_URL той же
+        сессией, что и парсер, и ждёт до max_wait секунд.
+
+        Раньше проверка шла GET-ом прямо на адрес прокси и принимала 407 за
+        успех — то есть не проверяла ни туннель до WB, ни сессию.
+        """
+        if not getattr(settings, "CATALOG_PROXY_URL", ""):
+            return True
+        nm_ids = [n for n in (sample_nm_ids or []) if n][:3] or [282199514]
+        url = catalog_parser._build_batch_url(nm_ids)
         waited = 0
-        while waited <= max_wait:
-            try:
-                async with httpx.AsyncClient(timeout=10) as client:
-                    resp = await client.get(test_url, auth=auth)
-                    if resp.status_code in (200, 407):
-                        if waited > 0:
-                            logger.info("Catalog proxy restored after %ds wait", waited)
-                        else:
-                            logger.info("Catalog proxy OK (pre-flight)")
-                        return
-                    logger.warning("Catalog proxy returned %d (pre-flight)", resp.status_code)
-            except Exception as e:
-                logger.warning("Catalog proxy unavailable (pre-flight, waited %ds/%ds): %s", waited, max_wait, e)
+        while True:
+            data = await catalog_parser._request_via_catalog_proxy(url)
+            if data is not None:
+                if waited > 0:
+                    logger.info("Catalog proxy restored after %ds wait", waited)
+                else:
+                    logger.info("Catalog proxy OK (pre-flight)")
+                return True
             if waited >= max_wait:
                 break
+            logger.warning("Catalog proxy unavailable (pre-flight, waited %ds/%ds)", waited, max_wait)
             await asyncio.sleep(interval)
             waited += interval
         logger.error("Catalog proxy still down after %ds — proceeding anyway", max_wait)
+        return False
 
     async def _cached_parse_product(self, nm_id: int):
         """
@@ -507,6 +536,14 @@ class RepricerEngine:
     def _catalog_needs_refresh(self, nm_id: int) -> bool:
         return cache_ttl(f"wb_catalog:{nm_id}") < self._CATALOG_CACHE_TTL_SEC - self._CATALOG_REFRESH_AGE_SEC
 
+    def _mark_catalog_missing(self, nm_ids) -> None:
+        for nm_id in nm_ids:
+            cache_set(f"wb_catalog_missing:{nm_id}", {"ts": time.time()}, ttl=self._CATALOG_MISSING_TTL_SEC)
+
+    def _catalog_missing(self, nm_id: int) -> bool:
+        """Каталог недавно ответил без этой карточки (удалена/скрыта)."""
+        return cache_get(f"wb_catalog_missing:{nm_id}") is not None
+
     async def _parse_product_single_fallback(self, nm_id: int):
         """Try one live catalog request when batch/cache missed a product."""
         if self._catalog_single_fallback_disabled:
@@ -527,14 +564,19 @@ class RepricerEngine:
             return None
 
         self._catalog_single_fallbacks += 1
+        not_found: set = set()
         try:
-            product_data = await catalog_parser.parse_product(nm_id)
+            product_data = await catalog_parser.parse_product(nm_id, not_found=not_found)
         except Exception as e:
             self._catalog_single_fallback_failures += 1
             logger.warning("Catalog single fallback failed for nm_id=%s: %s", nm_id, e)
             return None
 
         if product_data is None:
+            if nm_id in not_found:
+                # Каталог ответил, карточки нет — это не сбой каталога
+                self._mark_catalog_missing([nm_id])
+                return None
             self._catalog_single_fallback_failures += 1
             logger.warning("Catalog single fallback returned empty data for nm_id=%s", nm_id)
             return None
@@ -1098,43 +1140,65 @@ class RepricerEngine:
                 return None, None, None
 
         rule = config.competitor_select_rule or "min_price"
+        self._competitor_unavailable.discard(config.id)
+        self._competitor_partial.discard(config.id)
 
-        # Получаем данные по каждому конкуренту: (nm_id, final, in_stock, basic)
+        # Получаем данные по каждому конкуренту: (nm_id, final, in_stock, basic).
+        # failed — конкуренты, цену которых узнать не удалось (сбой каталога).
+        # Раньше они молча выпадали из выборки: при недогруженном самом дешёвом
+        # конкуренте цель считалась от следующего, и цена уходила выше рынка.
         prices: List[Tuple[int, Decimal, bool, Decimal]] = []
+        failed: List[int] = []
         for nm_id in nm_ids:
             try:
                 p = await self._cached_parse_product(nm_id)
                 if not p or getattr(p, "catalog_stale", False):
+                    if self._catalog_missing(nm_id):
+                        continue  # карточки нет в каталоге — как «нет в наличии»
                     p = await self._parse_product_single_fallback(nm_id)
                 if p and not getattr(p, "catalog_stale", False):
+                    if p.in_stock and not (p.final_price and p.final_price > 0):
+                        # «В наличии» без цены — сбой ответа каталога, а не OOS
+                        failed.append(nm_id)
+                        continue
                     basic = getattr(p, 'seller_price', None) or Decimal(0)
                     prices.append((nm_id, p.final_price, p.in_stock, basic))
+                elif not self._catalog_missing(nm_id):
+                    failed.append(nm_id)
             except Exception as e:
                 logger.warning(f"Не удалось получить цену конкурента nm_id={nm_id}: {e}")
+                failed.append(nm_id)
 
-        if not prices:
-            logger.warning("Конкурент для config_id=%s: каталог недоступен — stale snapshot не используем", config.id)
+        instock = [(nm, price, s, b) for nm, price, s, b in prices if s and price > 0]
+
+        # Без полного списка нельзя утверждать, что все конкуренты без остатка,
+        # а среднее по части списка может уйти в любую сторону.
+        if failed and (not instock or rule == "avg_price"):
+            logger.warning(
+                "Конкурент для config_id=%s: каталог не отдал %d из %d конкурентов — цену не трогаем",
+                config.id, len(failed), len(nm_ids),
+            )
             self._competitor_unavailable.add(config.id)
             return None, None, None
 
-        if rule == "cheapest_instock":
-            instock = [(nm, price, s, b) for nm, price, s, b in prices if s and price > 0]
-            if not instock:
-                return None, None, None
-            winner = min(instock, key=lambda x: x[1])
-        elif rule == "avg_price":
-            instock = [(nm, price, s, b) for nm, price, s, b in prices if s and price > 0]
-            if not instock:
-                return None, None, None
+        if not instock:
+            return None, None, None
+
+        if rule == "avg_price":
             avg_final = sum(p for _, p, _, _ in instock) / len(instock)
             avg_basic = sum(b for _, _, _, b in instock) / len(instock)
             return Decimal(str(avg_final)), None, Decimal(str(avg_basic))
-        else:  # min_price
-            instock = [(nm, price, s, b) for nm, price, s, b in prices if s and price > 0]
-            if not instock:
-                return None, None, None
-            winner = min(instock, key=lambda x: x[1])
 
+        # min_price и cheapest_instock: самый дешёвый конкурент в наличии
+        winner = min(instock, key=lambda x: x[1])
+        if failed:
+            # Реальный минимум не выше найденного: снижать к нему безопасно,
+            # повышать — нет (см. _strategy_competitor).
+            self._competitor_partial.add(config.id)
+            logger.info(
+                "Конкурент для config_id=%s: загружено %d из %d — только снижение",
+                config.id, len(nm_ids) - len(failed), len(nm_ids),
+            )
         return winner[1], winner[0], winner[3]
 
     async def _strategy_competitor(
@@ -1156,7 +1220,7 @@ class RepricerEngine:
                 if config.id in self._competitor_unavailable:
                     # Каталог недоступен — это не «конкурент без остатка»: не
                     # переключаемся на РРЦ из-за сетевой ошибки, цену не трогаем.
-                    return None, "CATALOG_UNAVAILABLE", "Каталог WB недоступен для конкурентов", None, None
+                    return None, "CATALOG_UNAVAILABLE", "Каталог WB не отдал цены конкурентов", None, None
                 # Нет конкурентов или все OOS при правиле cheapest_instock
                 from app.models.competitor_entry import CompetitorEntry
                 entries = self.db.query(CompetitorEntry).filter(
@@ -1207,6 +1271,17 @@ class RepricerEngine:
             try:
                 target_int = Decimal(self._round_up(target_final))
                 new_seller_price = self._calculate_seller_price_from_final(target_int, calc_spp, seller_discount)
+
+                current_seller = current_data.get('seller_price') or Decimal(0)
+                if (
+                    config.id in self._competitor_partial
+                    and current_seller > 0
+                    and new_seller_price > current_seller
+                ):
+                    return None, "COMPETITOR_PARTIAL", (
+                        f"Competitor ({rule}): каталог отдал не всех конкурентов, найденный минимум "
+                        f"{competitor_price}₽ — повышение до {new_seller_price}₽ отложено"
+                    ), competitor_price, winning_nm_id
 
                 reason_msg = (
                     f"Competitor ({rule}, {move}): конкурент nm_id={winning_nm_id} цена={competitor_price}₽, "
@@ -1676,9 +1751,13 @@ class RepricerEngine:
                 reason_msg = f"[Fallback РРЦ при OOS конкурента] {reason_msg}"
 
         # Даже если стратегия не требует изменений — проверяем маржу по текущей цене.
-        # Если нарушена — _apply_limits поднимет цену. Если нет — NO_CHANGE.
+        # Если нарушена — _apply_limits поднимет цену. Если нет — остаётся код
+        # стратегии (CATALOG_UNAVAILABLE, COMPETITOR_OOS, PARSE_ERROR…): раньше
+        # он подменялся на NO_CHANGE, и сбои каталога/расчёта нигде не были видны.
         _seller_discount = current_data.get('discount') or Decimal(0)
+        strategy_skip_code = None
         if new_price is None:
+            strategy_skip_code = reason_code
             _curr_sp = current_data.get('seller_price') or Decimal(0)
             if _curr_sp > 0:
                 new_price = _curr_sp
@@ -1716,9 +1795,9 @@ class RepricerEngine:
         if _lowering:
             if current_data.get("catalog_lag") or current_data.get("catalog_fallback"):
                 _hold_reason = "Каталог WB не обновился / цена покупателя оценочная — снижение отложено"
-            elif cache_get(f"wb_quarantine_hold:{product.nm_id}"):
+            elif guard_active(f"wb_quarantine_hold:{product.nm_id}"):
                 _hold_reason = "WB недавно отправил цену в карантин — снижение отложено"
-            elif cache_get(f"spp_guard_cooldown:{product.id}"):
+            elif guard_active(f"spp_guard_cooldown:{product.id}"):
                 _hold_reason = "Недавно был откат SPP Guard — снижение отложено"
         if _hold_reason:
             return {"product": product, "needs_update": False, "skip_code": "NO_CHANGE",
@@ -1739,7 +1818,7 @@ class RepricerEngine:
             reason_msg = (reason_msg or "") + f". Ступенчатое снижение: отправляем {stepped} (целевая {final_new_price}, текущая {_curr_sp_for_step})"
             final_new_price = stepped
 
-        _MAX_RAISE_RATIO = self._RRP_MAX_RAISE_RATIO if config.strategy == "rrp" else Decimal("1.25")
+        _MAX_RAISE_RATIO = self._RRP_MAX_RAISE_RATIO if config.strategy == "rrp" else self._COMPETITOR_MAX_RAISE_RATIO
         if marketplace == "wb" and _curr_sp_for_step > 0 and final_new_price > _curr_sp_for_step * _MAX_RAISE_RATIO:
             stepped_up = Decimal(self._round_up(_curr_sp_for_step * _MAX_RAISE_RATIO))
             logger.info(
@@ -1750,7 +1829,7 @@ class RepricerEngine:
             final_new_price = stepped_up
 
         if final_new_price == current_data["seller_price"]:
-            return {"product": product, "needs_update": False, "skip_code": "NO_CHANGE",
+            return {"product": product, "needs_update": False, "skip_code": strategy_skip_code or "NO_CHANGE",
                     "current_data": current_data, "new_price": final_new_price,
                     "limit_reason": limit_reason, "reason_msg": reason_msg, "_t0": _t0,
                     "snap_competitor_price": snap_competitor_price, "snap_competitor_nm_id": snap_competitor_nm_id}
@@ -1797,7 +1876,7 @@ class RepricerEngine:
                 # В price_changes пишем только реальные события — OUT_OF_STOCK и
                 # NO_CHANGE были 95% мусора (раздули таблицу до 7+ GB). Пропускаем.
                 _silent = ("OUT_OF_STOCK", "NO_CHANGE", "SKIPPED_INACTIVE", "SKIPPED_PROMO", "COOLDOWN")
-                if reason_code not in _silent:
+                if reason_code not in _silent and self._should_log_skip(product.id, reason_code):
                     self._save_price_change(run, product, current_data, new_price, None, reason_code, reason_msg)
             logger.info("METRIC " + json.dumps({"metric": "product_done", "run_id": run.id,
                 "nm_id": product.nm_id, "sku": product.seller_sku, "reason": reason_code,
@@ -1845,6 +1924,16 @@ class RepricerEngine:
             "duration_ms": int((time.monotonic() - _t0) * 1000)}))
         return reason_code
 
+    def _should_log_skip(self, product_id: int, reason_code: str) -> bool:
+        """Писать ли повторяющийся пропуск в историю (дедуп на 6 часов)."""
+        if reason_code not in self._DEDUP_SKIP_CODES:
+            return True
+        key = f"skip_logged:{product_id}:{reason_code}"
+        if cache_get(key):
+            return False
+        cache_set(key, {"ts": time.time()}, ttl=self._SKIP_LOG_DEDUP_SEC)
+        return True
+
     async def _verify_and_correct_competitor(self, run, items: list) -> int:
         """Closed-loop PHASE 4: перепарсивает факт у ВСЕХ обновлённых товаров (RRP + Competitor).
 
@@ -1864,7 +1953,9 @@ class RepricerEngine:
 
         by_nm = {it["nm_id"]: it for it in items}
         try:
-            fresh = await catalog_parser.parse_batch_ids(list(by_nm.keys()))
+            fresh = await catalog_parser.parse_batch_ids(
+                list(by_nm.keys()), deadline_sec=self._CLOSED_LOOP_PARSE_BUDGET_SEC,
+            )
         except Exception as e:
             logger.error("Closed-loop: батч-парсинг факта упал: %s", e)
             return 0
@@ -1935,8 +2026,19 @@ class RepricerEngine:
                 continue
             spp_str = f"{fact_spp}%" if fact_spp is not None else "?"
 
+            # Ограничения шага считаем от цены ДО прогона. Основной расчёт уже
+            # сделал шаг от неё, а доправка от new_seller удваивала его:
+            # −20% и ещё −20% = −36% за минуту, ×1.25 × 1.6 = ×2 при повышении.
+            base_seller = _old_seller if _old_seller > 0 else new_seller
+            max_raise = (
+                self._RRP_MAX_RAISE_RATIO if strategy == "rrp"
+                else self._COMPETITOR_MAX_RAISE_RATIO
+            )
+            step_floor = Decimal(self._round_up(base_seller * self._MAX_DROP_RATIO))
+            step_ceil = Decimal(self._round_up(base_seller * max_raise))
+
             def _limited(price: Decimal) -> Optional[Decimal]:
-                """Цена после min/max/маржи; None — если данные выглядят битыми."""
+                """Цена после min/max/маржи и шага; None — если данные выглядят битыми."""
                 if price > new_seller * self._CLOSED_LOOP_MAX_RATIO:
                     logger.warning(
                         "Closed-loop: аномальная цена nm=%s (seller=%s→%s, ratio=%.4f) — пропускаем",
@@ -1948,7 +2050,7 @@ class RepricerEngine:
                 except Exception as e:
                     logger.error("Closed-loop: _apply_limits упал для nm=%s: %s — пропускаем", nm, e)
                     return None
-                return price
+                return min(max(price, step_floor), step_ceil)
 
             # -------------------------------------------------------------
             # 1. ЗАЩИТА РРЦ (Стратегия RRP): проверка цены с кошельком vs РРЦ
@@ -1977,7 +2079,6 @@ class RepricerEngine:
                         )
                         plan[nm] = (it, revert_price, target_final, actual_final, ratio, "REVERTED_SPP_SPIKE", msg)
                         reverts_count += 1
-                        cache_set(f"spp_guard_cooldown:{it['product'].id}", {"run_id": run.id}, ttl=self._SPP_GUARD_COOLDOWN_SEC)
                         logger.warning("SPP Guard REVERT (RRP) for nm=%s: %s", nm, msg)
                 continue
 
@@ -1995,6 +2096,10 @@ class RepricerEngine:
             # Проверка нарушения: цена заметно ниже цели (WB поднял СПП)
             if actual_final < target_int - tolerance:
                 revert_price = _limited(Decimal(self._round_up(target_int / ratio)))
+                if revert_price is not None and it.get("competitor_partial") and base_seller >= new_seller:
+                    # Цель посчитана не по всем конкурентам: реальный минимум
+                    # может быть ниже. Откатываем не выше цены до прогона.
+                    revert_price = min(revert_price, base_seller)
                 if revert_price is not None and revert_price != new_seller:
                     corrective.setdefault(it["token"], []).append({"nmID": nm, "price": int(revert_price)})
                     msg = (
@@ -2003,14 +2108,21 @@ class RepricerEngine:
                     )
                     plan[nm] = (it, revert_price, target_final, actual_final, ratio, "REVERTED_SPP_SPIKE", msg)
                     reverts_count += 1
-                    cache_set(f"spp_guard_cooldown:{it['product'].id}", {"run_id": run.id}, ttl=self._SPP_GUARD_COOLDOWN_SEC)
                     logger.warning("SPP Guard REVERT (Competitor) for nm=%s: %s", nm, msg)
             elif actual_final > target_int + tolerance:
-                # Обычная Closed-loop корректировка (цена выше цели)
-                corrected = Decimal(self._round_up(target_int / ratio))
-                if corrected < new_seller * self._MAX_DROP_RATIO:
-                    corrected = Decimal(self._round_up(new_seller * self._MAX_DROP_RATIO))
-                corrected = _limited(corrected)
+                # Обычная Closed-loop корректировка (цена выше цели). Это
+                # снижение: те же удержания, что и в основном расчёте.
+                hold = None
+                if cd.get("catalog_lag") or cd.get("catalog_fallback"):
+                    hold = "данные каталога сомнительные"
+                elif guard_active(f"wb_quarantine_hold:{nm}"):
+                    hold = "WB недавно отправил цену в карантин"
+                elif guard_active(f"spp_guard_cooldown:{it['product'].id}"):
+                    hold = "недавно был откат SPP Guard"
+                if hold:
+                    logger.info("Closed-loop nm=%s: доправка вниз отложена — %s", nm, hold)
+                    continue
+                corrected = _limited(Decimal(self._round_up(target_int / ratio)))
                 if corrected is not None and corrected != new_seller:
                     corrective.setdefault(it["token"], []).append({"nmID": nm, "price": int(corrected)})
                     msg = (
@@ -2029,34 +2141,73 @@ class RepricerEngine:
                 self.db.rollback()
             return 0
 
+        # Доправки проверяем так же, как основную заливку: раньше отказ WB
+        # (карантин) не замечался, а в историю писалась непринятая цена.
         applied = set()
+        rejected: Dict[int, str] = {}
         for token, updates in corrective.items():
             try:
                 async with create_wb_client(token) as client:
-                    await client.update_prices(updates)
-                for u in updates:
-                    applied.add(u["nmID"])
-                    cache_delete(f"wb_catalog:{u['nmID']}")
+                    statuses, verified = await self._wb_upload_verified(client, updates)
             except Exception as e:
                 logger.error("Closed-loop: ошибка отправки пакета в WB: %s", e)
+                for u in updates:
+                    rejected[u["nmID"]] = f"Исключение при отправке: {e}"
+                continue
+            for u in updates:
+                nm = u["nmID"]
+                st = statuses.get(nm) if verified else None
+                if st is not None and not st[0]:
+                    err_text = st[1] or "WB отклонил цену"
+                    rejected[nm] = err_text
+                    logger.warning("Closed-loop nm=%s: WB не применил цену %s: %s", nm, u["price"], err_text)
+                    if "quarantine" in err_text.lower():
+                        product = by_nm[nm]["product"]
+                        account_name = getattr(getattr(product, "account", None), "name", "") or ""
+                        self._quarantine_hits.append((account_name, product.seller_sku or str(nm), nm))
+                        cache_set(f"wb_quarantine_hold:{nm}", {"run_id": run.id}, ttl=self._QUARANTINE_HOLD_SEC)
+                    continue
+                if st is None:
+                    logger.warning("Closed-loop nm=%s: статус WB не подтверждён", nm)
+                applied.add(nm)
+                cache_delete(f"wb_catalog:{nm}")
+
+        # Кулдаун SPP Guard — только для реально применённых откатов
+        for nm, entry in plan.items():
+            if nm in applied and entry[5] == "REVERTED_SPP_SPIKE":
+                cache_set(f"spp_guard_cooldown:{entry[0]['product'].id}", {"run_id": run.id},
+                          ttl=self._SPP_GUARD_COOLDOWN_SEC)
 
         verified_after_correction: dict = {}
         if applied:
             try:
                 if self._CLOSED_LOOP_CORRECTION_SETTLE_SEC > 0:
                     await asyncio.sleep(self._CLOSED_LOOP_CORRECTION_SETTLE_SEC)
-                verified_after_correction = await catalog_parser.parse_batch_ids(list(applied))
+                verified_after_correction = await catalog_parser.parse_batch_ids(
+                    list(applied), deadline_sec=self._CLOSED_LOOP_PARSE_BUDGET_SEC,
+                )
             except Exception as e:
                 logger.error("Closed-loop: повторный парсинг после коррекции упал: %s", e)
 
         n = 0
         for nm, (it, corrected, target_final, actual_final, ratio, reason_code, reason_msg) in plan.items():
-            if nm not in applied:
-                continue
             product = it["product"]
             base = dict(it["current_data"])
             base["seller_price"] = Decimal(str(it["new_price"]))
             base["final_price"] = actual_final
+            if nm in rejected:
+                # Цена не применена: в истории — отказ, снимок не трогаем
+                try:
+                    self._save_price_change(
+                        run, product, base, corrected, None, "WB_API_ERROR",
+                        f"{reason_msg}. Отказ WB: {rejected[nm]}",
+                    )
+                    self._reason_counts["WB_API_ERROR"] += 1
+                except Exception as e:
+                    logger.error("Closed-loop: ошибка сохранения отказа для nm=%s: %s", nm, e)
+                continue
+            if nm not in applied:
+                continue
             new_final_est = corrected * ratio
             corrected_final = new_final_est
             corrected_spp = None
@@ -2081,6 +2232,7 @@ class RepricerEngine:
                     run, product, base, corrected, corrected_final, reason_code,
                     reason_msg,
                 )
+                self._reason_counts[reason_code] += 1
                 n += 1
             except Exception as e:
                 logger.error("Closed-loop: ошибка сохранения для nm=%s: %s", nm, e)
@@ -2090,10 +2242,39 @@ class RepricerEngine:
             logger.error("Closed-loop: commit упал: %s", e)
             self.db.rollback()
         logger.info(
-            "Closed-loop / SPP Guard: snapshots=%d, откатов (SPP Guard)=%d, доправок (Closed-loop)=%d, итого отправлено=%d",
-            snapshots_updated, reverts_count, corrections_count, n
+            "Closed-loop / SPP Guard: snapshots=%d, откатов (SPP Guard)=%d, доправок (Closed-loop)=%d, "
+            "применено=%d, отклонено WB=%d",
+            snapshots_updated, reverts_count, corrections_count, n, len(rejected),
         )
         return n
+
+    async def _wb_upload_verified(self, client, wb_updates: List[dict]) -> Tuple[Dict[int, Tuple[bool, str]], bool]:
+        """Отправляет цены в WB и читает статус каждого товара.
+
+        Возвращает (statuses, verified). statuses: nm_id -> (принято, текст ошибки);
+        товара нет в statuses — WB статус не подтвердил. verified=False — проверить
+        было нечем (WB ответил «задача уже существует» без uploadID).
+        """
+        resp = await client.update_prices(wb_updates)
+        upload_id = (resp.get("data") or {}).get("id")
+        upload_ids = resp.get("_upload_ids") or ([upload_id] if upload_id else [])
+        if not upload_ids:
+            return {}, False
+        # Каждый uploadID проверяем со своим списком товаров
+        # (раньше при >1000 проверялся только последний чанк).
+        nm_chunks = [
+            [u["nmID"] for u in wb_updates[i:i + 1000]]
+            for i in range(0, len(wb_updates), 1000)
+        ]
+        statuses: Dict[int, Tuple[bool, str]] = {}
+        for idx, uid in enumerate(upload_ids):
+            expected = nm_chunks[idx] if len(upload_ids) == len(nm_chunks) else None
+            statuses.update(await client.verify_batch_update(uid, expected_nm_ids=expected))
+        logger.info(
+            "Batch update: %d цен отправлено (uploadID=%s, статусов=%d)",
+            len(wb_updates), upload_ids, len(statuses),
+        )
+        return statuses, True
 
     async def _notify_token_expired_once(self, account) -> None:
         """Одно уведомление об истёкшем токене на кабинет за 6 часов (раньше — на каждый товар)."""
@@ -2191,7 +2372,8 @@ class RepricerEngine:
                 "stage_idx": min(stage_idx, total_stages),
                 "total_stages": total_stages,
                 "details": details,
-                "stages": stages
+                "stages": stages,
+                "reason_counts": dict(self._reason_counts),
             }
             self.db.commit()
         except Exception as e:
@@ -2276,6 +2458,12 @@ class RepricerEngine:
             run = self.db.query(RepricerRun).filter(RepricerRun.id == existing_run_id).first()
             if run:
                 run.status = "running"
+                # Время старта — момент запуска, а не постановки в очередь: иначе
+                # ожидание в очереди засчитывалось в порог зависания (185 мин),
+                # и живой прогон помечался failed. Сообщение «Waiting for…»
+                # из очереди больше не актуально.
+                run.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                run.error_message = None
                 self.db.commit()
             else:
                 existing_run_id = None
@@ -2327,10 +2515,16 @@ class RepricerEngine:
                         "Pre-fetch конкурентов: %d %s из %d уникальных",
                         len(cold_ids), refresh_kind, len(competitor_nm_ids),
                     )
-                    batch_results = await catalog_parser.parse_batch_ids(cold_ids)
+                    competitor_not_found: set = set()
+                    batch_results = await catalog_parser.parse_batch_ids(
+                        cold_ids,
+                        deadline_sec=self._CATALOG_PREFETCH_BUDGET_SEC,
+                        not_found=competitor_not_found,
+                    )
                     for nm_id, product_data in batch_results.items():
                         if product_data is not None:
                             self._catalog_cache_put(nm_id, product_data)
+                    self._mark_catalog_missing(competitor_not_found)
                     logger.info(f"Pre-fetch завершён: {sum(1 for v in batch_results.values() if v)} / {len(cold_ids)}")
 
                 # Глобальный pre-fetch ВСЕХ собственных товаров одним батчем.
@@ -2352,7 +2546,9 @@ class RepricerEngine:
                         "Глобальный pre-fetch: %d %s из %d собственных товаров",
                         len(own_cold), refresh_kind, len(all_own_nm_ids),
                     )
-                    own_results = await catalog_parser.parse_batch_ids(own_cold)
+                    own_results = await catalog_parser.parse_batch_ids(
+                        own_cold, deadline_sec=self._CATALOG_PREFETCH_BUDGET_SEC,
+                    )
                     cached_count = 0
                     for nm_id, product_data in own_results.items():
                         if product_data is not None:
@@ -2361,7 +2557,9 @@ class RepricerEngine:
                     if cached_count == 0 and len(own_cold) > 10:
                         logger.warning("Глобальный pre-fetch: 0 успехов, повтор через 10 сек...")
                         await asyncio.sleep(10)
-                        own_results = await catalog_parser.parse_batch_ids(own_cold)
+                        own_results = await catalog_parser.parse_batch_ids(
+                            own_cold, deadline_sec=self._CATALOG_PREFETCH_BUDGET_SEC,
+                        )
                         for nm_id, product_data in own_results.items():
                             if product_data is not None:
                                 self._catalog_cache_put(nm_id, product_data)
@@ -2399,7 +2597,7 @@ class RepricerEngine:
             # Pre-flight: проверяем доступность каталога WB (SSH-туннель)
             if not dry_run:
                 self._update_stage(run, "Проверка каталога WB", 1, 5, "Шлюз Angie WAF активен")
-                await self._preflight_catalog_check()
+                await self._preflight_catalog_check(sample_nm_ids=all_own_nm_ids[:3])
 
             # Загружаем цены: быстрый точечный POST-запрос только по переоцениваемым товарам
             if not dry_run:
@@ -2470,7 +2668,20 @@ class RepricerEngine:
                 async def _decide_safe(product):
                     async with _sem:
                         try:
-                            return await self._decide_product(product, run, dry_run=dry_run)
+                            # Таймаут на товар: зависший запрос (каталог через
+                            # туннель, WB API) не должен останавливать весь чанк.
+                            return await asyncio.wait_for(
+                                self._decide_product(product, run, dry_run=dry_run),
+                                timeout=self._DECIDE_TIMEOUT_SEC,
+                            )
+                        except asyncio.TimeoutError:
+                            logger.error(
+                                "Расчёт товара %s завис дольше %d с — пропускаем",
+                                product.seller_sku, self._DECIDE_TIMEOUT_SEC,
+                            )
+                            return {"product": product, "needs_update": False, "skip_code": "PARSE_ERROR",
+                                    "current_data": None, "new_price": None, "limit_reason": None,
+                                    "reason_msg": f"Расчёт завис дольше {self._DECIDE_TIMEOUT_SEC} с"}
                         except Exception as e:
                             logger.error("Ошибка решения для %s: %s", product.seller_sku, e, exc_info=True)
                             # Упавший запрос оставляет транзакцию в состоянии aborted —
@@ -2538,7 +2749,6 @@ class RepricerEngine:
                         _ok = set()
                         _fail = set()
                         _errors = {}
-                        upload_id = None
                         try:
                             if _marketplace == "ozon":
                                 ozon_updates = [
@@ -2574,11 +2784,9 @@ class RepricerEngine:
                                     {k: v for k, v in u.items() if k != "_product_pk"}
                                     for u in updates
                                 ]
-                                resp = await client.update_prices(wb_updates)
+                                statuses, verified = await self._wb_upload_verified(client, wb_updates)
                                 cache_delete(f"wb_auth_failures:{account.id}")
-                                upload_id = (resp.get("data") or {}).get("id")
-                                upload_ids = resp.get("_upload_ids") or ([upload_id] if upload_id else [])
-                                if not upload_ids:
+                                if not verified:
                                     # «Задача уже существует» без id — проверить нечем
                                     for u in updates:
                                         _ok.add(u["_product_pk"])
@@ -2588,20 +2796,6 @@ class RepricerEngine:
                                         len(updates),
                                     )
                                     return _ok, _fail, _errors
-                                # Каждый uploadID проверяем со своим списком товаров
-                                # (раньше при >1000 проверялся только последний чанк).
-                                nm_chunks = [
-                                    [u["nmID"] for u in wb_updates[i:i + 1000]]
-                                    for i in range(0, len(wb_updates), 1000)
-                                ]
-                                statuses = {}
-                                for idx, uid in enumerate(upload_ids):
-                                    expected = nm_chunks[idx] if len(upload_ids) == len(nm_chunks) else None
-                                    statuses.update(await client.verify_batch_update(uid, expected_nm_ids=expected))
-                            logger.info(
-                                "Batch update: %d цен отправлено (uploadID=%s, статусов=%d)",
-                                len(updates), upload_ids, len(statuses),
-                            )
                             for u in updates:
                                 nm = u["nmID"]
                                 st = statuses.get(nm)
@@ -2611,7 +2805,7 @@ class RepricerEngine:
                                     # отправленной: closed-loop перечитает фактическую цену.
                                     _ok.add(u["_product_pk"])
                                     cache_delete(f"wb_catalog:{nm}")
-                                    logger.warning("nm_id=%s: статус WB не подтверждён (uploadID=%s)", nm, upload_ids)
+                                    logger.warning("nm_id=%s: статус WB не подтверждён", nm)
                                 elif st[0]:
                                     _ok.add(u["_product_pk"])
                                     cache_delete(f"wb_catalog:{nm}")
@@ -2649,7 +2843,7 @@ class RepricerEngine:
                                 _fail.add(u["_product_pk"])
                                 _errors[u["_product_pk"]] = f"401 от Ozon — аккаунт деактивирован: {e}"
                         except Exception as e:
-                            logger.error("Ошибка batch update (uploadID=%s): %s", upload_id, e)
+                            logger.error("Ошибка batch update (%s): %s", account.name, e)
                             for u in updates:
                                 _fail.add(u["_product_pk"])
                                 _errors[u["_product_pk"]] = f"Исключение при отправке: {e}"
@@ -2676,12 +2870,13 @@ class RepricerEngine:
                     if skip == "OUT_OF_STOCK":
                         results["out_of_stock"] += 1
                         results["skipped"] += 1
+                        self._reason_counts["OUT_OF_STOCK"] += 1
                         continue
                     if skip and dec["current_data"] is None:
+                        self._reason_counts[skip] += 1
                         if skip == "CATALOG_UNAVAILABLE":
                             results["catalog_unavailable"] += 1
-                        if skip in ("COOLDOWN", "SKIPPED_INACTIVE", "SKIPPED_QUARANTINE",
-                                                "CATALOG_UNAVAILABLE"):
+                        if skip in self._SKIP_CODES:
                             results["skipped"] += 1
                         else:
                             results["errors"] += 1
@@ -2694,7 +2889,8 @@ class RepricerEngine:
                             product.id in update_fail,
                             error_text=update_errors.get(product.id),
                         )
-                        if reason_code in ["UPDATED", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX", "CLAMPED_TO_MARGIN"]:
+                        self._reason_counts[reason_code] += 1
+                        if reason_code in self._UPDATED_CODES:
                             results["updated"] += 1
                             # Цена применена — ставим в очередь на closed-loop verify + SPP guard (и RRP, и Competitor).
                             if not dry_run:
@@ -2709,9 +2905,12 @@ class RepricerEngine:
                                     "strategy": getattr(product.config, "strategy", None),
                                     "competitor_price": dec.get("snap_competitor_price"),
                                     "competitor_nm_id": dec.get("snap_competitor_nm_id"),
+                                    "competitor_partial": product.config.id in self._competitor_partial,
                                 })
-                        elif reason_code in ["SKIPPED_PROMO", "SKIPPED_INACTIVE", "NO_CHANGE", "COMPETITOR_OOS", "OUT_OF_STOCK", "COOLDOWN", "COOLDOWN_SPP_GUARD"]:
+                        elif reason_code in self._SKIP_CODES:
                             results["skipped"] += 1
+                            if reason_code == "CATALOG_UNAVAILABLE":
+                                results["catalog_unavailable"] += 1
                         else:
                             results["errors"] += 1
                         pending += 1
