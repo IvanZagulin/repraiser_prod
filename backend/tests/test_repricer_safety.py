@@ -357,3 +357,100 @@ class TestCatalogParser:
             # У прокси timeout=15 — проверяем сам механизм на коротком таймауте
             with pytest.raises(asyncio.TimeoutError):
                 asyncio.run(parser._fetch("http://x", timeout=0.05))
+
+
+# ── СПП из одной пары цен каталога ───────────────────────────────────────────
+
+class TestSppSingleSource:
+    def _price_data(self, engine, nm_id, seller, catalog_basic, catalog_final):
+        engine._prefetched_prices[nm_id] = SimpleNamespace(
+            seller_price=Decimal(seller), discounted_price=Decimal(seller), discount=Decimal("0"),
+        )
+        catalog = SimpleNamespace(
+            final_price=Decimal(catalog_final), seller_price=Decimal(catalog_basic), spp=None,
+            is_in_promo=False, total_quantity=5, in_stock=True, catalog_stale=False,
+        )
+        product = SimpleNamespace(nm_id=nm_id, id=1)
+        account = SimpleNamespace(name="Кабинет", is_active=True, wb_api_token="t", marketplace="wb")
+        with patch.object(engine, "_cached_parse_product", new=AsyncMock(return_value=catalog)):
+            return product, asyncio.run(engine._get_current_price_data(product, account))
+
+    def test_exact_spp_and_mismatch_flag(self, db_session):
+        engine = _engine(db_session)
+        # 1С сменила цену 2000 → 1500, каталог ещё отдаёт пару для 2000
+        _, data = self._price_data(engine, 5, seller="1500", catalog_basic="2000", catalog_final="1400")
+        assert data["spp_exact"] == Decimal("30")
+        assert data["catalog_price_mismatch"] is True
+
+    def test_consistent_pair_has_no_mismatch(self, db_session):
+        engine = _engine(db_session)
+        _, data = self._price_data(engine, 6, seller="2000", catalog_basic="2000", catalog_final="1400")
+        assert "catalog_price_mismatch" not in data
+
+    def test_mismatch_estimates_buyer_price_at_api_price(self, db_session):
+        engine = _engine(db_session)
+        product, data = self._price_data(engine, 7, seller="1500", catalog_basic="2000", catalog_final="1400")
+        trusted = engine._trusted_observation(product, data)
+        assert trusted["final_price"] == Decimal("1050.00")  # 1500 × (1 − 30%)
+        assert trusted["catalog_lag"] is True  # снижать по оценке нельзя
+
+    def test_competitor_strategy_uses_catalog_pair_spp(self, db_session):
+        engine = _engine(db_session)
+        config = SimpleNamespace(
+            id=9, competitor_nm_id=None, competitor_select_rule="min_price",
+            competitor_offset_type="rub", competitor_offset_direction="above",
+            competitor_offset_value=Decimal("0"),
+        )
+        current = {
+            "seller_price": Decimal("1500"), "discounted_price": Decimal("1200"),  # несогласовано с final
+            "discount": Decimal("0"), "final_price": Decimal("1050"),
+            "spp": Decimal("30"), "spp_exact": Decimal("30"),
+        }
+        with patch.object(engine, "_get_competitor_price",
+                          new=AsyncMock(return_value=(Decimal("1300"), 1, Decimal("1300")))):
+            new_price, code, *_ = asyncio.run(
+                engine._strategy_competitor(SimpleNamespace(nm_id=1), config, current))
+        assert code == "CALCULATED"
+        # 1300 / 0.7 = 1857.14 → 1858; по старой формуле (1050/1200) вышло бы 1486
+        assert new_price == Decimal("1858")
+
+
+# ── Допуск РРЦ ───────────────────────────────────────────────────────────────
+
+class TestRrpTolerance:
+    def _rrp(self, final, tolerance, wallet=False):
+        engine = RepricerEngine(db=None, user_id=None)
+        engine._user_settings = {}
+        config = SimpleNamespace(
+            rrp_price=Decimal("1000"), rrp_tolerance=Decimal(tolerance),
+            rrp_consider_wallet=wallet, rrp_spp_tiers=[],
+        )
+        current = {"seller_price": Decimal(final), "final_price": Decimal(final),
+                   "discount": Decimal("0"), "spp": Decimal("0")}
+        return asyncio.run(engine._strategy_rrp(
+            SimpleNamespace(nm_id=1, seller_sku="S"), config, current,
+            Decimal("3") if wallet else Decimal("0")))
+
+    def test_price_inside_tolerance_is_left_alone(self):
+        new_price, code, _ = self._rrp("1015", "20")
+        assert (new_price, code) == (None, "NO_CHANGE")
+
+    def test_price_above_tolerance_returns_to_rrp(self):
+        new_price, code, _ = self._rrp("1025", "20")
+        assert code == "CALCULATED"
+        assert new_price == Decimal("1001")
+
+    def test_tolerance_below_minimum_uses_3_rub(self):
+        assert self._rrp("1002", "1")[1] == "NO_CHANGE"
+        assert self._rrp("1004", "1")[1] == "CALCULATED"
+
+    def test_never_below_rrp_whatever_tolerance(self):
+        new_price, code, _ = self._rrp("995", "50")
+        assert code == "CALCULATED"
+        assert new_price == Decimal("1001")
+
+    def test_wallet_price_is_checked_against_corridor(self):
+        # 1040 × 0.97 = 1008.8 ≤ 1000 + 10
+        assert self._rrp("1040", "10", wallet=True)[1] == "NO_CHANGE"
+        # 1060 × 0.97 = 1028.2 > 1010
+        assert self._rrp("1060", "10", wallet=True)[1] == "CALCULATED"
