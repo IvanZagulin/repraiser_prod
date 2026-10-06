@@ -568,10 +568,12 @@ export default function ProductDetailPage() {
                           {config.rrp_price ? fmt(config.rrp_price) + '₽' : '—'}
                         </span>
                       </div>
-                      {config.rrp_tolerance > 0 && (
+                      {config.rrp_price && (
                         <div className="flex justify-between items-center">
-                          <span style={{ color: 'var(--text-3)' }}>Допуск</span>
-                          <span className="font-medium" style={{ color: 'var(--text)' }}>±{fmt(config.rrp_tolerance)}₽</span>
+                          <span style={{ color: 'var(--text-3)' }} title="Ниже РРЦ цена не опускается; выше коридора репрайсер возвращает её к РРЦ">Коридор</span>
+                          <span className="font-medium" style={{ color: 'var(--text)' }}>
+                            {fmt(config.rrp_price)}₽ … +{fmt(Math.max(Number(config.rrp_tolerance) || 0, 3))}₽
+                          </span>
                         </div>
                       )}
                       {config.rrp_consider_wallet && (

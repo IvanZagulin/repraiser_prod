@@ -32,7 +32,8 @@ export default function ConfigModal({ product, onClose }) {
     min_price: product.config?.min_price || '',
     max_price: product.config?.max_price || '',
     rrp_price: product.config?.rrp_price || '',
-    rrp_tolerance: product.config?.rrp_tolerance || '1',
+    // ?? а не ||: сохранённый допуск 0 не должен превращаться в значение по умолчанию
+    rrp_tolerance: product.config?.rrp_tolerance ?? '3',
     rrp_consider_wallet: product.config?.rrp_consider_wallet ?? false,
     competitor_offset_type: product.config?.competitor_offset_type || 'rub',
     competitor_offset_direction: product.config?.competitor_offset_direction || 'below',
@@ -99,7 +100,7 @@ export default function ConfigModal({ product, onClose }) {
       };
       if (strategy === 'rrp') {
         payload.rrp_price = parseFloat(formData.rrp_price);
-        payload.rrp_tolerance = parseFloat(formData.rrp_tolerance);
+        payload.rrp_tolerance = formData.rrp_tolerance === '' ? 3 : parseFloat(formData.rrp_tolerance);
         payload.rrp_consider_wallet = isOzon ? false : formData.rrp_consider_wallet;
       } else {
         payload.competitors = competitors
@@ -221,11 +222,18 @@ export default function ConfigModal({ product, onClose }) {
                     {errors.rrp_price && <p className="text-xs mt-1 text-red-500">{errors.rrp_price}</p>}
                   </div>
                   <div>
-                    <label className="block text-sm mb-1.5" style={{ color: 'var(--text-2)' }}>Допуск (₽)</label>
-                    <input type="number" step="0.01" value={formData.rrp_tolerance}
+                    <label className="block text-sm mb-1.5" style={{ color: 'var(--text-2)' }}>Допуск над РРЦ (₽)</label>
+                    <input type="number" step="0.01" min="0" value={formData.rrp_tolerance}
                       onChange={(e) => { setFormData({ ...formData, rrp_tolerance: e.target.value }); setErrors(p => ({ ...p, rrp_tolerance: undefined })); }}
-                      className="input" placeholder="1" />
-                    <p className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>Диапазон: {formData.rrp_price && formData.rrp_tolerance ? `${parseFloat(formData.rrp_price) - parseFloat(formData.rrp_tolerance)}₽ — ${parseFloat(formData.rrp_price) + parseFloat(formData.rrp_tolerance)}₽` : '—'}</p>
+                      className="input" placeholder="3"
+                      style={errors.rrp_tolerance ? { borderColor: '#ef4444' } : {}} />
+                    {errors.rrp_tolerance && <p className="text-xs mt-1 text-red-500">{errors.rrp_tolerance}</p>}
+                    <p className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
+                      {formData.rrp_price
+                        ? `Цена покупателя${formData.rrp_consider_wallet ? ' с кошельком' : ''}: ${parseFloat(formData.rrp_price)}₽ — ${parseFloat(formData.rrp_price) + Math.max(parseFloat(formData.rrp_tolerance) || 0, 3)}₽. `
+                        : ''}
+                      Ниже РРЦ не опускается; выше коридора — возвращается к РРЦ. Минимум 3 ₽.
+                    </p>
                   </div>
                 </div>
                 {!isOzon && <label className="flex items-start gap-2.5 cursor-pointer select-none">

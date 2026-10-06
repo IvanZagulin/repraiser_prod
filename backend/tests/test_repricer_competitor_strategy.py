@@ -279,6 +279,8 @@ class TestStrategyCompetitorCorridor:
             "final_price": Decimal("1588"),
             "discount": Decimal("0"),
             "spp": Decimal("34"),  # округлённый true_spp
+            # точный СПП из пары цен каталога: 1 - 1588 / 2414
+            "spp_exact": (1 - Decimal("1588") / Decimal("2414")) * 100,
         }
 
         new_seller, reason_code, _msg, comp_price, winner = _run_strategy(
@@ -300,6 +302,7 @@ class TestStrategyCompetitorCorridor:
             "final_price": Decimal("1620"),
             "discount": Decimal("0"),
             "spp": Decimal("34"),
+            "spp_exact": (1 - Decimal("1620") / Decimal("2460")) * 100,
         }
 
         new_seller, reason_code, _msg, _comp_price, _winner = _run_strategy(
@@ -318,6 +321,7 @@ class TestStrategyCompetitorCorridor:
             "final_price": Decimal("1800"),
             "discount": Decimal("0"),
             "spp": Decimal("36"),
+            "spp_exact": (1 - Decimal("1800") / Decimal("2800")) * 100,
         }
 
         new_seller, reason_code, _msg, _comp_price, _winner = _run_strategy(
@@ -327,8 +331,8 @@ class TestStrategyCompetitorCorridor:
         assert reason_code == "CALCULATED"
         assert new_seller == Decimal("2478")
 
-    def test_falls_back_to_stored_spp_without_discounted(self):
-        """Если discounted_price отсутствует (напр. dry_run) — берём хранимый СПП."""
+    def test_falls_back_to_stored_spp_without_exact(self):
+        """Если точного СПП нет (напр. dry_run) — берём хранимый СПП."""
         engine = _make_engine_with_settings()
         config = _make_config(offset_type="rub", offset_direction="above", offset_value="0")
         current_data = {

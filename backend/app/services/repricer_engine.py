@@ -324,9 +324,13 @@ class RepricerEngine:
     # выходила на 0.2 ₽ ниже РРЦ, после чего SPP Guard откатывал цену —
     # и так каждые 30 минут (пинг-понг 3152 ↔ 3169 у «Кот Барсик»).
     _RRP_FLOOR_MARGIN_RUB = Decimal("1")
-    # Коридор над РРЦ, внутри которого цену не трогаем: иначе она дёргается
-    # на 1-15 ₽ каждый прогон из-за округления СПП.
-    _RRP_DEADBAND_PCT = Decimal("1.0")
+    # Коридор над РРЦ, внутри которого цену не трогаем: РРЦ … РРЦ + допуск
+    # (rrp_tolerance из настроек товара). Ниже РРЦ цена не опускается никогда.
+    # Минимум коридора 3 ₽: цель ставится на РРЦ + 1 ₽, а цена продавца в
+    # целых рублях и кошелёк дают факт до ~2 ₽ над РРЦ — уже́ коридор цена
+    # дёргалась бы на рубль каждый прогон. Раньше коридор был фиксированным
+    # +1% и допуск из настроек не читался.
+    _RRP_MIN_CORRIDOR_RUB = Decimal("3")
     # Повышение до РРЦ одним шагом (ночная выгрузка 1С роняет цену на ~22%,
     # при старом лимите +25% товар оставался ниже РРЦ до следующего прогона).
     _RRP_MAX_RAISE_RATIO = Decimal("1.6")
@@ -796,11 +800,16 @@ class RepricerEngine:
             seller_discount = Decimal(str(price_data.discount or 0))
             catalog_final = catalog_product.final_price
             catalog_basic = Decimal(str(getattr(catalog_product, "seller_price", 0) or 0))
+            # spp_exact — без округления, для обратного расчёта цены продавца
+            # (округлённый до 0.01 СПП давал «застывшую точку» у round_up).
+            spp_exact = None
             if catalog_final > 0 and catalog_basic > 0 and seller_discount < 100:
                 base = catalog_basic * (1 - seller_discount / 100)
-                true_spp = ((1 - catalog_final / base) * 100).quantize(Decimal("0.01"))
+                spp_exact = (1 - catalog_final / base) * 100
+                true_spp = spp_exact.quantize(Decimal("0.01"))
             elif catalog_final > 0 and discounted_price > 0:
-                true_spp = ((1 - catalog_final / discounted_price) * 100).quantize(Decimal("0.01"))
+                spp_exact = (1 - catalog_final / discounted_price) * 100
+                true_spp = spp_exact.quantize(Decimal("0.01"))
             elif catalog_product.total_quantity == 0:
                 # Реально OOS: stock=0 и final=0 — это нормально, дальше отфильтруется.
                 true_spp = Decimal(0)
@@ -814,16 +823,28 @@ class RepricerEngine:
                 )
                 return None
 
-            return {
+            result = {
                 'seller_price': price_data.seller_price,
                 'discounted_price': discounted_price,
                 'discount': price_data.discount,
                 'final_price': catalog_product.final_price,
                 'spp': true_spp,
+                'spp_exact': spp_exact,
                 'is_in_promo': catalog_product.is_in_promo,
                 'total_quantity': catalog_product.total_quantity,
                 'name': getattr(catalog_product, "name", None),
             }
+            # Цена продавца в каталоге и в API должны совпадать. Если нет —
+            # каталог ещё показывает пару цен для прежней цены продавца
+            # (1С или ручная правка только что сменили цену).
+            api_seller = Decimal(str(price_data.seller_price or 0))
+            if (
+                catalog_final > 0 and catalog_basic > 0 and api_seller > 0
+                and abs(catalog_basic - api_seller) / api_seller > self._CATALOG_LAG_PRICE_DELTA
+            ):
+                result['catalog_price_mismatch'] = True
+                result['catalog_basic'] = catalog_basic
+            return result
 
         except Exception as e:
             logger.error("Ошибка получения данных для nm_id=%s: %s", product.nm_id, e)
@@ -845,6 +866,11 @@ class RepricerEngine:
             if above_min and below_max:
                 return getattr(tier, 'seller_price', None), tier.rrp_price
         return None, config.rrp_price
+
+    def _rrp_corridor_top(self, config, rrp: Decimal) -> Decimal:
+        """Верхняя граница коридора цены покупателя: РРЦ + допуск (не меньше 3 ₽)."""
+        tolerance = Decimal(str(getattr(config, "rrp_tolerance", None) or 0))
+        return rrp + max(tolerance, self._RRP_MIN_CORRIDOR_RUB)
 
     def _rrp_floor_target(self, min_final: Decimal) -> Decimal:
         """Целевая цена покупателя, которая после округления WB не опустится ниже min_final."""
@@ -881,6 +907,23 @@ class RepricerEngine:
         if cur_base <= 0 or cur_final <= 0 or cur_spp is None:
             return data
 
+        if current_data.get("catalog_price_mismatch"):
+            # Цена продавца в API уже новая, а каталог отдаёт пару цен для
+            # прежней. СПП из этой пары (одна карточка, один размер) верен для
+            # прежней цены; цену покупателя при текущей цене оцениваем по нему.
+            # Снижать по оценке не даём (catalog_lag), наблюдение не обновляем.
+            spp_pair = Decimal(str(current_data.get("spp_exact", cur_spp)))
+            est_final = (cur_base * (1 - spp_pair / 100)).quantize(Decimal("0.01"))
+            logger.warning(
+                "nm_id=%s: цена продавца в каталоге %s ≠ в API %s — каталог отстаёт; "
+                "СПП %.2f%% из пары каталога, расчётная цена покупателя %s",
+                product.nm_id, current_data.get("catalog_basic"), current_data.get("seller_price"),
+                spp_pair, est_final,
+            )
+            data["final_price"] = est_final
+            data["catalog_lag"] = True
+            return data
+
         obs = cache_get(key)
         if obs:
             try:
@@ -905,6 +948,7 @@ class RepricerEngine:
                         product.nm_id, obs_base, cur_base, cur_final, obs_spp, int(age // 60), est_final,
                     )
                     data["spp"] = obs_spp
+                    data["spp_exact"] = obs_spp
                     data["final_price"] = est_final
                     data["catalog_lag"] = True
                     return data
@@ -1064,10 +1108,11 @@ class RepricerEngine:
                 f"цель={rrp}₽, кошелёк={wallet_pct}%"
             )
 
-            if rrp <= current_effective <= rrp * (1 + self._RRP_DEADBAND_PCT / 100):
+            corridor_top = self._rrp_corridor_top(config, rrp)
+            if rrp <= current_effective <= corridor_top:
                 return None, "NO_CHANGE", (
                     f"Цена с кошельком {current_effective:.2f}₽ в коридоре РРЦ "
-                    f"({rrp}₽ … +{self._RRP_DEADBAND_PCT}%)"
+                    f"({rrp}₽ … {corridor_top}₽)"
                 )
 
             # Целевая финальная цена до применения кошелька, с запасом на округление WB
@@ -1090,9 +1135,10 @@ class RepricerEngine:
                 f"цель={rrp}₽"
             )
 
-            if rrp <= current_final <= rrp * (1 + self._RRP_DEADBAND_PCT / 100):
+            corridor_top = self._rrp_corridor_top(config, rrp)
+            if rrp <= current_final <= corridor_top:
                 return None, "NO_CHANGE", (
-                    f"Цена {current_final}₽ в коридоре РРЦ ({rrp}₽ … +{self._RRP_DEADBAND_PCT}%)"
+                    f"Цена {current_final}₽ в коридоре РРЦ ({rrp}₽ … {corridor_top}₽)"
                 )
 
             target_final = self._rrp_floor_target(rrp)
@@ -1241,21 +1287,21 @@ class RepricerEngine:
 
             target_final = self._competitor_target_final(config, competitor_price)
 
-            # Эффективный СПП берём из живого снапшота (final/discounted) БЕЗ
-            # округления до целого процента. Хранимый true_spp округлён (строка
-            # _get_current_price_data), из-за чего обратный расчёт давал ту же
-            # цену продавца, что уже стоит, и зазор в несколько рублей до
-            # конкурента не закрывался никогда — «застывшая точка».
-            # Пример: артикул 3891012 — финальная 1588₽ при конкуренте 1593₽ и
-            # СПП=34%: round_up(1593/0.66)=2414 == текущая цена → NO_CHANGE
-            # навечно, хотя по факту мы на 5₽ дешевле конкурента.
+            # СПП для обратного расчёта — из согласованной пары цен каталога
+            # (цена продавца и цена покупателя одной карточки и одного размера),
+            # без округления. Раньше он считался как цена покупателя из каталога
+            # к цене продавца из API: числа разного возраста. После смены цены
+            # (1С, ручная правка) СПП выходил ложным (6.7% вместо 30%), и цена
+            # покупателя уходила до −25% от цели. Без округления — иначе
+            # «застывшая точка»: артикул 3891012, финальная 1588₽ при конкуренте
+            # 1593₽, round_up(1593/0.66)=2414 == текущая цена → NO_CHANGE навечно.
             current_final = current_data.get('final_price') or Decimal(0)
-            discounted = current_data.get('discounted_price') or Decimal(0)
             calc_spp = spp
-            if discounted > 0 and current_final > 0:
-                eff_spp = (Decimal(1) - current_final / discounted) * Decimal(100)
-                if self._SPP_MIN <= eff_spp < Decimal(100):
-                    calc_spp = eff_spp
+            spp_exact = current_data.get('spp_exact')
+            if spp_exact is not None:
+                spp_exact = Decimal(str(spp_exact))
+                if self._SPP_MIN <= spp_exact < Decimal(100):
+                    calc_spp = spp_exact
 
             move = "lower" if current_final > target_final else "raise"
             if current_final > 0 and self._competitor_in_corridor(current_final, target_final):
