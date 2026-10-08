@@ -72,6 +72,9 @@ export const updateAccount = (id, data) =>
 export const deleteAccount = (id) =>
   api.delete(`/api/accounts/${id}`);
 
+export const checkAccountCredentials = (id) =>
+  api.post(`/api/accounts/${id}/check-credentials`);
+
 export const syncAccountCatalog = (id) =>
   api.post(`/api/accounts/${id}/sync-catalog`);
 export const syncAccountProducts = (id) =>

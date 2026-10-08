@@ -948,6 +948,43 @@ class WBAPIClient:
         logger.info(f"get_cards_batch_by_skus: ????????? {len(seller_skus)}, ??????? {len(result)}")
         return result
 
+    async def check_token(self) -> Tuple[bool, str]:
+        """
+        Быстрая проверка живости токена: запрашиваем одну карточку у Content API.
+
+        В отличие от get_all_cards здесь нет retry — это интерактивная проверка
+        из UI, пользователь ждёт ответа. Возвращает (ок, человекочитаемая причина).
+        """
+        content_api_url = "https://content-api.wildberries.ru"
+        payload = {
+            "settings": {
+                "sort": {"ascending": True},
+                "filter": {"withPhoto": -1},
+                "cursor": {"limit": 1},
+            }
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                await self._wait_for_limit("content")
+                response = await client.post(
+                    f"{content_api_url}/content/v2/get/cards/list",
+                    json=payload,
+                    headers=self._get_headers(),
+                )
+        except httpx.RequestError as e:
+            return False, f"Не удалось связаться с WB: {e}"
+
+        if response.status_code == 200:
+            return True, "Ключ рабочий — WB отвечает на запросы"
+        if response.status_code in (401, 403):
+            return False, (
+                "WB отклонил ключ (нет доступа). Проверьте, что токен не отозван "
+                "и у него включена категория «Контент» и «Цены и скидки»."
+            )
+        if response.status_code == 429:
+            return False, "WB временно ограничил запросы (429). Повторите проверку через минуту."
+        return False, f"WB вернул ошибку {response.status_code}: {response.text[:200]}"
+
     async def search_cards(self, text_search: str, limit: int = 100) -> List[dict]:
         """
         ????? ???????? ??????? ?? nmID ??? ???????? ???????? ????? Content API

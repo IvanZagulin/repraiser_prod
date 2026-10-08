@@ -161,6 +161,27 @@ class OzonAPIClient:
 
         raise OzonAPIError(f"Ozon API request failed after retries: {endpoint}")
 
+    async def check_credentials(self) -> tuple[bool, str]:
+        """
+        Быстрая проверка пары Client-Id / Api-Key: запрашиваем один товар.
+
+        Интерактивная проверка из UI, поэтому без ретраев по 429.
+        Возвращает (ок, человекочитаемая причина).
+        """
+        payload = {"filter": {"visibility": "ALL"}, "limit": 1}
+        try:
+            await self._make_request("/v3/product/list", payload, max_retries=0)
+        except OzonAuthError:
+            return False, (
+                "Ozon отклонил ключ. Проверьте Client-Id и Api-Key "
+                "в личном кабинете Ozon → Настройки → Seller API."
+            )
+        except OzonRateLimitError:
+            return False, "Ozon временно ограничил запросы. Повторите проверку через минуту."
+        except OzonAPIError as e:
+            return False, f"Ozon вернул ошибку: {e}"
+        return True, "Ключ рабочий — Ozon отвечает на запросы"
+
     async def get_product_info(
         self,
         *,
