@@ -4,6 +4,12 @@ from app.services.proxy_pool import proxy_pool, ProxyPool, ProxyConfig
 from app.services.catalog_parser import catalog_parser, CatalogParser, ProductData, CatalogParseError
 from app.services.wb_api import create_wb_client, WBAPIClient, WBAPIError, RateLimitError, PriceData
 from app.services.ozon_api import create_ozon_client, OzonAPIClient, OzonAPIError, OzonAuthError, OzonPriceData
+from app.services.ozon_buyer_price import (
+    BuyerPriceEstimate,
+    estimate_buyer_price,
+    estimate_from_index,
+    estimate_from_price_data,
+)
 from app.services.telegram import telegram_notifier, TelegramNotifier
 from app.services.repricer_engine import RepricerEngine
 
@@ -32,7 +38,13 @@ __all__ = [
     "OzonAPIError",
     "OzonAuthError",
     "OzonPriceData",
-    
+
+    # Ozon: цена покупателя из ценовых индексов
+    "BuyerPriceEstimate",
+    "estimate_buyer_price",
+    "estimate_from_index",
+    "estimate_from_price_data",
+
     # Telegram
     "telegram_notifier",
     "TelegramNotifier",
