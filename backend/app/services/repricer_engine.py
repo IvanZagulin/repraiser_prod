@@ -894,6 +894,32 @@ class RepricerEngine:
         """Целевая цена покупателя, которая после округления WB не опустится ниже min_final."""
         return Decimal(self._round_up(min_final)) + self._RRP_FLOOR_MARGIN_RUB
 
+    def _nudge_rrp_seller_down_if_safe(
+        self,
+        calculated_seller: Decimal,
+        current_seller: Decimal,
+        current_final: Decimal,
+        rrp: Decimal,
+        wallet_factor: Decimal = Decimal("1"),
+    ) -> Decimal:
+        """Убирает тупик двойного округления у верхней границы РРЦ.
+
+        Иногда целевая цена покупателя и обратный расчёт цены продавца оба
+        округляются вверх. В результате стратегия видит превышение коридора,
+        но снова получает текущую цену продавца. Один рубль можно снять только
+        если свежая согласованная пара seller/final показывает, что расчётная
+        цена с кошельком после этого останется не ниже РРЦ.
+        """
+        if current_seller <= 1 or current_final <= 0 or calculated_seller < current_seller:
+            return calculated_seller
+        lower_seller = current_seller - Decimal("1")
+        predicted_effective = (
+            current_final * lower_seller / current_seller * wallet_factor
+        )
+        if predicted_effective >= rrp:
+            return lower_seller
+        return calculated_seller
+
     @staticmethod
     def _discounted(seller_price, discount) -> Decimal:
         """Цена после скидки продавца (база, от которой WB считает СПП)."""
@@ -1138,6 +1164,14 @@ class RepricerEngine:
 
             try:
                 new_seller_price = self._calculate_seller_price_from_final(target_final, spp, seller_discount)
+                if current_effective > corridor_top:
+                    new_seller_price = self._nudge_rrp_seller_down_if_safe(
+                        new_seller_price,
+                        current_data.get('seller_price') or Decimal(0),
+                        current_final,
+                        rrp,
+                        wallet_factor,
+                    )
                 reason_msg = (
                     f"РРЦ+кошелёк стратегия: РРЦ {rrp}₽, кошелёк {wallet_pct}%, "
                     f"целевая до кошелька {target_final:.2f}₽, "
@@ -1163,6 +1197,13 @@ class RepricerEngine:
 
             try:
                 new_seller_price = self._calculate_seller_price_from_final(target_final, spp, seller_discount)
+                if current_final > corridor_top:
+                    new_seller_price = self._nudge_rrp_seller_down_if_safe(
+                        new_seller_price,
+                        current_data.get('seller_price') or Decimal(0),
+                        current_final,
+                        rrp,
+                    )
                 reason_msg = (
                     f"РРЦ стратегия: целевая финальная {target_final}₽, "
                     f"новая цена продавца {new_seller_price}₽"
@@ -3227,4 +3268,3 @@ class RepricerEngine:
                     owned_product_lock_ids,
                     self._product_lock_owner,
                 )
-

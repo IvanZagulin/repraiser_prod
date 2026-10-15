@@ -469,6 +469,46 @@ class TestRrpTolerance:
         assert code == "CALCULATED"
         assert new_price == Decimal("838")
 
+    def test_wallet_rrp_removes_double_rounding_overage(self):
+        engine = RepricerEngine(db=None, user_id=None)
+        engine._user_settings = {}
+        config = SimpleNamespace(
+            rrp_price=Decimal("4789"), rrp_tolerance=Decimal("1"),
+            rrp_consider_wallet=True, rrp_spp_tiers=[],
+        )
+        current = {
+            "seller_price": Decimal("5951"), "final_price": Decimal("4939"),
+            "discount": Decimal("0"), "spp": Decimal("17.01"),
+        }
+        new_price, code, _ = asyncio.run(engine._strategy_rrp(
+            SimpleNamespace(nm_id=1, seller_sku="3887331"),
+            config,
+            current,
+            Decimal("3"),
+        ))
+        assert code == "CALCULATED"
+        assert new_price == Decimal("5950")
+
+    def test_wallet_rrp_does_not_nudge_below_floor(self):
+        engine = RepricerEngine(db=None, user_id=None)
+        engine._user_settings = {}
+        config = SimpleNamespace(
+            rrp_price=Decimal("812"), rrp_tolerance=Decimal("1"),
+            rrp_consider_wallet=True, rrp_spp_tiers=[],
+        )
+        current = {
+            "seller_price": Decimal("1118"), "final_price": Decimal("838"),
+            "discount": Decimal("0"), "spp": Decimal("25.04"),
+        }
+        new_price, code, _ = asyncio.run(engine._strategy_rrp(
+            SimpleNamespace(nm_id=1, seller_sku="3892624"),
+            config,
+            current,
+            Decimal("3"),
+        ))
+        assert code == "NO_CHANGE"
+        assert new_price is None
+
     def test_wallet_price_is_checked_against_corridor(self):
         # 1040 × 0.97 = 1008.8 ≤ 1000 + 10
         assert self._rrp("1040", "10", wallet=True)[1] == "NO_CHANGE"
