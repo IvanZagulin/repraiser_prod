@@ -20,6 +20,7 @@ from app.models.app_setting import AppSetting
 from app.services import (
     catalog_parser, create_wb_client, create_ozon_client, telegram_notifier
 )
+from app.services.ozon_buyer_price import estimate_from_price_data
 from app.utils.jwt import is_token_expired
 from app.redis_client import (
     acquire_product_locks,
@@ -82,6 +83,42 @@ class RepricerEngine:
     def _marketplace(self, account: Optional[Account]) -> str:
         return getattr(account, "marketplace", "wb") or "wb"
 
+    def _ozon_buyer_price(self, price_data):
+        """Цена покупателя на Ozon и доля доинвестирования, поданная как СПП.
+
+        Возвращает (цена_покупателя | None, спп, оценка | None). None в первом
+        элементе означает «витрину посчитать не удалось»: у товара нет ценовых
+        индексов либо они противоречат друг другу. В этом случае вызывающий код
+        оставляет прежнее поведение и запрещает снижение — опускать цену по
+        неизвестной витрине опаснее, чем не трогать её вовсе.
+        """
+        estimate = estimate_from_price_data(price_data)
+        if estimate is None:
+            return None, Decimal(0), None
+
+        if estimate.spread_pct > self._OZON_BUYER_PRICE_MAX_SPREAD_PCT:
+            logger.warning(
+                "Ozon product_id=%s: ценовые индексы разошлись на %.2f%% "
+                "(%s) — цену покупателя не используем",
+                price_data.product_id, estimate.spread_pct, estimate.per_source,
+            )
+            return None, Decimal(0), estimate
+
+        ratio = estimate.ratio_to(price_data.seller_price)
+        if not ratio or ratio <= 0:
+            return None, Decimal(0), estimate
+
+        implied_spp = (Decimal(1) - ratio) * 100
+        if not (self._SPP_MIN <= implied_spp <= self._SPP_MAX):
+            logger.warning(
+                "Ozon product_id=%s: доинвестирование %.2f%% вне допустимого "
+                "диапазона [%s; %s] — цену покупателя не используем",
+                price_data.product_id, implied_spp, self._SPP_MIN, self._SPP_MAX,
+            )
+            return None, Decimal(0), estimate
+
+        return estimate.buyer_price, implied_spp, estimate
+
     async def _get_ozon_current_price_data(self, product: Product, account: Account) -> Optional[Dict]:
         try:
             async with create_ozon_client(account.ozon_client_id, account.ozon_api_key) as client:
@@ -107,12 +144,33 @@ class RepricerEngine:
                         name = info.get("name") or name
                         image_url = _OzClient.extract_primary_image(info)
 
+                # Цена покупателя на Ozon ниже нашей: маркетплейс доинвестирует
+                # скидку (медиана по кабинету — 65% от выставленной цены). В API
+                # её нет, но она восстанавливается из ценовых индексов. Без этого
+                # движок считал ценой покупателя нашу собственную цену и, целясь
+                # в РРЦ, опускал витрину примерно на треть ниже цели.
+                #
+                # Долю доинвестирования подаём как СПП: вся обратная математика
+                # (_calculate_seller_price_from_final) тогда работает без правок,
+                # ровно как для WB.
+                buyer_price, implied_spp, buyer_estimate = self._ozon_buyer_price(price_data)
+
                 return {
                     "seller_price": price_data.seller_price,
-                    "discounted_price": price_data.final_price,
-                    "discount": price_data.ozon_discount_pct,
-                    "final_price": price_data.final_price,
-                    "spp": Decimal(0),
+                    "discounted_price": buyer_price or price_data.final_price,
+                    # k уже включает скидку продавца, иначе она учлась бы дважды
+                    "discount": Decimal(0) if buyer_price else price_data.ozon_discount_pct,
+                    "final_price": buyer_price or price_data.final_price,
+                    "spp": implied_spp,
+                    # Витрина неизвестна — разрешаем только повышение
+                    **({} if buyer_price else {"catalog_fallback": True}),
+                    "ozon_buyer_price": float(buyer_price) if buyer_price else None,
+                    "ozon_buyer_price_spread": (
+                        float(buyer_estimate.spread_pct) if buyer_estimate else None
+                    ),
+                    "ozon_buyer_price_sources": (
+                        buyer_estimate.sources if buyer_estimate else 0
+                    ),
                     "is_in_promo": False,
                     "total_quantity": 1,
                     "name": name,
@@ -266,6 +324,12 @@ class RepricerEngine:
     # но на практике не встречаются — ставим нижнюю границу -10%.
     _SPP_MIN = Decimal("-10")
     _SPP_MAX = Decimal("95")
+
+    # Ozon: оценку цены покупателя принимаем, только если независимые ценовые
+    # индексы сошлись. На живом кабинете расхождение укладывается в 5% у
+    # 12 303 из 12 311 товаров, так что порог почти ничего не отсекает, но
+    # защищает от единичных карточек с противоречивыми индексами.
+    _OZON_BUYER_PRICE_MAX_SPREAD_PCT = Decimal("5")
 
     # Стратегия competitor должна стремиться к рассчитанной цене конкурента
     # (с учетом offset из конфига). Экономические ограничения применяются ниже:
@@ -1100,20 +1164,30 @@ class RepricerEngine:
             return None, "SKIPPED_INACTIVE", "РРЦ не настроен"
 
         is_ozon = getattr(product, 'account', None) and self._marketplace(product.account) == "ozon"
-        if is_ozon:
+        if is_ozon and not current_data.get('ozon_buyer_price'):
+            # Витрину Ozon посчитать не удалось (нет ценовых индексов либо они
+            # противоречат друг другу). Работаем по старой схеме, где РРЦ
+            # понимается как цена продавца; снижение при этом заблокировано
+            # флагом catalog_fallback.
             current_seller = current_data.get('seller_price') or Decimal(0)
             if abs(current_seller - rrp) <= self._TARGET_EPSILON_RUB:
                 return None, "NO_CHANGE", f"Цена продавца уже равна РРЦ ({current_seller}₽)"
             return (
                 rrp,
                 "CALCULATED",
-                f"РРЦ стратегия: целевая цена продавца {rrp}₽, текущая {current_seller}₽",
+                f"РРЦ стратегия (витрина Ozon неизвестна): целевая цена продавца "
+                f"{rrp}₽, текущая {current_seller}₽",
             )
+
+        # Дальше Ozon идёт общим путём: РРЦ — это цена ВИТРИНЫ, а не наша цена.
+        # Доля доинвестирования Ozon уже подана как СПП, поэтому обратный расчёт
+        # цены продавца работает тот же, что и для WB.
 
         current_final = current_data['final_price']
         seller_discount = current_data.get('discount') or Decimal(0)
 
-        consider_wallet = bool(getattr(config, 'rrp_consider_wallet', False))
+        # Кошелёк — механика WB; на Ozon её нет, даже если флаг включён.
+        consider_wallet = bool(getattr(config, 'rrp_consider_wallet', False)) and not is_ozon
 
         if consider_wallet and wallet_pct > 0:
             # Эффективная цена с учётом кошелька WB
