@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 import httpx
 
@@ -27,6 +27,20 @@ def _to_decimal(value: Any, default: str = "0") -> Decimal:
         return Decimal(str(value))
     except Exception:
         return Decimal(default)
+
+
+def _index_block(raw: Any) -> Dict[str, Decimal]:
+    """Нормализует блок ценового индекса.
+
+    У Ozon два написания одних и тех же полей: /v5/product/info/prices отдаёт
+    `min_price`, а /v3/product/info/list — `minimal_price`. Разбираем оба,
+    чтобы вызывающий код не зависел от того, каким методом получены данные.
+    """
+    data = raw or {}
+    return {
+        "min_price": _to_decimal(data.get("min_price") or data.get("minimal_price")),
+        "index_value": _to_decimal(data.get("price_index_value")),
+    }
 
 
 class OzonPriceData:
@@ -60,12 +74,38 @@ class OzonPriceData:
         self.currency_code = price.get("currency_code") or "RUB"
 
         price_indexes = raw_data.get("price_indexes") or {}
-        ozon_idx = price_indexes.get("ozon_index_data") or {}
-        ext_idx = price_indexes.get("external_index_data") or {}
-        self.price_index = _to_decimal(ozon_idx.get("price_index_value"))
-        self.ozon_min_price = _to_decimal(ozon_idx.get("min_price"))
-        self.external_min_price = _to_decimal(ext_idx.get("min_price"))
+        ozon_idx = _index_block(price_indexes.get("ozon_index_data"))
+        ext_idx = _index_block(price_indexes.get("external_index_data"))
+        self_idx = _index_block(price_indexes.get("self_marketplaces_index_data"))
+
+        # Минимальная цена этого же товара у других продавцов НА Ozon
+        self.ozon_min_price = ozon_idx["min_price"]
+        self.ozon_index_value = ozon_idx["index_value"]
+        # Минимальная цена на других площадках (WB, Я.Маркет и т.д.)
+        self.external_min_price = ext_idx["min_price"]
+        self.external_index_value = ext_idx["index_value"]
+        # Наша же цена на других площадках
+        self.self_mp_min_price = self_idx["min_price"]
+        self.self_mp_index_value = self_idx["index_value"]
+
+        # Историческое имя: раньше здесь был только ozon-индекс. Оставлено,
+        # т.к. на него завязан repricer_engine (ключ "ozon_price_index").
+        self.price_index = self.ozon_index_value
         self.color_index = price_indexes.get("color_index") or ""
+
+        # Комиссии и сборы — приходят в том же ответе, нужны для защиты маржи
+        commissions = raw_data.get("commissions") or {}
+        self.commissions = commissions
+        self.sales_percent_fbo = _to_decimal(commissions.get("sales_percent_fbo"))
+        self.sales_percent_fbs = _to_decimal(commissions.get("sales_percent_fbs"))
+        self.acquiring = _to_decimal(raw_data.get("acquiring"))
+        self.vat = _to_decimal(price.get("vat"))
+
+        # Акции, в которых товар сейчас участвует
+        marketing_actions = raw_data.get("marketing_actions") or {}
+        self.marketing_actions = marketing_actions.get("actions") or []
+        self.ozon_actions_exist = bool(marketing_actions.get("ozon_actions_exist"))
+        self.auto_action_enabled = bool(price.get("auto_action_enabled"))
 
     @property
     def seller_price(self) -> Decimal:
@@ -98,8 +138,19 @@ class OzonPriceData:
             "currency_code": self.currency_code,
             "price_index": float(self.price_index),
             "ozon_min_price": float(self.ozon_min_price),
+            "ozon_index_value": float(self.ozon_index_value),
             "external_min_price": float(self.external_min_price),
+            "external_index_value": float(self.external_index_value),
+            "self_mp_min_price": float(self.self_mp_min_price),
+            "self_mp_index_value": float(self.self_mp_index_value),
             "color_index": self.color_index,
+            "sales_percent_fbo": float(self.sales_percent_fbo),
+            "sales_percent_fbs": float(self.sales_percent_fbs),
+            "acquiring": float(self.acquiring),
+            "vat": float(self.vat),
+            "auto_action_enabled": self.auto_action_enabled,
+            "ozon_actions_exist": self.ozon_actions_exist,
+            "marketing_actions": self.marketing_actions,
         }
 
 
@@ -257,6 +308,63 @@ class OzonAPIClient:
         result = data.get("result") or data
         items = result.get("items") or []
         return [OzonPriceData(item) for item in items]
+
+    async def iter_all_prices(
+        self,
+        *,
+        visibility: str = "IN_SALE",
+        page_size: int = 1000,
+        pause: float = 0.2,
+        max_pages: int = 200,
+    ) -> AsyncIterator[List[OzonPriceData]]:
+        """Выгружает цены всего кабинета страницами по курсору.
+
+        Ozon отдаёт максимум 1000 товаров за запрос и возвращает `cursor`
+        для следующей страницы. Кабинет на 12 тысяч товаров — это 13 запросов,
+        лимит в 50 RPS на Client-Id так не задеть, но небольшая пауза между
+        страницами оставлена: запрос тяжёлый, и его делят с репрайсером.
+
+        `max_pages` — страховка от зацикливания, если Ozon однажды начнёт
+        отдавать неизменный курсор вместо пустой страницы.
+        """
+        page_size = min(max(page_size, 1), 1000)
+        cursor = ""
+        seen_cursors = set()
+
+        for page in range(max_pages):
+            payload: Dict[str, Any] = {
+                "filter": {"visibility": visibility},
+                "limit": page_size,
+            }
+            if cursor:
+                payload["cursor"] = cursor
+
+            data = await self._make_request("/v5/product/info/prices", payload)
+            result = data.get("result") or data
+            items = result.get("items") or []
+            if not items:
+                return
+
+            yield [OzonPriceData(item) for item in items]
+
+            cursor = result.get("cursor") or ""
+            # Последняя страница: курсора нет либо товаров меньше размера страницы.
+            if not cursor or len(items) < page_size:
+                return
+            if cursor in seen_cursors:
+                logger.warning(
+                    "Ozon вернул повторяющийся курсор на странице %s — "
+                    "останавливаем выгрузку, чтобы не зациклиться", page,
+                )
+                return
+            seen_cursors.add(cursor)
+
+            if pause:
+                await asyncio.sleep(pause)
+
+        logger.warning(
+            "Ozon: достигнут предел в %s страниц, выгрузка оборвана", max_pages,
+        )
 
     async def update_prices(self, price_updates: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not price_updates:

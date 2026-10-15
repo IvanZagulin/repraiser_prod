@@ -32,6 +32,31 @@ class PriceSnapshot(Base):
     # Статус товара
     is_in_promo = Column(Boolean, default=False, nullable=False, comment="Участвует в акции WB")
     total_quantity = Column(Integer, nullable=True, comment="Остаток на складах WB")
+
+    # --- Ozon --------------------------------------------------------------
+    # Заполняются задачей ozon.sync_prices и остаются пустыми для WB-товаров.
+    old_price = Column(Numeric(10, 2), nullable=True, comment="Ozon: цена до скидки")
+    min_price = Column(Numeric(10, 2), nullable=True, comment="Ozon: минимальная цена товара")
+
+    ozon_competitor_min_price = Column(Numeric(10, 2), nullable=True,
+                                       comment="Ozon: минимум конкурентов на самом Ozon")
+    ozon_price_index = Column(Numeric(6, 3), nullable=True, comment="Ozon: индекс к конкурентам на Ozon")
+    external_competitor_min_price = Column(Numeric(10, 2), nullable=True,
+                                           comment="Ozon: минимум на других площадках")
+    external_price_index = Column(Numeric(6, 3), nullable=True, comment="Ozon: индекс к другим площадкам")
+    self_mp_min_price = Column(Numeric(10, 2), nullable=True,
+                               comment="Ozon: наша же цена на других площадках")
+    self_mp_price_index = Column(Numeric(6, 3), nullable=True, comment="Ozon: индекс к нашей цене на других МП")
+
+    buyer_price_estimate = Column(Numeric(10, 2), nullable=True,
+                                  comment="Ozon: расчётная цена покупателя (с Ozon Картой)")
+    buyer_price_spread_pct = Column(Numeric(6, 2), nullable=True,
+                                    comment="Ozon: расхождение оценок между индексами, % (мера доверия)")
+    buyer_price_sources = Column(Integer, nullable=True,
+                                 comment="Ozon: сколько индексов участвовало в оценке")
+    coinvest_ratio = Column(Numeric(6, 4), nullable=True,
+                            comment="Ozon: k = цена покупателя / цена продавца")
+    commission_percent = Column(Numeric(5, 2), nullable=True, comment="Ozon: комиссия FBS, %")
     
     # Метаданные
     snapshot_at = Column(DateTime, default=_utcnow, nullable=False, index=True, comment="Время снимка")
