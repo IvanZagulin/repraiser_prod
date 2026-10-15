@@ -764,3 +764,46 @@ class TestCompetitorCooldownSnapshots:
         assert first["skip_code"] == "COMPETITOR_CONFIRM"
         assert second["needs_update"] is True
         assert second["new_price"] == Decimal("1334")
+
+    def test_same_competitor_confirmation_survives_spp_change(
+        self, db_session, test_product, test_product_config,
+    ):
+        engine = RepricerEngine(db=db_session, user_id=None)
+        engine._user_settings = {}
+        test_product_config.strategy = "competitor"
+        test_product_config.competitor_nm_id = 577768295
+        test_product_config.competitor_offset_type = "rub"
+        test_product_config.competitor_offset_direction = "above"
+        test_product_config.competitor_offset_value = Decimal("0")
+        test_product_config.min_price = Decimal("300")
+        test_product_config.max_price = None
+        test_product_config.skip_margin_check = True
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        db_session.add(PriceSnapshot(
+            product_id=test_product.id, seller_price=Decimal("1200"),
+            final_price=Decimal("900"), spp=Decimal("25"),
+            competitor_price=Decimal("1000"), competitor_nm_id=577768295,
+            total_quantity=1, snapshot_at=now,
+        ))
+        db_session.commit()
+        db_session.refresh(test_product)
+        run = RepricerRun(run_type="manual", status="running", started_at=now)
+        db_session.add(run)
+        db_session.commit()
+
+        first_data = {
+            "seller_price": Decimal("1200"), "discounted_price": Decimal("1200"),
+            "final_price": Decimal("900"), "discount": Decimal("0"),
+            "spp": Decimal("25"), "is_in_promo": False, "total_quantity": 1,
+        }
+        second_data = dict(first_data, spp=Decimal("24"))
+        with patch("app.services.repricer_engine.is_token_expired", return_value=False), \
+             patch.object(engine, "_get_current_price_data", new=AsyncMock(side_effect=[first_data, second_data])), \
+             patch.object(engine, "_cached_parse_product", new=AsyncMock(return_value=_comp(1000))):
+            first = asyncio.run(engine._decide_product(test_product, run, dry_run=False))
+            second = asyncio.run(engine._decide_product(test_product, run, dry_run=False))
+
+        assert first["needs_update"] is False
+        assert first["skip_code"] == "COMPETITOR_CONFIRM"
+        assert second["needs_update"] is True
+

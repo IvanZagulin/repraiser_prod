@@ -173,6 +173,38 @@ class TestOutOfStock:
         assert decision["needs_update"] is False
         assert decision["skip_code"] == "NO_CHANGE"
 
+    def test_competitor_config_uses_rrp_fallback_when_own_card_is_oos(
+        self, db_session, test_product, test_product_config, fake_cache,
+    ):
+        test_product_config.strategy = "competitor"
+        test_product_config.competitor_nm_id = 999
+        test_product_config.rrp_price = Decimal("900")
+        test_product_config.rrp_consider_wallet = False
+        test_product_config.min_price = Decimal("300")
+        test_product_config.max_price = None
+        test_product_config.skip_margin_check = True
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        db_session.add(PriceSnapshot(
+            product_id=test_product.id, seller_price=Decimal("1000"), final_price=Decimal("700"),
+            discount=Decimal("0"), spp=Decimal("30"), total_quantity=3,
+            snapshot_at=now - timedelta(hours=1),
+        ))
+        db_session.commit()
+        engine = _engine(db_session)
+        engine._bypass_competitor_cooldown = True
+        competitor = SimpleNamespace(
+            final_price=Decimal("0"), seller_price=Decimal("0"),
+            in_stock=False, catalog_stale=False,
+        )
+        with patch.object(engine, "_cached_parse_product", new=AsyncMock(return_value=competitor)):
+            decision = _decide(engine, test_product, _run(db_session), {
+                "seller_price": Decimal("1000"), "discounted_price": Decimal("1000"),
+                "discount": Decimal("0"), "final_price": Decimal("0"), "spp": Decimal("0"),
+                "is_in_promo": False, "total_quantity": 0,
+            })
+        assert decision["needs_update"] is True
+        assert decision["new_price"] == Decimal("1286")
+
 
 class TestLoweringHolds:
     in_stock = {
@@ -204,6 +236,26 @@ class TestLoweringHolds:
         decision = _decide(_engine(db_session), test_product, _run(db_session), dict(self.in_stock))
         assert decision["needs_update"] is True
         assert decision["new_price"] > Decimal("2000")
+
+    def test_current_price_at_margin_floor_reports_margin_constraint(
+        self, db_session, test_product, test_product_config, fake_cache,
+    ):
+        _rrp_config(db_session, test_product_config, rrp="300")
+        engine = _engine(db_session)
+        engine._user_settings = {
+            "min_margin_pct": "20",
+            "commission_type": "pct", "commission_value": "0",
+            "logistics_type": "rub", "logistics_value": "0",
+            "acquiring_type": "pct", "acquiring_value": "0",
+            "brand_min_margin_rules_map": {}, "subject_commissions": {},
+        }
+        decision = _decide(engine, test_product, _run(db_session), {
+            "seller_price": Decimal("600"), "discounted_price": Decimal("600"),
+            "discount": Decimal("0"), "final_price": Decimal("420"), "spp": Decimal("30"),
+            "is_in_promo": False, "total_quantity": 5,
+        })
+        assert decision["needs_update"] is False
+        assert decision["skip_code"] == "CLAMPED_TO_MARGIN"
 
 
 # ── Misc ─────────────────────────────────────────────────────────────────────
@@ -260,3 +312,4 @@ class TestLimitsAndRules:
         fake_cache.store["wb_catalog:2"] = dict(entry, fetched_at=time.time() - 60)
         assert asyncio.run(engine._cached_parse_product(1)).catalog_stale is True
         assert asyncio.run(engine._cached_parse_product(2)).catalog_stale is False
+

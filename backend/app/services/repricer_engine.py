@@ -1409,7 +1409,6 @@ class RepricerEngine:
                             "competitor_price": competitor_price,
                             "winning_nm_id": winning_nm_id or 0,
                             "target_final": target_int,
-                            "new_seller_price": new_seller_price,
                         },
                     )
                     if not confirmed:
@@ -1755,7 +1754,16 @@ class RepricerEngine:
             if not current_data:
                 return {"product": product, "needs_update": False, "skip_code": "PARSE_ERROR",
                         "current_data": None, "new_price": None, "limit_reason": None, "reason_msg": None, "_t0": _t0}
-            _rrp_wb = config.strategy == "rrp" and marketplace == "wb"
+            # A competitor config may also have an RRP fallback. When our own
+            # card is OOS, WB omits the buyer price, but we still need the last
+            # trusted SPP so the price is ready for the stock returning.
+            _rrp_wb = (
+                marketplace == "wb"
+                and (
+                    config.strategy == "rrp"
+                    or self._has_rrp_target(config, Decimal(0))
+                )
+            )
             if current_data.get("catalog_stale"):
                 fallback = self._fallback_price_data(product) if _rrp_wb else None
                 if not fallback:
@@ -1907,7 +1915,14 @@ class RepricerEngine:
             final_new_price = stepped_up
 
         if final_new_price == current_data["seller_price"]:
-            return {"product": product, "needs_update": False, "skip_code": strategy_skip_code or "NO_CHANGE",
+            # Preserve the real limiting reason when the desired strategy price
+            # is below a floor that exactly equals the current seller price.
+            # Reporting NO_CHANGE here hid thousands of margin-constrained cards
+            # from operational audits.
+            _effective_skip = strategy_skip_code or "NO_CHANGE"
+            if limit_reason in {"CLAMPED_TO_MARGIN", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX"}:
+                _effective_skip = limit_reason
+            return {"product": product, "needs_update": False, "skip_code": _effective_skip,
                     "current_data": current_data, "new_price": final_new_price,
                     "limit_reason": limit_reason, "reason_msg": reason_msg, "_t0": _t0,
                     "snap_competitor_price": snap_competitor_price, "snap_competitor_nm_id": snap_competitor_nm_id,
@@ -3206,3 +3221,4 @@ class RepricerEngine:
                     owned_product_lock_ids,
                     self._product_lock_owner,
                 )
+
