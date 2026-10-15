@@ -20,6 +20,7 @@ import pytest
 from app.models.product import Product
 from app.models.product_config import ProductConfig
 from app.models.repricer_run import RepricerRun
+from app.services.promo_pause import PromoPauseSyncResult
 from app.services.repricer_engine import RepricerEngine
 
 
@@ -221,6 +222,7 @@ class TestRunRepricerDryRun:
     ):
         engine = RepricerEngine(db_session, user_id=test_user.id)
         with patch("app.services.repricer_engine.cache_get", return_value={}), \
+             patch("app.services.promo_pause.sync_promo_pauses", new=AsyncMock(return_value=PromoPauseSyncResult())), \
              patch("app.services.repricer_engine.acquire_product_locks", return_value=set()), \
              patch.object(engine, "_prefetch_missing_prices", new=AsyncMock()), \
              patch("app.services.repricer_engine.telegram_notifier.notify_zero_updates", new=AsyncMock()):
@@ -278,7 +280,8 @@ class TestRunRepricerDryRun:
         monkeypatch.setattr(RepricerEngine, "_prefetch_all_prices_once", AsyncMock())
 
         engine = RepricerEngine(db_session, user_id=test_user.id)
-        with patch("app.services.repricer_engine.catalog_parser.parse_batch_ids", new=AsyncMock(return_value={})), \
+        with patch("app.services.promo_pause.sync_promo_pauses", new=AsyncMock(return_value=PromoPauseSyncResult())), \
+             patch("app.services.repricer_engine.catalog_parser.parse_batch_ids", new=AsyncMock(return_value={})), \
              patch("app.services.repricer_engine.telegram_notifier.notify_catalog_parse_errors", new=AsyncMock()), \
              patch("app.services.repricer_engine.telegram_notifier.notify_zero_updates", new=AsyncMock()), \
              patch("app.services.repricer_engine.acquire_product_locks", side_effect=lambda _uid, ids, _owner: set(ids)), \

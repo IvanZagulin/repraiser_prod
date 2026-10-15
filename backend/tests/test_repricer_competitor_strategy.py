@@ -376,24 +376,23 @@ class TestStrategyRRPTarget:
         assert reason_code == "NO_CHANGE"
         assert new_seller is None
 
-    def test_rrp_reprices_above_corridor_with_rounding_margin(self):
+    def test_rrp_reprices_above_corridor_to_exact_floor(self):
         new_seller, reason_code, reason_msg = self._rrp(final="1020")
         assert reason_code == "CALCULATED"
-        # ceil(1000) + 1 ₽ запаса на округление WB вниз
-        assert new_seller == Decimal("1001")
-        assert "целевая финальная 1001" in reason_msg
+        assert new_seller == Decimal("1000")
+        assert "целевая финальная 1000" in reason_msg
 
     def test_rrp_raises_when_below_rrp(self):
         new_seller, reason_code, _msg = self._rrp(final="990")
         assert reason_code == "CALCULATED"
-        assert new_seller == Decimal("1001")
+        assert new_seller == Decimal("1000")
 
     def test_rrp_seller_discount_not_double_counted(self):
         """СПП в current_data — чистый (без скидки продавца): делим на скидку один раз."""
         new_seller, reason_code, _msg = self._rrp(final="900", seller="1600", spp="30", discount="20")
         assert reason_code == "CALCULATED"
-        # 1001 / 0.7 / 0.8 = 1787.5 → 1788; покупатель: 1788*0.8*0.7 = 1001.28 >= 1000
-        assert new_seller == Decimal("1788")
+        # 1000 / 0.7 / 0.8 = 1785.71 → 1786; покупатель не ниже 1000.
+        assert new_seller == Decimal("1786")
 
     def test_ozon_rrp_targets_seller_price_directly(self):
         engine = _make_engine_with_settings()
@@ -624,9 +623,8 @@ class TestCorrectUnstableProducts:
 
 class TestCompetitorCooldownSnapshots:
     def test_competitor_oos_falls_back_to_rrp(self, db_session, test_product, test_product_config):
-        engine = RepricerEngine(db=db_session, user_id=None)
+        engine = RepricerEngine(db=db_session, user_id=None, bypass_competitor_cooldown=True)
         engine._user_settings = {}
-        engine._COMPETITOR_COOLDOWN_HOURS = 0
 
         test_product_config.strategy = "competitor"
         test_product_config.competitor_nm_id = 577768295
@@ -663,11 +661,11 @@ class TestCompetitorCooldownSnapshots:
             decision = asyncio.run(engine._decide_product(test_product, run, dry_run=False))
 
         assert decision["needs_update"] is True
-        # ceil(900) + 1 ₽ запаса = 901 → 901 / 0.75 = 1201.3 → 1202
-        assert decision["new_price"] == Decimal("1202")
+        assert decision["new_price"] == Decimal("1200")
+        assert decision["effective_strategy"] == "rrp"
         assert "[Fallback РРЦ при OOS конкурента]" in decision["reason_msg"]
 
-    def test_oos_during_cooldown_saves_fresh_snapshot(self, db_session, test_product, test_product_config):
+    def test_changed_competitor_bypasses_confirmation(self, db_session, test_product, test_product_config):
         engine = RepricerEngine(db=db_session, user_id=None)
         engine._user_settings = {}
 
@@ -677,6 +675,8 @@ class TestCompetitorCooldownSnapshots:
         test_product_config.competitor_offset_direction = "above"
         test_product_config.competitor_offset_value = Decimal("0")
         test_product_config.min_price = Decimal("300")
+        test_product_config.max_price = None
+        test_product_config.skip_margin_check = True
 
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         run = RepricerRun(run_type="manual", status="running", started_at=now)
@@ -686,49 +686,81 @@ class TestCompetitorCooldownSnapshots:
         db_session.add(PriceChange(
             run_id=run.id,
             product_id=test_product.id,
-            old_seller_price=Decimal("709"),
-            new_seller_price=Decimal("789"),
-            old_final_price=Decimal("466"),
-            new_final_price=Decimal("520.74"),
+            old_seller_price=Decimal("900"),
+            new_seller_price=Decimal("1000"),
+            old_final_price=Decimal("720"),
+            new_final_price=Decimal("800"),
             reason_code="UPDATED",
             reason_message="recent competitor update",
             changed_at=now - timedelta(minutes=10),
         ))
         db_session.add(PriceSnapshot(
             product_id=test_product.id,
-            seller_price=Decimal("789"),
-            final_price=Decimal("466"),
-            spp=Decimal("34.27"),
-            competitor_price=Decimal("516"),
+            seller_price=Decimal("1000"),
+            final_price=Decimal("800"),
+            spp=Decimal("20"),
+            competitor_price=Decimal("900"),
             competitor_nm_id=577768295,
             total_quantity=1,
             snapshot_at=now - timedelta(minutes=9),
         ))
         db_session.commit()
 
-        async def fake_parse(_nm_id):
-            return SimpleNamespace(
-                final_price=Decimal("0"),
-                seller_price=Decimal("0"),
-                spp=None,
-                total_quantity=0,
-                is_in_promo=False,
-                catalog_stale=False,
-            )
-
-        with patch.object(engine, "_cached_parse_product", side_effect=fake_parse):
+        current_data = {
+            "seller_price": Decimal("1000"), "discounted_price": Decimal("1000"),
+            "final_price": Decimal("800"), "discount": Decimal("0"),
+            "spp": Decimal("20"), "is_in_promo": False, "total_quantity": 1,
+        }
+        with patch("app.services.repricer_engine.is_token_expired", return_value=False), \
+             patch.object(engine, "_get_current_price_data", new=AsyncMock(return_value=current_data)), \
+             patch.object(engine, "_cached_parse_product", new=AsyncMock(return_value=_comp(1000))):
             decision = asyncio.run(engine._decide_product(test_product, run, dry_run=False))
 
-        assert decision["skip_code"] == "OUT_OF_STOCK"
-        assert decision["current_data"]["total_quantity"] == 0
+        assert decision["needs_update"] is True
+        assert decision["new_price"] == Decimal("1250")
+        assert decision["snap_competitor_price"] == Decimal("1000")
 
-        reason = engine._finalize_decision(run, decision, success=False, failed=False)
+    def test_same_competitor_spp_drift_requires_two_observations(
+        self, db_session, test_product, test_product_config,
+    ):
+        engine = RepricerEngine(db=db_session, user_id=None)
+        engine._user_settings = {}
+        test_product_config.strategy = "competitor"
+        test_product_config.competitor_nm_id = 577768295
+        test_product_config.competitor_offset_type = "rub"
+        test_product_config.competitor_offset_direction = "above"
+        test_product_config.competitor_offset_value = Decimal("0")
+        test_product_config.min_price = Decimal("300")
+        test_product_config.max_price = None
+        test_product_config.skip_margin_check = True
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        db_session.add(PriceSnapshot(
+            product_id=test_product.id, seller_price=Decimal("1200"),
+            final_price=Decimal("900"), spp=Decimal("25"),
+            competitor_price=Decimal("1000"), competitor_nm_id=577768295,
+            total_quantity=1, snapshot_at=now,
+        ))
+        db_session.commit()
+        db_session.refresh(test_product)
+        run = RepricerRun(run_type="manual", status="running", started_at=now)
+        db_session.add(run)
         db_session.commit()
 
-        assert reason == "OUT_OF_STOCK"
-        latest = db_session.query(PriceSnapshot).filter(
-            PriceSnapshot.product_id == test_product.id
-        ).order_by(PriceSnapshot.snapshot_at.desc(), PriceSnapshot.id.desc()).first()
-        assert latest.final_price == Decimal("0.00")
-        assert latest.total_quantity == 0
-        assert latest.competitor_price is None
+        current_data = {
+            "seller_price": Decimal("1200"), "discounted_price": Decimal("1200"),
+            "final_price": Decimal("900"), "discount": Decimal("0"),
+            "spp": Decimal("25"), "is_in_promo": False, "total_quantity": 1,
+        }
+        patches = (
+            patch("app.services.repricer_engine.is_token_expired", return_value=False),
+            patch.object(engine, "_get_current_price_data", new=AsyncMock(return_value=current_data)),
+            patch.object(engine, "_cached_parse_product", new=AsyncMock(return_value=_comp(1000))),
+        )
+        with patches[0], patches[1], patches[2]:
+            first = asyncio.run(engine._decide_product(test_product, run, dry_run=False))
+            second = asyncio.run(engine._decide_product(test_product, run, dry_run=False))
+
+        assert first["needs_update"] is False
+        assert first["skip_code"] == "COMPETITOR_CONFIRM"
+        assert second["needs_update"] is True
+        assert second["new_price"] == Decimal("1334")

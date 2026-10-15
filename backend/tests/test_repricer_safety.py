@@ -438,16 +438,36 @@ class TestRrpTolerance:
     def test_price_above_tolerance_returns_to_rrp(self):
         new_price, code, _ = self._rrp("1025", "20")
         assert code == "CALCULATED"
-        assert new_price == Decimal("1001")
+        assert new_price == Decimal("1000")
 
-    def test_tolerance_below_minimum_uses_3_rub(self):
-        assert self._rrp("1002", "1")[1] == "NO_CHANGE"
-        assert self._rrp("1004", "1")[1] == "CALCULATED"
+    def test_configured_tolerance_is_used_exactly(self):
+        assert self._rrp("1001", "1")[1] == "NO_CHANGE"
+        assert self._rrp("1002", "1")[1] == "CALCULATED"
 
     def test_never_below_rrp_whatever_tolerance(self):
         new_price, code, _ = self._rrp("995", "50")
         assert code == "CALCULATED"
-        assert new_price == Decimal("1001")
+        assert new_price == Decimal("1000")
+
+    def test_wallet_rrp_812_reprices_840_to_exact_corridor(self):
+        engine = RepricerEngine(db=None, user_id=None)
+        engine._user_settings = {}
+        config = SimpleNamespace(
+            rrp_price=Decimal("812"), rrp_tolerance=Decimal("1"),
+            rrp_consider_wallet=True, rrp_spp_tiers=[],
+        )
+        current = {
+            "seller_price": Decimal("840"), "final_price": Decimal("840"),
+            "discount": Decimal("0"), "spp": Decimal("0"),
+        }
+        new_price, code, _ = asyncio.run(engine._strategy_rrp(
+            SimpleNamespace(nm_id=1, seller_sku="3892624"),
+            config,
+            current,
+            Decimal("3"),
+        ))
+        assert code == "CALCULATED"
+        assert new_price == Decimal("838")
 
     def test_wallet_price_is_checked_against_corridor(self):
         # 1040 × 0.97 = 1008.8 ≤ 1000 + 10

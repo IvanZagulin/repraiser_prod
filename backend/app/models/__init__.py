@@ -18,6 +18,7 @@ from app.models.pricing_rule import PricingRule
 from app.models.wb_catalog import WBCatalog
 from app.models.wb_subject_commission import WBSubjectCommission
 from app.models.lead import Lead
+from app.models.promo_pause_registry import PromoPauseRegistry
 
 __all__ = [
     "User",
@@ -41,4 +42,5 @@ __all__ = [
     "WBCatalog",
     "WBSubjectCommission",
     "Lead",
+    "PromoPauseRegistry",
 ]

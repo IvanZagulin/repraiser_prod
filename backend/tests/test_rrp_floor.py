@@ -162,7 +162,7 @@ class TestOutOfStock:
             "is_in_promo": False, "total_quantity": 0,
         })
         assert decision["needs_update"] is True
-        assert decision["new_price"] == Decimal("1288")  # (900+1)/0.7
+        assert decision["new_price"] == Decimal("1286")  # ceil(900/0.7)
 
         # Цена продавца выше нужной → не снижаем, пока нет свежей цены покупателя
         decision = _decide(engine, test_product, run, {

@@ -272,10 +272,10 @@ class RepricerEngine:
     # min_price, max_price, margin guard и защита WB от резкого снижения.
     _TARGET_EPSILON_RUB = Decimal("0.01")
 
-    # Cooldown для competitor-товаров: не переоценивать чаще чем раз в 4 часа
-    # (6 раз в сутки). Защита от осцилляции и от отключения СПП Wildberries'ом.
-    # Override: если финальная цена вышла из коридора (SPP drift) — немедленно.
-    _COMPETITOR_COOLDOWN_HOURS = 4
+    # Конкурента читаем в каждом прогоне. Если цена конкурента не изменилась,
+    # а из коридора вышла только наша цена из-за дрейфа СПП, требуем два
+    # одинаковых наблюдения. Переход конкурента в OOS также подтверждаем дважды.
+    _COMPETITOR_CONFIRM_TTL_SEC = 2 * 3600
 
     # Closed-loop verify+correct: после заливки СПП у WB готов за 3-7с (замер
     # 2026-06-10). Перепарсиваем факт у ВСЕХ обновлённых competitor-товаров и
@@ -319,18 +319,14 @@ class RepricerEngine:
     _PROMO_DISCOUNT_SKIP_THRESHOLD = Decimal(str(settings.PROMO_DISCOUNT_SKIP_THRESHOLD))
 
     # ── Пол РРЦ (стратегия rrp) ──────────────────────────────────────────
-    # Цель по цене покупателя берём с запасом в рубль сверх ceil(РРЦ/кошелёк):
-    # WB округляет цену покупателя вниз, и без запаса цена с кошельком
-    # выходила на 0.2 ₽ ниже РРЦ, после чего SPP Guard откатывал цену —
-    # и так каждые 30 минут (пинг-понг 3152 ↔ 3169 у «Кот Барсик»).
-    _RRP_FLOOR_MARGIN_RUB = Decimal("1")
+    # Цель ставим ровно на минимальную целую цену, достаточную для РРЦ.
+    # Фактическое округление WB проверяет closed-loop и при необходимости
+    # поднимает цену продавца на следующий достижимый рубль.
+    _RRP_FLOOR_MARGIN_RUB = Decimal("0")
     # Коридор над РРЦ, внутри которого цену не трогаем: РРЦ … РРЦ + допуск
     # (rrp_tolerance из настроек товара). Ниже РРЦ цена не опускается никогда.
-    # Минимум коридора 3 ₽: цель ставится на РРЦ + 1 ₽, а цена продавца в
-    # целых рублях и кошелёк дают факт до ~2 ₽ над РРЦ — уже́ коридор цена
-    # дёргалась бы на рубль каждый прогон. Раньше коридор был фиксированным
-    # +1% и допуск из настроек не читался.
-    _RRP_MIN_CORRIDOR_RUB = Decimal("3")
+    # Верхняя граница берётся ровно из настройки rrp_tolerance.
+    _RRP_MIN_CORRIDOR_RUB = Decimal("0")
     # Повышение до РРЦ одним шагом (ночная выгрузка 1С роняет цену на ~22%,
     # при старом лимите +25% товар оставался ниже РРЦ до следующего прогона).
     _RRP_MAX_RAISE_RATIO = Decimal("1.6")
@@ -380,7 +376,8 @@ class RepricerEngine:
     _SKIP_CODES = frozenset({
         "SKIPPED_PROMO", "SKIPPED_INACTIVE", "SKIPPED_QUARANTINE", "NO_CHANGE",
         "COMPETITOR_OOS", "COMPETITOR_PARTIAL", "OUT_OF_STOCK", "COOLDOWN",
-        "COOLDOWN_SPP_GUARD", "CATALOG_UNAVAILABLE",
+        "COOLDOWN_SPP_GUARD", "COMPETITOR_CONFIRM", "COMPETITOR_OOS_CONFIRM",
+        "CATALOG_UNAVAILABLE",
     })
     _UPDATED_CODES = ("UPDATED", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX", "CLAMPED_TO_MARGIN")
     # Повторяющиеся пропуски пишем в историю не чаще раза в 6 часов на товар:
@@ -411,6 +408,26 @@ class RepricerEngine:
         """Цена покупателя в коридоре [ceil(цель); ceil(цель) + допуск]."""
         target_int = Decimal(self._round_up(target_final))
         return target_int <= final <= target_int + self._competitor_tolerance(target_final)
+
+    @staticmethod
+    def _competitor_guard_key(product_id: int, kind: str) -> str:
+        return f"repricer:competitor_{kind}:{product_id}"
+
+    def _confirm_competitor_observation(
+        self,
+        product_id: int,
+        kind: str,
+        payload: Dict,
+    ) -> bool:
+        """Return True only after the same competitor condition is seen twice."""
+        key = self._competitor_guard_key(product_id, kind)
+        normalized = {name: str(value) for name, value in payload.items()}
+        previous = cache_get(key)
+        if previous == normalized:
+            cache_delete(key)
+            return True
+        cache_set(key, normalized, ttl=self._COMPETITOR_CONFIRM_TTL_SEC)
+        return False
 
     def _has_rrp_target(self, config, spp: Decimal) -> bool:
         seller_price_direct, rrp = self._resolve_rrp(config, spp)
@@ -868,7 +885,7 @@ class RepricerEngine:
         return None, config.rrp_price
 
     def _rrp_corridor_top(self, config, rrp: Decimal) -> Decimal:
-        """Верхняя граница коридора цены покупателя: РРЦ + допуск (не меньше 3 ₽)."""
+        """Верхняя граница коридора цены покупателя: РРЦ + настроенный допуск."""
         tolerance = Decimal(str(getattr(config, "rrp_tolerance", None) or 0))
         return rrp + max(tolerance, self._RRP_MIN_CORRIDOR_RUB)
 
@@ -1260,12 +1277,15 @@ class RepricerEngine:
             Tuple (новая_цена_продавца, reason_code, reason_message, competitor_price, winning_nm_id)
         """
         try:
+            product_id = getattr(product, "id", None)
             competitor_price, winning_nm_id, competitor_basic = await self._get_competitor_price(config)
 
             if competitor_price is None:
                 if config.id in self._competitor_unavailable:
                     # Каталог недоступен — это не «конкурент без остатка»: не
                     # переключаемся на РРЦ из-за сетевой ошибки, цену не трогаем.
+                    if product_id is not None:
+                        cache_delete(self._competitor_guard_key(product_id, "oos"))
                     return None, "CATALOG_UNAVAILABLE", "Каталог WB не отдал цены конкурентов", None, None
                 # Нет конкурентов или все OOS при правиле cheapest_instock
                 from app.models.competitor_entry import CompetitorEntry
@@ -1273,8 +1293,27 @@ class RepricerEngine:
                     CompetitorEntry.product_config_id == config.id
                 ).all()
                 if not entries and not config.competitor_nm_id:
+                    if product_id is not None:
+                        cache_delete(self._competitor_guard_key(product_id, "oos"))
                     return None, "SKIPPED_INACTIVE", "Конкурент не настроен", None, None
+                if (
+                    product_id is not None
+                    and
+                    not self._bypass_competitor_cooldown
+                    and not self._confirm_competitor_observation(
+                        product_id,
+                        "oos",
+                        {"config_id": config.id},
+                    )
+                ):
+                    return None, "COMPETITOR_OOS_CONFIRM", (
+                        "Все конкуренты без остатка: ожидаем повторное наблюдение "
+                        "перед переходом на РРЦ"
+                    ), None, None
                 return None, "COMPETITOR_OOS", "Все конкуренты не в наличии", None, None
+
+            if product_id is not None:
+                cache_delete(self._competitor_guard_key(product_id, "oos"))
 
             spp = current_data.get('spp') or Decimal(0)
             seller_discount = current_data.get('discount') or Decimal(0)
@@ -1305,6 +1344,8 @@ class RepricerEngine:
 
             move = "lower" if current_final > target_final else "raise"
             if current_final > 0 and self._competitor_in_corridor(current_final, target_final):
+                if product_id is not None:
+                    cache_delete(self._competitor_guard_key(product_id, "adjust"))
                 return None, "NO_CHANGE", (
                     f"Competitor ({rule}): финальная {current_final}₽ в коридоре цели "
                     f"{target_final:.2f}₽ "
@@ -1328,6 +1369,56 @@ class RepricerEngine:
                         f"Competitor ({rule}): каталог отдал не всех конкурентов, найденный минимум "
                         f"{competitor_price}₽ — повышение до {new_seller_price}₽ отложено"
                     ), competitor_price, winning_nm_id
+
+                # Если цена конкурента не менялась, отклонение могло возникнуть
+                # из-за краткого скачка СПП. Первое наблюдение только запоминаем,
+                # второе такое же разрешает переоценку. Реальное изменение цены
+                # конкурента применяется сразу.
+                same_competitor_as_last_snapshot = False
+                try:
+                    if product_id is None:
+                        raise LookupError("product id is unavailable")
+                    last_snapshot = self.db.query(PriceSnapshot).filter(
+                        PriceSnapshot.product_id == product_id,
+                        PriceSnapshot.competitor_price.isnot(None),
+                    ).order_by(
+                        PriceSnapshot.snapshot_at.desc(),
+                        PriceSnapshot.id.desc(),
+                    ).first()
+                    same_competitor_as_last_snapshot = bool(
+                        last_snapshot
+                        and last_snapshot.competitor_price is not None
+                        and Decimal(str(last_snapshot.competitor_price)) == competitor_price
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "Не удалось прочитать прошлую цену конкурента product_id=%s: %s",
+                        product_id,
+                        exc,
+                    )
+
+                if (
+                    product_id is not None
+                    and same_competitor_as_last_snapshot
+                    and not self._bypass_competitor_cooldown
+                ):
+                    confirmed = self._confirm_competitor_observation(
+                        product_id,
+                        "adjust",
+                        {
+                            "competitor_price": competitor_price,
+                            "winning_nm_id": winning_nm_id or 0,
+                            "target_final": target_int,
+                            "new_seller_price": new_seller_price,
+                        },
+                    )
+                    if not confirmed:
+                        return None, "COMPETITOR_CONFIRM", (
+                            f"Цена конкурента прежняя ({competitor_price}₽), "
+                            "отклонение нашей цены подтверждаем следующим прогоном"
+                        ), competitor_price, winning_nm_id
+                elif product_id is not None:
+                    cache_delete(self._competitor_guard_key(product_id, "adjust"))
 
                 reason_msg = (
                     f"Competitor ({rule}, {move}): конкурент nm_id={winning_nm_id} цена={competitor_price}₽, "
@@ -1632,69 +1723,6 @@ class RepricerEngine:
                     "current_data": None, "new_price": None, "limit_reason": None,
                     "reason_msg": "Ozon competitor strategy is not supported yet", "_t0": _t0}
 
-        # Cooldown для competitor: не переоценивать чаще раза в N ч.
-        # OVERRIDE: если СПП дрейфнул и финальная цена ушла от цели конкурента —
-        # реагируем немедленно вверх или вниз.
-        from datetime import timedelta
-        if (
-            config.strategy == "competitor"
-            and self._COMPETITOR_COOLDOWN_HOURS > 0
-            and not self._bypass_competitor_cooldown
-        ):
-            cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=self._COMPETITOR_COOLDOWN_HOURS)
-            recent = self.db.query(PriceChange).filter(
-                PriceChange.product_id == product.id,
-                PriceChange.reason_code.in_(["UPDATED", "CORRECTED", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX", "CLAMPED_TO_MARGIN", "REVERTED_SPP_SPIKE"]),
-                PriceChange.changed_at >= cutoff,
-            ).first()
-            if recent:
-                cooldown_override = False
-                last_snap = self.db.query(PriceSnapshot).filter(
-                    PriceSnapshot.product_id == product.id,
-                    PriceSnapshot.competitor_price.isnot(None),
-                ).order_by(PriceSnapshot.snapshot_at.desc()).first()
-                if last_snap and last_snap.competitor_price:
-                    try:
-                        cat = await self._cached_parse_product(product.nm_id)
-                        if cat and not getattr(cat, 'catalog_stale', False):
-                            catalog_final = Decimal(str(getattr(cat, "final_price", 0) or 0))
-                            total_quantity = getattr(cat, "total_quantity", None)
-                            if total_quantity == 0 and catalog_final <= 0:
-                                current_data = {
-                                    "seller_price": Decimal(str(getattr(cat, "seller_price", 0) or 0)),
-                                    "final_price": Decimal(0),
-                                    "spp": Decimal(0),
-                                    "is_in_promo": getattr(cat, "is_in_promo", False),
-                                    "total_quantity": 0,
-                                }
-                                return {
-                                    "product": product,
-                                    "needs_update": False,
-                                    "skip_code": "OUT_OF_STOCK",
-                                    "current_data": current_data,
-                                    "new_price": None,
-                                    "limit_reason": None,
-                                    "reason_msg": "Нет остатка (обновлено во время competitor cooldown)",
-                                    "_t0": _t0,
-                                }
-                            if catalog_final > 0:
-                                competitor_price = Decimal(str(last_snap.competitor_price))
-                                target_final = self._competitor_target_final(config, competitor_price)
-                                if not self._competitor_in_corridor(catalog_final, target_final):
-                                    cooldown_override = True
-                                    logger.warning(
-                                        "Competitor cooldown OVERRIDE nm_id=%s: "
-                                        "факт %.2f₽ != цель %.2f₽ (конкурент %.2f₽), SPP drift",
-                                        product.nm_id, catalog_final, target_final, last_snap.competitor_price,
-                                    )
-                    except Exception as e:
-                        logger.debug("Cooldown override check nm_id=%s: %s", product.nm_id, e)
-                if not cooldown_override:
-                    return {"product": product, "needs_update": False, "skip_code": "COOLDOWN",
-                            "current_data": None, "new_price": None, "limit_reason": None,
-                            "reason_msg": f"Competitor cooldown: последнее изменение {recent.changed_at.isoformat()}, "
-                                          f"следующее через {self._COMPETITOR_COOLDOWN_HOURS}ч", "_t0": _t0}
-
         account = product.account
         if not account or not account.is_active:
             return {"product": product, "needs_update": False, "skip_code": "SKIPPED_INACTIVE",
@@ -1779,6 +1807,7 @@ class RepricerEngine:
 
         snap_competitor_price = None
         snap_competitor_nm_id = None
+        effective_strategy = config.strategy
         if config.strategy == "rrp":
             new_price, reason_code, reason_msg = await self._strategy_rrp(product, config, current_data, wallet_pct)
         elif config.strategy == "competitor":
@@ -1795,6 +1824,7 @@ class RepricerEngine:
                 logger.info("Конкурент OOS для nm_id=%s, fallback на РРЦ", product.nm_id)
                 new_price, reason_code, reason_msg = await self._strategy_rrp(product, config, current_data, wallet_pct)
                 reason_msg = f"[Fallback РРЦ при OOS конкурента] {reason_msg}"
+                effective_strategy = "rrp"
 
         # Даже если стратегия не требует изменений — проверяем маржу по текущей цене.
         # Если нарушена — _apply_limits поднимет цену. Если нет — остаётся код
@@ -1811,19 +1841,20 @@ class RepricerEngine:
                 return {"product": product, "needs_update": False, "skip_code": reason_code,
                         "current_data": current_data, "new_price": None, "limit_reason": None,
                         "reason_msg": reason_msg, "_t0": _t0,
-                        "snap_competitor_price": snap_competitor_price, "snap_competitor_nm_id": snap_competitor_nm_id}
+                        "snap_competitor_price": snap_competitor_price, "snap_competitor_nm_id": snap_competitor_nm_id,
+                        "effective_strategy": effective_strategy}
 
         # Ночная цена (night_price_enabled): для РРЦ не ниже цены, нужной для РРЦ.
         _night_price, _night_code, _night_msg = self._apply_night_boost(config, new_price)
         if _night_code:
             _night_price = Decimal(str(_night_price))
-            new_price = max(new_price, _night_price) if config.strategy == "rrp" else _night_price
+            new_price = max(new_price, _night_price) if effective_strategy == "rrp" else _night_price
             reason_msg = f"{reason_msg}. {_night_msg}" if reason_msg else _night_msg
 
         final_new_price, limit_reason = self._apply_limits(new_price, config, seller_discount=_seller_discount)
 
         # max_price не может опустить РРЦ-товар ниже РРЦ: пол РРЦ приоритетнее.
-        if config.strategy == "rrp" and limit_reason == "CLAMPED_TO_MAX" and final_new_price < new_price:
+        if effective_strategy == "rrp" and limit_reason == "CLAMPED_TO_MAX" and final_new_price < new_price:
             logger.warning(
                 "nm_id=%s: max_price %s ниже цены для РРЦ %s — max_price игнорируется",
                 product.nm_id, config.max_price, new_price,
@@ -1851,7 +1882,8 @@ class RepricerEngine:
                     "limit_reason": limit_reason,
                     "reason_msg": f"{reason_msg}. {_hold_reason}" if reason_msg else _hold_reason,
                     "_t0": _t0,
-                    "snap_competitor_price": snap_competitor_price, "snap_competitor_nm_id": snap_competitor_nm_id}
+                    "snap_competitor_price": snap_competitor_price, "snap_competitor_nm_id": snap_competitor_nm_id,
+                    "effective_strategy": effective_strategy}
 
         # Защита от карантина WB: снижаем не больше чем на 20% за прогон
         # (WB отправлял в карантин уже снижения на 20-45%).
@@ -1864,7 +1896,7 @@ class RepricerEngine:
             reason_msg = (reason_msg or "") + f". Ступенчатое снижение: отправляем {stepped} (целевая {final_new_price}, текущая {_curr_sp_for_step})"
             final_new_price = stepped
 
-        _MAX_RAISE_RATIO = self._RRP_MAX_RAISE_RATIO if config.strategy == "rrp" else self._COMPETITOR_MAX_RAISE_RATIO
+        _MAX_RAISE_RATIO = self._RRP_MAX_RAISE_RATIO if effective_strategy == "rrp" else self._COMPETITOR_MAX_RAISE_RATIO
         if marketplace == "wb" and _curr_sp_for_step > 0 and final_new_price > _curr_sp_for_step * _MAX_RAISE_RATIO:
             stepped_up = Decimal(self._round_up(_curr_sp_for_step * _MAX_RAISE_RATIO))
             logger.info(
@@ -1878,12 +1910,14 @@ class RepricerEngine:
             return {"product": product, "needs_update": False, "skip_code": strategy_skip_code or "NO_CHANGE",
                     "current_data": current_data, "new_price": final_new_price,
                     "limit_reason": limit_reason, "reason_msg": reason_msg, "_t0": _t0,
-                    "snap_competitor_price": snap_competitor_price, "snap_competitor_nm_id": snap_competitor_nm_id}
+                    "snap_competitor_price": snap_competitor_price, "snap_competitor_nm_id": snap_competitor_nm_id,
+                    "effective_strategy": effective_strategy}
 
         return {"product": product, "needs_update": True, "skip_code": None,
                 "current_data": current_data, "new_price": final_new_price,
                 "limit_reason": limit_reason, "reason_msg": reason_msg, "_t0": _t0,
-                "snap_competitor_price": snap_competitor_price, "snap_competitor_nm_id": snap_competitor_nm_id}
+                "snap_competitor_price": snap_competitor_price, "snap_competitor_nm_id": snap_competitor_nm_id,
+                "effective_strategy": effective_strategy}
 
     def _finalize_decision(
         self,
@@ -2450,6 +2484,22 @@ class RepricerEngine:
         # Предзагружаем настройки пользователя один раз (избегаем N+1 запросов в цикле)
         self._user_settings = self._load_user_settings()
 
+        # До выборки активных товаров сверяем скидку продавца в Prices API.
+        # Карточки с discount>0 выключаются только в своём кабинете; карточки,
+        # ранее выключенные этим механизмом, возвращаются после двух нулевых
+        # проверок. Неполный ответ WB прерывает прогон до любой смены цены.
+        if not dry_run and self.user_id is not None:
+            from app.services.promo_pause import sync_promo_pauses
+
+            promo_sync = await sync_promo_pauses(self.db, self.user_id)
+            self._prefetched_prices.update(promo_sync.prices)
+            logger.info(
+                "Promo protection before repricing: checked=%d paused=%d resumed=%d",
+                promo_sync.checked,
+                len(promo_sync.paused_product_ids),
+                len(promo_sync.resumed_product_ids),
+            )
+
         # Шаг 1: получаем только ID товаров + config_id (без загрузки ORM-объектов в память).
         # На 100к товаров это ~3-5 MB вместо ~800 MB при полной загрузке.
         id_query = (
@@ -2948,7 +2998,7 @@ class RepricerEngine:
                                     "new_price": dec["new_price"],
                                     "current_data": dec["current_data"],
                                     "old_seller_price": dec["current_data"].get("seller_price") if dec.get("current_data") else None,
-                                    "strategy": getattr(product.config, "strategy", None),
+                                    "strategy": dec.get("effective_strategy") or getattr(product.config, "strategy", None),
                                     "competitor_price": dec.get("snap_competitor_price"),
                                     "competitor_nm_id": dec.get("snap_competitor_nm_id"),
                                     "competitor_partial": product.config.id in self._competitor_partial,
