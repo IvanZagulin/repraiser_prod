@@ -51,6 +51,19 @@ class ProductConfig(Base):
     skip_margin_check = Column(Boolean, default=False, nullable=False,
                                 comment='Отключить защиту маржи для этого товара')
 
+    # Ozon: замкнутый цикл. Доля доинвестирования (k = цена_покупателя /
+    # цена_продавца) не задаётся заранее и слегка плавает, поэтому храним
+    # реально сложившееся значение и доводим цену по нему, обновляя его
+    # каждым прогоном (EMA). См. RepricerEngine._ozon_rrp_closed_loop.
+    ozon_realized_k = Column(Numeric(6, 4), nullable=True,
+                             comment='Ozon: сглаженный k = цена покупателя / цена продавца')
+    ozon_k_updated_at = Column(DateTime, nullable=True,
+                               comment='Ozon: когда обновлён realized_k')
+    # Поправка индекс->реальная витрина, если её замерили парсингом
+    # (по умолчанию NULL = 1.0, т.е. верим индексу как есть).
+    ozon_storefront_factor = Column(Numeric(6, 4), nullable=True,
+                                    comment='Ozon: реальная витрина / витрина по индексу')
+
     # Имитация зачёркнутой цены конкурента: priceU = competitor.basic,
     # скидка продавца подбирается под target_final с учётом нашего фактического СПП.
     match_competitor_basic = Column(Boolean, default=False, nullable=False,

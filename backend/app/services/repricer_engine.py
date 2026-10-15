@@ -331,6 +331,15 @@ class RepricerEngine:
     # защищает от единичных карточек с противоречивыми индексами.
     _OZON_BUYER_PRICE_MAX_SPREAD_PCT = Decimal("5")
 
+    # Ozon замкнутый цикл: сглаживание реального k по EMA (0..1, чем меньше —
+    # тем инертнее), шаг не больше ±15% за прогон (гасит раскачку, если индекс
+    # на один прогон отстал от только что отправленной цены), и коридор, в
+    # котором k считаем правдоподобным.
+    _OZON_K_EMA_ALPHA = Decimal("0.5")
+    _OZON_MAX_STEP_RATIO = Decimal("0.15")
+    _OZON_K_MIN = Decimal("0.20")
+    _OZON_K_MAX = Decimal("1.20")
+
     # Стратегия competitor должна стремиться к рассчитанной цене конкурента
     # (с учетом offset из конфига). Экономические ограничения применяются ниже:
     # min_price, max_price, margin guard и защита WB от резкого снижения.
@@ -1125,6 +1134,88 @@ class RepricerEngine:
             "catalog_fallback": True,
         }
 
+    def _ozon_update_realized_k(self, config, k_obs: Decimal) -> Decimal:
+        """Обновляет сглаженный k товара по новому наблюдению и возвращает его.
+
+        k_obs — мгновенное наблюдение (цена покупателя по индексу / цена
+        продавца) за текущий прогон. Правдоподобные значения вливаем в EMA,
+        неправдоподобные (индекс отстал, мусорная карточка) игнорируем и
+        оставляем прежний k. Первое наблюдение задаёт k напрямую.
+
+        В пробном прогоне состояние не трогаем.
+        """
+        prev = getattr(config, "ozon_realized_k", None)
+        prev = Decimal(str(prev)) if prev is not None else None
+
+        plausible = self._OZON_K_MIN <= k_obs <= self._OZON_K_MAX
+        if not plausible:
+            # Нечему верить в этом наблюдении — держим накопленное значение.
+            return prev if prev is not None else k_obs
+
+        if prev is None:
+            k_eff = k_obs
+        else:
+            a = self._OZON_K_EMA_ALPHA
+            k_eff = a * k_obs + (1 - a) * prev
+        k_eff = k_eff.quantize(Decimal("0.0001"))
+
+        if not self._dry_run:
+            config.ozon_realized_k = k_eff
+            config.ozon_k_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        return k_eff
+
+    def _ozon_rrp_closed_loop(self, product, config, current_data: Dict, rrp: Decimal):
+        """Замкнутый цикл РРЦ для Ozon: доводим цену по реально сложившемуся k.
+
+        Ozon доинвестирует скидку, и доля k = витрина/цена_продавца слегка
+        плавает при смене цены и сама по себе. Поэтому вместо мгновенного
+        индекса за один прогон берём сглаженный k, оцениваем по нему текущую
+        витрину и целевую цену продавца, а шаг ограничиваем — так цикл за
+        несколько прогонов сходится к РРЦ без раскачки.
+
+        Поправку индекс->реальная витрина (ozon_storefront_factor) применяем,
+        если её замерили парсингом; по умолчанию доверяем индексу как есть.
+        """
+        seller = Decimal(str(current_data.get("seller_price") or 0))
+        buyer = Decimal(str(current_data.get("final_price") or 0))
+        if seller <= 0 or buyer <= 0:
+            return None, "SKIPPED_INACTIVE", "Нет цены продавца или витрины Ozon"
+
+        factor = getattr(config, "ozon_storefront_factor", None)
+        factor = Decimal(str(factor)) if factor else Decimal(1)
+
+        k_obs = (buyer * factor) / seller
+        k_eff = self._ozon_update_realized_k(config, k_obs)
+        if k_eff <= 0:
+            return None, "SKIPPED_INACTIVE", "Не удалось оценить k для Ozon"
+
+        est_storefront = (seller * k_eff).quantize(Decimal("0.01"))
+        corridor_top = self._rrp_corridor_top(config, rrp)
+        if rrp <= est_storefront <= corridor_top:
+            return None, "NO_CHANGE", (
+                f"Витрина Ozon ≈ {est_storefront}₽ в коридоре РРЦ "
+                f"({rrp}₽ … {corridor_top}₽), k={k_eff}"
+            )
+
+        target_seller = Decimal(self._round_up(rrp / k_eff))
+
+        # Ограничиваем шаг: если индекс на прогон отстал от только что
+        # отправленной цены, k_obs перекошен — большой скачок недопустим.
+        max_up = Decimal(self._round_up(seller * (1 + self._OZON_MAX_STEP_RATIO)))
+        min_down = Decimal(self._round_up(seller * (1 - self._OZON_MAX_STEP_RATIO)))
+        capped = target_seller
+        if capped > max_up:
+            capped = max_up
+        elif capped < min_down:
+            capped = min_down
+
+        step_note = "" if capped == target_seller else f" (шаг ограничен с {target_seller}₽)"
+        reason = (
+            f"Ozon РРЦ замкнутый цикл: витрина ≈ {est_storefront}₽, цель {rrp}₽, "
+            f"k={k_eff}, новая цена продавца {capped}₽{step_note}"
+        )
+        return capped, "CALCULATED", reason
+
     async def _strategy_rrp(
         self,
         product: Product,
@@ -1179,9 +1270,9 @@ class RepricerEngine:
                 f"{rrp}₽, текущая {current_seller}₽",
             )
 
-        # Дальше Ozon идёт общим путём: РРЦ — это цена ВИТРИНЫ, а не наша цена.
-        # Доля доинвестирования Ozon уже подана как СПП, поэтому обратный расчёт
-        # цены продавца работает тот же, что и для WB.
+        if is_ozon:
+            # Ozon с известной витриной: замкнутый цикл по реальному k.
+            return self._ozon_rrp_closed_loop(product, config, current_data, rrp)
 
         current_final = current_data['final_price']
         seller_discount = current_data.get('discount') or Decimal(0)
