@@ -255,7 +255,7 @@ class TestLoweringHolds:
             "is_in_promo": False, "total_quantity": 5,
         })
         assert decision["needs_update"] is False
-        assert decision["skip_code"] == "CLAMPED_TO_MARGIN"
+        assert decision["skip_code"] == "LIMITED_BY_MARGIN"
 
 
 # ── Misc ─────────────────────────────────────────────────────────────────────

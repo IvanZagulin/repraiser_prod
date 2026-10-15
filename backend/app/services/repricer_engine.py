@@ -377,7 +377,8 @@ class RepricerEngine:
         "SKIPPED_PROMO", "SKIPPED_INACTIVE", "SKIPPED_QUARANTINE", "NO_CHANGE",
         "COMPETITOR_OOS", "COMPETITOR_PARTIAL", "OUT_OF_STOCK", "COOLDOWN",
         "COOLDOWN_SPP_GUARD", "COMPETITOR_CONFIRM", "COMPETITOR_OOS_CONFIRM",
-        "CATALOG_UNAVAILABLE",
+        "CATALOG_UNAVAILABLE", "LIMITED_BY_MIN", "LIMITED_BY_MAX",
+        "LIMITED_BY_MARGIN",
     })
     _UPDATED_CODES = ("UPDATED", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX", "CLAMPED_TO_MARGIN")
     # Повторяющиеся пропуски пишем в историю не чаще раза в 6 часов на товар:
@@ -1920,8 +1921,13 @@ class RepricerEngine:
             # Reporting NO_CHANGE here hid thousands of margin-constrained cards
             # from operational audits.
             _effective_skip = strategy_skip_code or "NO_CHANGE"
-            if limit_reason in {"CLAMPED_TO_MARGIN", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX"}:
-                _effective_skip = limit_reason
+            _limit_skip_codes = {
+                "CLAMPED_TO_MARGIN": "LIMITED_BY_MARGIN",
+                "CLAMPED_TO_MIN": "LIMITED_BY_MIN",
+                "CLAMPED_TO_MAX": "LIMITED_BY_MAX",
+            }
+            if limit_reason in _limit_skip_codes:
+                _effective_skip = _limit_skip_codes[limit_reason]
             return {"product": product, "needs_update": False, "skip_code": _effective_skip,
                     "current_data": current_data, "new_price": final_new_price,
                     "limit_reason": limit_reason, "reason_msg": reason_msg, "_t0": _t0,
