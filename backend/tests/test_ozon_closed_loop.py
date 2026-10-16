@@ -63,9 +63,9 @@ def test_dry_run_does_not_persist():
 # Замкнутый цикл: расчёт цели и коридор
 # ---------------------------------------------------------------------------
 
-def test_in_corridor_no_change():
-    # РРЦ — пол: витрина должна быть в [РРЦ; РРЦ+допуск].
-    # seller*k = 5804*0.588 ≈ 3413 ∈ [3409; 3414] -> не трогаем.
+def test_within_deadband_no_change():
+    # РРЦ 3409, допуск ±1.5% -> коридор [3357.9; 3460.1].
+    # seller*k = 5804*0.588 ≈ 3413 внутри -> не трогаем.
     cfg = _config(ozon_realized_k=Decimal("0.588"))
     price, code, _ = _engine()._ozon_rrp_closed_loop(
         SimpleNamespace(), cfg, _data(5804, Decimal("3413")), Decimal("3409"))
@@ -73,22 +73,33 @@ def test_in_corridor_no_change():
     assert price is None
 
 
-def test_storefront_below_rrp_raises():
-    # витрина ниже РРЦ (пол пробит) -> поднять цену продавца
-    cfg = _config(ozon_realized_k=Decimal("0.587"))
+def test_small_jitter_does_not_churn():
+    """Дрейф витрины на ~1% вокруг РРЦ не должен дёргать цену."""
+    eng = _engine()
+    for sf in (Decimal("3380"), Decimal("3409"), Decimal("3440")):
+        cfg = _config(ozon_realized_k=sf / Decimal("5804"))
+        _, code, _ = eng._ozon_rrp_closed_loop(
+            SimpleNamespace(), cfg, _data(5804, sf), Decimal("3409"))
+        assert code == "NO_CHANGE", f"витрина {sf} внутри ±1.5% не должна менять цену"
+
+
+def test_below_deadband_raises():
+    # витрина явно ниже коридора (< 3357.9) -> поднять цену продавца
+    cfg = _config(ozon_realized_k=Decimal("0.570"))  # 5804*0.57 = 3308
     price, code, _ = _engine()._ozon_rrp_closed_loop(
-        SimpleNamespace(), cfg, _data(5804, Decimal("3407")), Decimal("3409"))
+        SimpleNamespace(), cfg, _data(5804, Decimal("3308")), Decimal("3409"))
     assert code == "CALCULATED"
     assert price > 5804
 
 
-def test_computes_seller_to_hit_storefront():
-    # k=0.5827, цель 3409 -> seller = 3409/0.5827 ≈ 5850
-    cfg = _config(ozon_realized_k=Decimal("0.5827"))
-    price, code, msg = _engine()._ozon_rrp_closed_loop(
-        SimpleNamespace(), cfg, _data(5804, Decimal("3382")), Decimal("3409"))
+def test_above_deadband_computes_seller():
+    # витрина выше коридора (> 3460.1) -> снизить до РРЦ.
+    # k=0.62 -> est 5804*0.62=3598 -> target 3409/0.62 ≈ 5498
+    cfg = _config(ozon_realized_k=Decimal("0.62"))
+    price, code, _ = _engine()._ozon_rrp_closed_loop(
+        SimpleNamespace(), cfg, _data(5804, Decimal("3598")), Decimal("3409"))
     assert code == "CALCULATED"
-    assert 5848 <= price <= 5852
+    assert 5496 <= price <= 5500
 
 
 def test_step_is_capped():
@@ -110,28 +121,34 @@ def test_convergence_over_iterations():
     k_true = Decimal("0.585")
     target = Decimal("3409")
     cfg = _config()
-    seller = Decimal("5820")
+    seller = Decimal("6200")  # старт заведомо выше коридора (витрина ~3627)
     eng = _engine()
-    last = None
-    for _ in range(6):
+    last = seller
+    for _ in range(8):
         storefront = (seller * k_true).quantize(Decimal("0.01"))
         price, code, _ = eng._ozon_rrp_closed_loop(
             SimpleNamespace(), cfg, _data(seller, storefront), target)
         if code == "NO_CHANGE":
-            last = seller
             break
         seller = Decimal(price)
         last = seller
-    # После сходимости витрина у цели в пределах допуска
+    # Сошлось: витрина в пределах мёртвой зоны (±1.5% от 3409 ≈ ±51)
     final_storefront = last * k_true
-    assert abs(final_storefront - target) <= Decimal("6")
+    assert abs(final_storefront - target) <= Decimal("51")
 
 
 def test_storefront_factor_corrects_index():
-    """Если замерили, что реальная витрина на 1% выше индекса, фактор это учитывает."""
-    cfg = _config(ozon_storefront_factor=Decimal("1.01"))
-    price, code, _ = _engine()._ozon_rrp_closed_loop(
-        SimpleNamespace(), cfg, _data(5804, Decimal("3382")), Decimal("3409"))
-    # k_obs = 3382*1.01/5804 = 0.5886 -> seller = 3409/0.5886 ≈ 5791
-    assert code == "CALCULATED"
-    assert 5788 <= price <= 5794
+    """Поправка индекс->реальная витрина меняет оцениваемую витрину и цель.
+
+    Индекс даёт витрину 3600 (выше коридора). Реальная замерена как 0.95 от
+    индекса -> фактор уводит оценку к 3420, то есть в коридор -> NO_CHANGE.
+    """
+    without = _engine()._ozon_rrp_closed_loop(
+        SimpleNamespace(), _config(), _data(5804, Decimal("3600")), Decimal("3409"))
+    assert without[1] == "CALCULATED"  # без поправки — снизить
+
+    cfg = _config(ozon_storefront_factor=Decimal("0.95"))
+    _, code, _ = _engine()._ozon_rrp_closed_loop(
+        SimpleNamespace(), cfg, _data(5804, Decimal("3600")), Decimal("3409"))
+    # k_obs = 3600*0.95/5804 = 0.5893 -> est = 5804*0.5893 = 3420 ∈ коридор
+    assert code == "NO_CHANGE"

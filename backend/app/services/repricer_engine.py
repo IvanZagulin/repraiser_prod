@@ -340,6 +340,14 @@ class RepricerEngine:
     _OZON_K_MIN = Decimal("0.20")
     _OZON_K_MAX = Decimal("1.20")
 
+    # Мёртвая зона РРЦ для Ozon — процент от РРЦ, симметрично вокруг цели.
+    # Индекс между прогонами «дышит» на единицы процентов, и при жёстком
+    # допуске в рублях движок правил бы цену почти каждый прогон (лишняя
+    # частая смена цены сбивает бустинг). Внутри ±этого процента — не трогаем.
+    # Для Ozon РРЦ — это ЦЕНТР коридора (цена витрины после всех скидок),
+    # а не жёсткий пол, как на WB.
+    _OZON_RRP_DEADBAND_PCT = Decimal("1.5")
+
     # Стратегия competitor должна стремиться к рассчитанной цене конкурента
     # (с учетом offset из конфига). Экономические ограничения применяются ниже:
     # min_price, max_price, margin guard и защита WB от резкого снижения.
@@ -1217,11 +1225,15 @@ class RepricerEngine:
             return None, "SKIPPED_INACTIVE", "Не удалось оценить k для Ozon"
 
         est_storefront = (seller * k_eff).quantize(Decimal("0.01"))
-        corridor_top = self._rrp_corridor_top(config, rrp)
-        if rrp <= est_storefront <= corridor_top:
+
+        # Симметричная мёртвая зона в процентах от РРЦ: пока витрина внутри
+        # ±_OZON_RRP_DEADBAND_PCT, считаем, что цена на месте, и не дёргаем её.
+        band = (rrp * self._OZON_RRP_DEADBAND_PCT / 100).quantize(Decimal("0.01"))
+        low, high = rrp - band, rrp + band
+        if low <= est_storefront <= high:
             return None, "NO_CHANGE", (
                 f"Витрина Ozon ≈ {est_storefront}₽ в коридоре РРЦ "
-                f"({rrp}₽ … {corridor_top}₽), k={k_eff}"
+                f"({low}₽ … {high}₽, ±{self._OZON_RRP_DEADBAND_PCT}%), k={k_eff}"
             )
 
         target_seller = Decimal(self._round_up(rrp / k_eff))
