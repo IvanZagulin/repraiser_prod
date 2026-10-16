@@ -107,13 +107,15 @@ def run_lock_acquired_at(owner: Optional[str]) -> Optional[float]:
         return None
 
 
-def acquire_run_lock(user_id: int, ttl: int = 10860, owner: Optional[str] = None) -> bool:
+def acquire_run_lock(user_id: int, ttl: int = 3660, owner: Optional[str] = None) -> bool:
     """
     Попытка захватить эксклюзивную блокировку прогона для пользователя.
     Возвращает True если блокировка получена, False если прогон уже идёт.
-    TTL = 181 мин (чуть больше time_limit=10800s Celery-задачи repricer.run_for_user).
+    TTL = 61 мин (чуть больше time_limit=3600s Celery-задачи repricer.run_for_user).
     Иначе лок истекает раньше задачи и планировщик запускает параллельный прогон
     (инцидент 2026-06-10: медленный прогон из-за шторма 429 WB пережил свой лок).
+    Это аварийный потолок: пока воркер жив, _RunLockHeartbeat продлевает лок
+    на _RUN_LOCK_HEARTBEAT_TTL_SEC (600s), так что реальный TTL в норме ~10 мин.
 
     owner — значение лока (new_run_lock_owner); с ним продление и снятие
     работают только для своего лока.
