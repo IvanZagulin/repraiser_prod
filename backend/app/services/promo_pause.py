@@ -34,6 +34,10 @@ async def sync_promo_pauses(db: Session, user_id: int) -> PromoPauseSyncResult:
     complete discount check could overwrite prices just uploaded by 1C.
     """
 
+    # МЕХАНИЗМ АВТО-ПАУЗЫ ПО АКЦИИ ОТКЛЮЧЁН (Иван, 19.10.2026 — дорабатываем позже).
+    # Товары по скидке WB больше НЕ выключаются и не включаются этим механизмом.
+    return PromoPauseSyncResult()
+
     rows = db.execute(
         select(Product, ProductConfig, Account, PromoPauseRegistry)
         .join(ProductConfig, ProductConfig.product_id == Product.id)
