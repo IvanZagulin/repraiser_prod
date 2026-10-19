@@ -1226,14 +1226,14 @@ class RepricerEngine:
 
         est_storefront = (seller * k_eff).quantize(Decimal("0.01"))
 
-        # Симметричная мёртвая зона в процентах от РРЦ: пока витрина внутри
-        # ±_OZON_RRP_DEADBAND_PCT, считаем, что цена на месте, и не дёргаем её.
+        # Односторонняя зона: ниже РРЦ не опускаемся никогда (как на WB).
+        # Терпим только превышение до +_OZON_RRP_DEADBAND_PCT; ниже РРЦ — поднимаем.
         band = (rrp * self._OZON_RRP_DEADBAND_PCT / 100).quantize(Decimal("0.01"))
-        low, high = rrp - band, rrp + band
+        low, high = rrp, rrp + band  # одностороннее: ниже РРЦ не опускаемся
         if low <= est_storefront <= high:
             return None, "NO_CHANGE", (
                 f"Витрина Ozon ≈ {est_storefront}₽ в коридоре РРЦ "
-                f"({low}₽ … {high}₽, ±{self._OZON_RRP_DEADBAND_PCT}%), k={k_eff}"
+                f"({low}₽ … {high}₽, +{self._OZON_RRP_DEADBAND_PCT}%), k={k_eff}"
             )
 
         target_seller = Decimal(self._round_up(rrp / k_eff))
