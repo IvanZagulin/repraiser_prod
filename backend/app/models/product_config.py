@@ -61,8 +61,21 @@ class ProductConfig(Base):
                                comment='Ozon: когда обновлён realized_k')
     # Поправка индекс->реальная витрина, если её замерили парсингом
     # (по умолчанию NULL = 1.0, т.е. верим индексу как есть).
+    # Применяется только когда прямого замера витрины нет: при живом
+    # ozon_site_price поправлять нечего, там уже настоящая цена.
     ozon_storefront_factor = Column(Numeric(6, 4), nullable=True,
                                     comment='Ozon: реальная витрина / витрина по индексу')
+
+    # Прямой замер витрины: колонка «Цена на сайте, ₽» из отчёта Ozon
+    # (см. app/services/ozon_site_price.py). Цену продавца на момент замера
+    # держим рядом — по ней видно, успел ли Ozon пересчитать витрину после
+    # того, как мы поменяли цену, или замер ещё относится к старой.
+    ozon_site_price = Column(Numeric(10, 2), nullable=True,
+                             comment='Ozon: цена на сайте из отчёта (цена покупателя)')
+    ozon_site_price_at = Column(DateTime, nullable=True,
+                                comment='Ozon: когда снят ozon_site_price')
+    ozon_site_seller_price = Column(Numeric(10, 2), nullable=True,
+                                    comment='Ozon: цена продавца в момент замера витрины')
 
     # Имитация зачёркнутой цены конкурента: priceU = competitor.basic,
     # скидка продавца подбирается под target_final с учётом нашего фактического СПП.

@@ -56,6 +56,8 @@ class PriceSnapshot(Base):
                                  comment="Ozon: сколько индексов участвовало в оценке")
     coinvest_ratio = Column(Numeric(6, 4), nullable=True,
                             comment="Ozon: k = цена покупателя / цена продавца")
+    ozon_site_price = Column(Numeric(10, 2), nullable=True,
+                             comment="Ozon: цена на сайте из отчёта (прямой замер витрины)")
     commission_percent = Column(Numeric(5, 2), nullable=True, comment="Ozon: комиссия FBS, %")
     
     # Метаданные

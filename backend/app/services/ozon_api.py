@@ -366,6 +366,54 @@ class OzonAPIClient:
             "Ozon: достигнут предел в %s страниц, выгрузка оборвана", max_pages,
         )
 
+    async def create_products_report(self, *, language: str = "RU", visibility: str = "ALL") -> str:
+        """Ставит в очередь отчёт по товарам и возвращает его код.
+
+        Отчёт нужен ради колонки «Цена на сайте, ₽» — единственного места в
+        Seller API, где отдаётся цена покупателя, а не цена продавца
+        (см. app/services/ozon_site_price.py).
+        """
+        data = await self._make_request(
+            "/v1/report/products/create",
+            {"language": language, "visibility": visibility},
+        )
+        result = data.get("result") or data
+        code = result.get("code")
+        if not code:
+            raise OzonAPIError(f"Ozon не вернул код отчёта: {data}")
+        return str(code)
+
+    async def get_report_info(self, code: str) -> Dict[str, Any]:
+        data = await self._make_request("/v1/report/info", {"code": str(code)})
+        return data.get("result") or data
+
+    async def wait_report(
+        self,
+        code: str,
+        *,
+        timeout_s: float = 300.0,
+        poll_s: float = 5.0,
+    ) -> str:
+        """Ждёт готовности отчёта и возвращает ссылку на файл."""
+        waited = 0.0
+        while waited < timeout_s:
+            await asyncio.sleep(poll_s)
+            waited += poll_s
+            try:
+                info = await self.get_report_info(code)
+            except OzonAPIError as exc:
+                # Пока отчёт строится, /v1/report/info у Ozon иногда отваливается
+                # по таймауту. Это не повод бросать уже заказанный отчёт —
+                # спрашиваем снова, пока не кончится общее время ожидания.
+                logger.warning("Ozon /v1/report/info %s: %s — спрошу ещё раз", code, exc)
+                continue
+            status = (info.get("status") or "").lower()
+            if status == "success" and info.get("file"):
+                return str(info["file"])
+            if status == "failed":
+                raise OzonAPIError(f"Ozon не построил отчёт {code}: {info.get('error')}")
+        raise OzonAPIError(f"Отчёт Ozon {code} не готов за {timeout_s:.0f} с")
+
     async def update_prices(self, price_updates: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not price_updates:
             raise ValueError("price_updates must not be empty")

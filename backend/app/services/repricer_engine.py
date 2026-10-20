@@ -21,6 +21,7 @@ from app.services import (
     catalog_parser, create_wb_client, create_ozon_client, telegram_notifier
 )
 from app.services.ozon_buyer_price import estimate_from_price_data
+from app.services.ozon_site_price import SiteRow, fetch_site_rows
 from app.utils.jwt import is_token_expired
 from app.redis_client import (
     acquire_product_locks,
@@ -58,6 +59,14 @@ class RepricerEngine:
         self.user_id = user_id  # None → глобальные/дефолтные настройки
         self._user_settings: Optional[Dict] = None  # loaded once per run
         self._prefetched_prices: Dict[int, object] = {}  # nm_id -> PriceData, cleared per chunk
+        # Ozon: «Цена на сайте» по кабинету — одна выгрузка отчёта на прогон
+        # (account_id -> {offer_id: цена}); кабинет, по которому отчёт не
+        # собрался, помечаем, чтобы не дёргать его на каждом товаре.
+        self._ozon_site_prices: Dict[int, Dict[str, SiteRow]] = {}
+        self._ozon_site_failed: set = set()
+        # Товары кабинета считаются параллельно, а отчёт нужен один —
+        # замок не даёт заказать его несколько раз сразу.
+        self._ozon_site_lock: Optional[asyncio.Lock] = None
         self._price_fetch_failed: set[int] = set()
         self._competitor_entries_map: Optional[Dict[int, list]] = None  # config_id -> [nm_id], прогрев на прогон
         self._catalog_single_fallbacks = 0
@@ -119,6 +128,148 @@ class RepricerEngine:
 
         return estimate.buyer_price, implied_spp, estimate
 
+    async def _ozon_site_prices_for_account(self, account) -> Dict[str, SiteRow]:
+        """«Цена на сайте» по всему кабинету: одна выгрузка отчёта на прогон.
+
+        Отчёт строится около минуты и весит мегабайты, поэтому держим его
+        результат в памяти прогона и ставим в Redis короткий замок — чтобы
+        ручной прогон сразу за плановым не заказывал отчёт заново. Если
+        отчёта нет, товары возьмут прошлый замер из product_config, а если и
+        его нет — витрину посчитает обратный счёт по ценовому индексу.
+        """
+        key = int(getattr(account, "id", 0) or 0)
+        cached = self._ozon_site_prices.get(key)
+        if cached is not None:
+            return cached
+        if key in self._ozon_site_failed:
+            return {}
+        if not getattr(account, "ozon_client_id", None) or not getattr(account, "ozon_api_key", None):
+            self._ozon_site_failed.add(key)
+            return {}
+
+        if self._ozon_site_lock is None:
+            self._ozon_site_lock = asyncio.Lock()
+        async with self._ozon_site_lock:
+            return await self._ozon_fetch_site_prices(account, key)
+
+    async def _ozon_fetch_site_prices(self, account, key: int) -> Dict[str, SiteRow]:
+        # Под замком проверяем заново: пока ждали, отчёт мог уже приехать.
+        cached = self._ozon_site_prices.get(key)
+        if cached is not None:
+            return cached
+        if key in self._ozon_site_failed:
+            return {}
+
+        guard = f"ozon_site_report:{key}"
+        if guard_active(guard):
+            self._ozon_site_failed.add(key)
+            logger.info(
+                "Ozon кабинет %s: отчёт заказывали меньше %d с назад — "
+                "берём прошлый замер витрины",
+                getattr(account, "name", key), self._OZON_SITE_REPORT_LOCK_SEC,
+            )
+            return {}
+
+        cache_set(guard, {"at": time.time()}, ttl=self._OZON_SITE_REPORT_LOCK_SEC)
+        try:
+            async with create_ozon_client(account.ozon_client_id, account.ozon_api_key) as client:
+                prices = await fetch_site_rows(client)
+        except Exception as e:  # noqa: BLE001 — сбой отчёта не должен ронять прогон
+            self._ozon_site_failed.add(key)
+            logger.warning(
+                "Ozon кабинет %s: отчёт с ценой на сайте не получен (%s) — "
+                "витрину считаем по ценовым индексам",
+                getattr(account, "name", key), e,
+            )
+            return {}
+
+        self._ozon_site_prices[key] = prices
+        logger.info("Ozon кабинет %s: цена на сайте получена по %d товарам",
+                    getattr(account, "name", key), len(prices))
+        return prices
+
+    async def _ozon_site_measurement(self, product, account, price_data) -> Optional[Dict]:
+        """Прямой замер витрины Ozon по одному товару.
+
+        Возвращает {'price', 'implied_spp', 'stale'} либо None, если замера
+        нет или он неправдоподобен. `stale` — отчёт ещё показывает витрину от
+        прежней цены продавца: Ozon пересчитывает доинвестирование не сразу,
+        и если принять такой замер за правду, цикл начнёт раскачивать цену.
+        """
+        seller = price_data.seller_price
+        if not seller or seller <= 0:
+            return None
+
+        config = getattr(product, "config", None)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        rows = await self._ozon_site_prices_for_account(account)
+        row = None
+        for candidate in (price_data.offer_id, getattr(product, "seller_sku", None)):
+            if candidate:
+                row = rows.get(str(candidate))
+                if row is not None:
+                    break
+
+        price = row.price if row is not None else None
+        stock = row.stock if row is not None else None
+
+        if price is None and config is not None:
+            # Отчёта в этом прогоне нет — опираемся на прошлый замер, но
+            # только если он снят при той же цене продавца и ещё не протух.
+            stored = getattr(config, "ozon_site_price", None)
+            stored_at = getattr(config, "ozon_site_price_at", None)
+            stored_seller = getattr(config, "ozon_site_seller_price", None)
+            fresh = (
+                stored is not None and stored_at is not None
+                and stored_seller is not None
+                and Decimal(str(stored_seller)) == seller
+                and (now - stored_at) <= timedelta(minutes=self._OZON_SITE_PRICE_TTL_MIN)
+            )
+            if fresh:
+                price = Decimal(str(stored))
+
+        if price is None:
+            return None
+
+        price = Decimal(str(price))
+        k = price / seller
+        if not (self._OZON_K_MIN <= k <= self._OZON_K_MAX):
+            logger.warning(
+                "Ozon product_id=%s: цена на сайте %s при цене продавца %s даёт "
+                "k=%s вне [%s; %s] — замер не используем",
+                price_data.product_id, price, seller,
+                k.quantize(Decimal("0.0001")), self._OZON_K_MIN, self._OZON_K_MAX,
+            )
+            return None
+
+        prev_price = getattr(config, "ozon_site_price", None) if config is not None else None
+        prev_seller = getattr(config, "ozon_site_seller_price", None) if config is not None else None
+        accepted_at = getattr(config, "ozon_k_updated_at", None) if config is not None else None
+
+        stale = bool(
+            prev_price is not None and prev_seller is not None
+            and Decimal(str(prev_price)) == price
+            and Decimal(str(prev_seller)) != seller
+        )
+        if stale and accepted_at is not None and (
+            now - accepted_at > timedelta(minutes=self._OZON_SITE_STALE_MAX_MIN)
+        ):
+            # Витрина не шевелится слишком долго — значит она такая и есть.
+            stale = False
+
+        if config is not None and not self._dry_run:
+            config.ozon_site_price = price
+            config.ozon_site_seller_price = seller
+            config.ozon_site_price_at = now
+
+        return {
+            "price": price,
+            "implied_spp": (Decimal(1) - k) * 100,
+            "stale": stale,
+            "stock": stock,
+        }
+
     async def _get_ozon_current_price_data(self, product: Product, account: Account) -> Optional[Dict]:
         try:
             async with create_ozon_client(account.ozon_client_id, account.ozon_api_key) as client:
@@ -154,6 +305,16 @@ class RepricerEngine:
                 # (_calculate_seller_price_from_final) тогда работает без правок,
                 # ровно как для WB.
                 buyer_price, implied_spp, buyer_estimate = self._ozon_buyer_price(price_data)
+                buyer_source = "price_index" if buyer_price else None
+
+                # Прямой замер витрины важнее обратного счёта по индексу:
+                # «Цена на сайте» из отчёта — ровно та цена, которую видит
+                # покупатель, без округления индекса и без поправок к нему.
+                site = await self._ozon_site_measurement(product, account, price_data)
+                if site is not None:
+                    buyer_price = site["price"]
+                    implied_spp = site["implied_spp"]
+                    buyer_source = "site_report"
 
                 return {
                     "seller_price": price_data.seller_price,
@@ -162,9 +323,14 @@ class RepricerEngine:
                     "discount": Decimal(0) if buyer_price else price_data.ozon_discount_pct,
                     "final_price": buyer_price or price_data.final_price,
                     "spp": implied_spp,
-                    # Витрина неизвестна — разрешаем только повышение
-                    **({} if buyer_price else {"catalog_fallback": True}),
+                    # Витрина неизвестна — разрешаем только повышение.
+                    # ozon_seller_mode снимает этот запрет: там РРЦ понимается
+                    # как цена продавца, и снижать до неё ничем не рискованно.
+                    **({} if buyer_price else {"catalog_fallback": True, "ozon_seller_mode": True}),
                     "ozon_buyer_price": float(buyer_price) if buyer_price else None,
+                    "ozon_buyer_source": buyer_source,
+                    "ozon_site_price": float(site["price"]) if site else None,
+                    "ozon_site_price_stale": bool(site and site["stale"]),
                     "ozon_buyer_price_spread": (
                         float(buyer_estimate.spread_pct) if buyer_estimate else None
                     ),
@@ -172,7 +338,11 @@ class RepricerEngine:
                         buyer_estimate.sources if buyer_estimate else 0
                     ),
                     "is_in_promo": False,
-                    "total_quantity": 1,
+                    # Остаток знаем только из отчёта; без него считаем, что
+                    # товар в продаже, — так вело себя прежнее поведение.
+                    "total_quantity": (
+                        site["stock"] if site and site["stock"] is not None else 1
+                    ),
                     "name": name,
                     "image_url": image_url,
                     "ozon_offer_id": price_data.offer_id,
@@ -340,13 +510,37 @@ class RepricerEngine:
     _OZON_K_MIN = Decimal("0.20")
     _OZON_K_MAX = Decimal("1.20")
 
-    # Мёртвая зона РРЦ для Ozon — процент от РРЦ, симметрично вокруг цели.
-    # Индекс между прогонами «дышит» на единицы процентов, и при жёстком
-    # допуске в рублях движок правил бы цену почти каждый прогон (лишняя
-    # частая смена цены сбивает бустинг). Внутри ±этого процента — не трогаем.
-    # Для Ozon РРЦ — это ЦЕНТР коридора (цена витрины после всех скидок),
-    # а не жёсткий пол, как на WB.
+    # Прямой замер витрины («Цена на сайте» из отчёта Ozon) живёт этот срок.
+    # Отчёт строится раз в прогон; если он не собрался, разрешаем опереться на
+    # прошлый замер, пока он не старше этого окна, — иначе уходим на индекс.
+    _OZON_SITE_PRICE_TTL_MIN = 90
+    # Сколько терпим «Ozon ещё не пересчитал витрину». Пока замер не обновился
+    # после нашей правки цены, цену не трогаем, но не вечно: если витрина не
+    # шевелится столько времени, значит она такая и есть (например, товар не
+    # в продаже), и работаем по тому, что видим.
+    _OZON_SITE_STALE_MAX_MIN = 360
+    # Замок на заказ отчёта: защищает от повторного заказа, если прогоны
+    # идут подряд (ручной сразу за плановым).
+    _OZON_SITE_REPORT_LOCK_SEC = 600
+
+    # Мёртвая зона РРЦ для Ozon — процент от РРЦ вверх (ниже РРЦ не опускаемся
+    # никогда, поэтому коридор односторонний). Зона нужна, чтобы не дёргать
+    # цену из-за шума замера: частая смена цены сбивает бустинг Ozon.
+    #
+    # Ширина зоны — это цена ошибки измерения, и платит её покупатель: цена
+    # приходит к коридору сверху и замирает у его верхней границы. Пока
+    # витрину угадывали по ценовому индексу (ошибка до пары процентов), зона
+    # в 1,5% держала весь кабинет выше РРЦ на 22…170 ₽. Поэтому зон теперь
+    # две: широкая для оценки по индексу и узкая для прямого замера «Цены на
+    # сайте», где ошибки измерения нет.
     _OZON_RRP_DEADBAND_PCT = Decimal("1.5")
+    _OZON_RRP_MEASURED_DEADBAND_PCT = Decimal("0.3")
+
+    # Не трогаем цену ради копеек: правка меньше этого шага ничего не меняет
+    # на витрине, но стоит смены цены. Работает только когда витрина ВЫШЕ РРЦ —
+    # если она ниже, правим на сколько нужно, РРЦ это пол.
+    _OZON_MIN_STEP_RUB = Decimal("2")
+    _OZON_MIN_STEP_RATIO = Decimal("0.001")
 
     # Стратегия competitor должна стремиться к рассчитанной цене конкурента
     # (с учетом offset из конфига). Экономические ограничения применяются ниже:
@@ -1200,46 +1394,82 @@ class RepricerEngine:
         return k_eff
 
     def _ozon_rrp_closed_loop(self, product, config, current_data: Dict, rrp: Decimal):
-        """Замкнутый цикл РРЦ для Ozon: доводим цену по реально сложившемуся k.
+        """Замкнутый цикл РРЦ для Ozon: доводим цену продавца до РРЦ на витрине.
 
-        Ozon доинвестирует скидку, и доля k = витрина/цена_продавца слегка
-        плавает при смене цены и сама по себе. Поэтому вместо мгновенного
-        индекса за один прогон берём сглаженный k, оцениваем по нему текущую
-        витрину и целевую цену продавца, а шаг ограничиваем — так цикл за
-        несколько прогонов сходится к РРЦ без раскачки.
+        Ozon доинвестирует скидку поверх нашей цены, поэтому цель задаётся
+        через долю k = витрина / цена_продавца. Откуда берётся k — решает
+        источник витрины, и это главное различие:
 
-        Поправку индекс->реальная витрина (ozon_storefront_factor) применяем,
-        если её замерили парсингом; по умолчанию доверяем индексу как есть.
+        * **Прямой замер** («Цена на сайте» из отчёта Ozon). Витрина известна
+          точно, k считается одним делением, сглаживать и поправлять нечего,
+          мёртвая зона узкая. Единственная осторожность — отчёт отстаёт от
+          нашей правки цены: пока он показывает прежнюю витрину, цену не
+          трогаем, иначе цикл начнёт сам себя разгонять.
+        * **Оценка по ценовому индексу** (запасной путь). Индекс округлён и
+          пересчитывается у Ozon с задержкой, ошибка — проценты. Такой k
+          сглаживаем по EMA, умножаем на замеренную поправку
+          `ozon_storefront_factor`, если она есть, и держим мёртвую зону шире.
         """
         seller = Decimal(str(current_data.get("seller_price") or 0))
         buyer = Decimal(str(current_data.get("final_price") or 0))
         if seller <= 0 or buyer <= 0:
             return None, "SKIPPED_INACTIVE", "Нет цены продавца или витрины Ozon"
 
-        factor = getattr(config, "ozon_storefront_factor", None)
-        factor = Decimal(str(factor)) if factor else Decimal(1)
+        measured = current_data.get("ozon_buyer_source") == "site_report"
 
-        k_obs = (buyer * factor) / seller
-        k_eff = self._ozon_update_realized_k(config, k_obs)
-        if k_eff <= 0:
-            return None, "SKIPPED_INACTIVE", "Не удалось оценить k для Ozon"
+        if measured:
+            if current_data.get("ozon_site_price_stale"):
+                return None, "NO_CHANGE", (
+                    f"Ozon ещё не пересчитал витрину после смены цены продавца "
+                    f"(на сайте прежние {buyer}₽) — ждём следующего замера"
+                )
+            k_eff = (buyer / seller).quantize(Decimal("0.0001"))
+            if k_eff <= 0:
+                return None, "SKIPPED_INACTIVE", "Не удалось оценить k для Ozon"
+            if not self._dry_run:
+                config.ozon_realized_k = k_eff
+                config.ozon_k_updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            est_storefront = buyer
+            deadband_pct = self._OZON_RRP_MEASURED_DEADBAND_PCT
+            source_note = "витрина с сайта"
+        else:
+            factor = getattr(config, "ozon_storefront_factor", None)
+            factor = Decimal(str(factor)) if factor else Decimal(1)
 
-        est_storefront = (seller * k_eff).quantize(Decimal("0.01"))
+            k_obs = (buyer * factor) / seller
+            k_eff = self._ozon_update_realized_k(config, k_obs)
+            if k_eff <= 0:
+                return None, "SKIPPED_INACTIVE", "Не удалось оценить k для Ozon"
+            est_storefront = (seller * k_eff).quantize(Decimal("0.01"))
+            deadband_pct = self._OZON_RRP_DEADBAND_PCT
+            source_note = "витрина по индексу"
 
         # Односторонняя зона: ниже РРЦ не опускаемся никогда (как на WB).
-        # Терпим только превышение до +_OZON_RRP_DEADBAND_PCT; ниже РРЦ — поднимаем.
-        band = (rrp * self._OZON_RRP_DEADBAND_PCT / 100).quantize(Decimal("0.01"))
-        low, high = rrp, rrp + band  # одностороннее: ниже РРЦ не опускаемся
+        # Терпим только превышение до +deadband_pct; ниже РРЦ — поднимаем.
+        band = (rrp * deadband_pct / 100).quantize(Decimal("0.01"))
+        low, high = rrp, rrp + band
         if low <= est_storefront <= high:
             return None, "NO_CHANGE", (
-                f"Витрина Ozon ≈ {est_storefront}₽ в коридоре РРЦ "
-                f"({low}₽ … {high}₽, +{self._OZON_RRP_DEADBAND_PCT}%), k={k_eff}"
+                f"Витрина Ozon {est_storefront}₽ ({source_note}) в коридоре РРЦ "
+                f"({low}₽ … {high}₽, +{deadband_pct}%), k={k_eff}"
             )
 
         target_seller = Decimal(self._round_up(rrp / k_eff))
 
-        # Ограничиваем шаг: если индекс на прогон отстал от только что
-        # отправленной цены, k_obs перекошен — большой скачок недопустим.
+        # Правку меньше минимального шага не отправляем: на витрине она ничего
+        # не изменит, а смена цены сбивает бустинг Ozon. Исключение — когда
+        # витрина ниже РРЦ: РРЦ это пол, его дотягиваем на сколько нужно.
+        if est_storefront > high:
+            min_step = max(self._OZON_MIN_STEP_RUB, seller * self._OZON_MIN_STEP_RATIO)
+            if abs(target_seller - seller) < min_step:
+                return None, "NO_CHANGE", (
+                    f"Витрина Ozon {est_storefront}₽ выше РРЦ {rrp}₽ на "
+                    f"{est_storefront - rrp}₽, но правка цены продавца "
+                    f"({seller}₽ → {target_seller}₽) меньше шага {min_step:.2f}₽"
+                )
+
+        # Ограничиваем шаг: если замер на прогон отстал от только что
+        # отправленной цены, k перекошен — большой скачок недопустим.
         max_up = Decimal(self._round_up(seller * (1 + self._OZON_MAX_STEP_RATIO)))
         min_down = Decimal(self._round_up(seller * (1 - self._OZON_MAX_STEP_RATIO)))
         capped = target_seller
@@ -1250,7 +1480,7 @@ class RepricerEngine:
 
         step_note = "" if capped == target_seller else f" (шаг ограничен с {target_seller}₽)"
         reason = (
-            f"Ozon РРЦ замкнутый цикл: витрина ≈ {est_storefront}₽, цель {rrp}₽, "
+            f"Ozon РРЦ замкнутый цикл: {source_note} {est_storefront}₽, цель {rrp}₽, "
             f"k={k_eff}, новая цена продавца {capped}₽{step_note}"
         )
         return capped, "CALCULATED", reason
@@ -1775,6 +2005,9 @@ class RepricerEngine:
             competitor_in_stock=competitor_in_stock,
             is_in_promo=current_data.get('is_in_promo', False),
             total_quantity=current_data.get('total_quantity'),
+            # Ozon: прямой замер витрины, чтобы по истории было видно, по чему
+            # считался k — по «Цене на сайте» или по ценовому индексу.
+            ozon_site_price=current_data.get('ozon_site_price'),
             snapshot_at=datetime.now(timezone.utc).replace(tzinfo=None)
         )
         self.db.add(snapshot)
@@ -1997,6 +2230,15 @@ class RepricerEngine:
             elif marketplace == "wb":
                 current_data = self._trusted_observation(product, current_data)
 
+            # Ozon без остатка: доинвестирования нет, и «цена на сайте»
+            # равна цене продавца. Если поверить такому k=1 и снизить цену
+            # продавца до РРЦ, то после поставки Ozon включит скидку и
+            # витрина окажется сильно ниже РРЦ. Пока остатка нет — не трогаем.
+            if marketplace == "ozon" and current_data.get("total_quantity", 1) == 0:
+                return {"product": product, "needs_update": False, "skip_code": "OUT_OF_STOCK",
+                        "current_data": current_data, "new_price": None, "limit_reason": None,
+                        "reason_msg": "Нет остатка на Ozon — цену не трогаем", "_t0": _t0}
+
             # Нет остатка: каталог не отдаёт цену покупателя, СПП неизвестен.
             # Раньше считалось, что СПП = 0, и цена продавца падала до РРЦ/0.97 —
             # после поставки покупатель видел −30% от РРЦ. Теперь для РРЦ берём
@@ -2097,7 +2339,14 @@ class RepricerEngine:
         # сопротивлялись снижению. Повышать можно всегда.
         _hold_reason = None
         if _lowering:
-            if current_data.get("catalog_lag") or current_data.get("catalog_fallback"):
+            # В режиме ozon_seller_mode витрина неизвестна, и РРЦ понимается
+            # как цена продавца — цель точная, задерживать снижение незачем.
+            _uncertain = (
+                current_data.get("catalog_lag")
+                or (current_data.get("catalog_fallback")
+                    and not current_data.get("ozon_seller_mode"))
+            )
+            if _uncertain:
                 _hold_reason = "Каталог WB не обновился / цена покупателя оценочная — снижение отложено"
             elif guard_active(f"wb_quarantine_hold:{product.nm_id}"):
                 _hold_reason = "WB недавно отправил цену в карантин — снижение отложено"
