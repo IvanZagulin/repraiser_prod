@@ -16,6 +16,10 @@ class Product(Base):
     id = Column(Integer, primary_key=True, index=True)
     account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     nm_id = Column(BigInteger, nullable=False, index=True, comment="Артикул WB (nmID)")
+    # У Ozon два разных номера: nm_id хранит внутренний product_id (им ходим в
+    # Seller API), а в адресе карточки стоит публичный SKU. Подставить product_id
+    # в ссылку нельзя — Ozon откроет чужой товар. Поэтому SKU храним отдельно.
+    ozon_sku = Column(BigInteger, nullable=True, comment="Ozon: публичный SKU для ссылки на карточку")
     seller_sku = Column(String(255), nullable=True, index=True, comment="Артикул продавца (может быть заполнен автоматически)")
     name = Column(String(500), nullable=True, comment="Название товара (может быть заполнено автоматически)")
     image_url = Column(String(500), nullable=True, comment="URL фото товара из WB Content API")

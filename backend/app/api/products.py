@@ -254,6 +254,7 @@ async def list_products(
             'name': product.name,
             'account_id': product.account_id,
             'nm_id': product.nm_id,
+            'ozon_sku': product.ozon_sku,
             'image_url': product.image_url,
             'created_at': product.created_at,
             'updated_at': product.updated_at,
@@ -366,6 +367,7 @@ async def create_product(
             image_url = catalog_card.image_url or image_url
             subject_name = catalog_card.subject_name
 
+    ozon_sku = None
     if account.marketplace == "ozon":
         try:
             async with create_ozon_client(account.ozon_client_id, account.ozon_api_key) as ozon_client:
@@ -376,6 +378,8 @@ async def create_product(
                 if info:
                     seller_sku = seller_sku or info.get("offer_id") or str(product_data.nm_id)
                     name = name or info.get("name") or f"Ozon product {product_data.nm_id}"
+                    # Публичный SKU — только отсюда; в ценах его нет
+                    ozon_sku = info.get("sku") or None
                     if not image_url:
                         image_url = OzonAPIClient.extract_primary_image(info)
                 else:
@@ -415,6 +419,7 @@ async def create_product(
     product = Product(
         account_id=product_data.account_id,
         nm_id=product_data.nm_id,
+        ozon_sku=ozon_sku,
         seller_sku=seller_sku,
         name=name,
         image_url=image_url,

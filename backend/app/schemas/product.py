@@ -96,6 +96,7 @@ class ProductResponse(ProductBase):
     id: int
     account_id: int
     nm_id: int
+    ozon_sku: Optional[int] = None
     image_url: Optional[str] = None
     created_at: datetime
     updated_at: datetime

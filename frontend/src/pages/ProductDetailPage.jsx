@@ -243,6 +243,19 @@ export default function ProductDetailPage() {
                 WB <ExternalLink className="w-3 h-3" />
               </a>
             )}
+            {/* В адресе карточки Ozon стоит публичный SKU, а не product_id из
+                nm_id: по product_id откроется чужой товар. Пока SKU не
+                подтянулся прогоном, ссылку не показываем. */}
+            {isOzon && product.ozon_sku && (
+              <a
+                href={`https://www.ozon.ru/product/${product.ozon_sku}/`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-sm text-primary hover:underline"
+              >
+                Ozon <ExternalLink className="w-3 h-3" />
+              </a>
+            )}
           </div>
         </div>
         <button

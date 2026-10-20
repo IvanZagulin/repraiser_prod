@@ -289,11 +289,27 @@ class RepricerEngine:
                 from app.services.ozon_api import OzonAPIClient as _OzClient
                 name = price_data.name
                 image_url = None
-                if not name or name.startswith("Ozon product"):
-                    info = await client.get_product_info(product_id=product.nm_id)
+                # Публичный SKU (для ссылки на карточку) приходит только из
+                # product/info; у товаров, заведённых до его появления, он пуст —
+                # дозаполняем на первом же прогоне, дальше запрос не нужен.
+                need_sku = not getattr(product, "ozon_sku", None)
+                if not name or name.startswith("Ozon product") or need_sku:
+                    # Карточка нужна только ради названия, картинки и SKU —
+                    # цена уже есть. Сбой здесь не должен стоить нам прогона
+                    # по товару, поэтому глушим его отдельно.
+                    try:
+                        info = await client.get_product_info(product_id=product.nm_id)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(
+                            "Ozon product_id=%s: карточка не прочиталась (%s) — "
+                            "считаем цену без названия и SKU", product.nm_id, e,
+                        )
+                        info = None
                     if info:
                         name = info.get("name") or name
                         image_url = _OzClient.extract_primary_image(info)
+                        if need_sku and info.get("sku") and not self._dry_run:
+                            product.ozon_sku = int(info["sku"])
 
                 # Цена покупателя на Ozon ниже нашей: маркетплейс доинвестирует
                 # скидку (медиана по кабинету — 65% от выставленной цены). В API
