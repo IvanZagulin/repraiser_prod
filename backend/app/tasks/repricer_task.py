@@ -211,7 +211,8 @@ def _graceful_shutdown_guard(
     name="repricer.run_for_user",
     max_retries=2,
     default_retry_delay=60,
-    time_limit=10800,  # 3 часа — для 30k+ товаров
+    time_limit=3600,  # 1 час — потолок прогона (было 3 часа); зависший прогон
+    # Celery принудительно снимет максимум через час, а не через три.
 )
 def run_repricer_for_user(
     self,
