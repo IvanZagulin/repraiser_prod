@@ -47,8 +47,22 @@ class AccountResponse(AccountBase):
     created_at: datetime
     updated_at: datetime
     token_ttl_days: Optional[int] = Field(None, description="Days until WB token expiration")
+    # Маска ключа — чтобы в UI было видно, какой ключ сейчас стоит.
+    # Сам ключ наружу не отдаём никогда.
+    wb_token_masked: Optional[str] = Field(None, description="Last 4 chars of WB token")
+    ozon_client_id: Optional[str] = Field(None, description="Ozon Client-Id (not a secret)")
+    ozon_api_key_masked: Optional[str] = Field(None, description="Last 4 chars of Ozon Api-Key")
+    has_credentials: bool = Field(False, description="Whether API credentials are stored")
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class CredentialsCheckResponse(BaseModel):
+    """Результат живой проверки сохранённого ключа у маркетплейса."""
+
+    ok: bool
+    message: str
+    token_ttl_days: Optional[int] = None
 
 
 class AccountListResponse(BaseModel):
