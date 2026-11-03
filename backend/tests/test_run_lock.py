@@ -29,7 +29,7 @@ class TestAcquireRunLock:
         assert args[0] == "repricer:run_lock:1"
         assert args[1] == "1"
         assert kwargs.get("nx") is True
-        assert kwargs.get("ex") == 10860  # default TTL — чуть больше time_limit=10800s
+        assert kwargs.get("ex") == 3660  # default TTL — чуть больше time_limit=3600s
 
     def test_returns_false_when_already_locked(self):
         """Если ключ уже существует, SET NX вернёт None → acquire_run_lock=False."""
