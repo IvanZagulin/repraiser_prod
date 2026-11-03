@@ -8,6 +8,11 @@ import pytest
 from app.models import ConfigChangeLog, PromoPauseRegistry
 from app.services.promo_pause import sync_promo_pauses
 
+# Автопауза по акции выключена 19.10.2026: sync_promo_pauses сразу возвращает
+# пустой результат (см. комментарий в app/services/promo_pause.py). Тесты
+# описывают прежнее поведение — вернуть, когда механизм включат обратно.
+pytestmark = pytest.mark.skip(reason="promo_pause выключен 19.10.2026")
+
 
 class _FakeWBClient:
     def __init__(self, prices):
