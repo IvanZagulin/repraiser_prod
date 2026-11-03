@@ -669,14 +669,35 @@ class RepricerEngine:
         "COMPETITOR_OOS", "COMPETITOR_PARTIAL", "OUT_OF_STOCK", "COOLDOWN",
         "COOLDOWN_SPP_GUARD", "COMPETITOR_CONFIRM", "COMPETITOR_OOS_CONFIRM",
         "CATALOG_UNAVAILABLE", "LIMITED_BY_MIN", "LIMITED_BY_MAX",
-        "LIMITED_BY_MARGIN",
+        "LIMITED_BY_MARGIN", "PROMO_LOCKED",
     })
     _UPDATED_CODES = ("UPDATED", "CLAMPED_TO_MIN", "CLAMPED_TO_MAX", "CLAMPED_TO_MARGIN")
     # Повторяющиеся пропуски пишем в историю не чаще раза в 6 часов на товар:
     # ~740 товаров с конкурентами без остатка дали бы ~35 тыс. строк в сутки.
     # Счётчики прогона (reason_counts) учитывают все.
     _SKIP_LOG_DEDUP_SEC = 6 * 3600
-    _DEDUP_SKIP_CODES = ("COMPETITOR_OOS", "CATALOG_UNAVAILABLE", "COMPETITOR_PARTIAL")
+    _DEDUP_SKIP_CODES = ("COMPETITOR_OOS", "CATALOG_UNAVAILABLE", "COMPETITOR_PARTIAL", "PROMO_LOCKED")
+    # ── Promo-lock: акция WB держит цену покупателя ─────────────────────────
+    # В акции WB фиксирует цену покупателя. Повышение базы её не двигает:
+    # WB просто увеличивает процент скидки продавца, база после скидки и цена
+    # покупателя остаются прежними. Каждый следующий прогон видел «цена ниже
+    # цели», поднимал базу ещё раз, и скидка росла по спирали (03.11.2026:
+    # 1644 активных карточки, скидка 0% → 11%, база ×1.13 при той же цене
+    # покупателя). Признак: база выросла, скидка выросла, цена покупателя
+    # не изменилась. Отставание каталога так не выглядит — там скидка
+    # из Prices API не меняется.
+    # Пока метка стоит, базу не повышаем (ни по стратегии, ни по марже —
+    # в акции это бесполезно). Снижать можно. Метка снимается, когда скидка
+    # упала или цена покупателя сдвинулась, либо по TTL — тогда одно пробное
+    # повышение, и если WB снова ответил скидкой, метка ставится заново.
+    _PROMO_LOCK_DISCOUNT_PP = Decimal("0.5")
+    _PROMO_LOCK_FINAL_TOL_PCT = Decimal("1")
+    _PROMO_LOCK_FINAL_TOL_MIN_RUB = Decimal("2")
+    _PROMO_LOCK_TTL_SEC = 48 * 3600
+    # Наше повышение запоминаем на 6 часов: следующий прогон сверяет, что WB
+    # ответил на него ростом скидки, а не ростом цены покупателя.
+    _PROMO_PROBE_TTL_SEC = 6 * 3600
+    _PROMO_LOCK_SNAPSHOT_LOOKBACK_SEC = 48 * 3600
 
     def _competitor_target_final(self, config, competitor_price: Decimal) -> Decimal:
         """Return target final buyer price for competitor strategy."""
@@ -743,6 +764,134 @@ class RepricerEngine:
             )
             return False
         return seller_discount > self._PROMO_DISCOUNT_SKIP_THRESHOLD
+
+    def _promo_final_tol(self, final: Decimal) -> Decimal:
+        return max(self._PROMO_LOCK_FINAL_TOL_MIN_RUB, final * self._PROMO_LOCK_FINAL_TOL_PCT / 100)
+
+    @staticmethod
+    def _q2(value) -> Decimal:
+        """Для сообщений: 1527.7500 → 1527.75, 560.0 → 560.00."""
+        return Decimal(str(value)).quantize(Decimal("0.01"))
+
+    def _remember_promo_probe(self, product: Product, current_data: Dict, new_price) -> None:
+        """Запомнить наше повышение базы для проверки на следующем прогоне."""
+        try:
+            old_seller = Decimal(str(current_data.get("seller_price") or 0))
+            old_final = Decimal(str(current_data.get("catalog_final_raw", current_data.get("final_price")) or 0))
+            new_seller = Decimal(str(new_price or 0))
+            if old_seller <= 0 or old_final <= 0 or new_seller <= old_seller:
+                return
+            cache_set(f"promo_probe:{product.id}", {
+                "old_seller": float(old_seller),
+                "old_final": float(old_final),
+                "old_discount": float(current_data.get("discount") or 0),
+                "new_seller": float(new_seller),
+                "ts": time.time(),
+            }, ttl=self._PROMO_PROBE_TTL_SEC)
+        except Exception as e:
+            logger.debug("nm_id=%s: promo_probe не записан: %s", product.nm_id, e)
+
+    def _check_promo_lock(self, product: Product, current_data: Dict) -> Optional[str]:
+        """Вернуть причину, если акция WB держит цену покупателя и повышать базу нельзя.
+
+        Проверяется только перед повышением. Сначала действующая метка
+        (снимается, если скидка упала или цена покупателя сдвинулась), затем
+        два признака спирали: ответ WB на наше последнее повышение
+        (promo_probe) и сравнение с последним снимком — на случай, когда базу
+        подняли не мы (ночная выгрузка 1С).
+        """
+        try:
+            cur_seller = Decimal(str(current_data.get("seller_price") or 0))
+            cur_final = Decimal(str(current_data.get("catalog_final_raw", current_data.get("final_price")) or 0))
+            cur_disc = Decimal(str(current_data.get("discount") or 0))
+        except (TypeError, ValueError, ArithmeticError):
+            return None
+        if cur_seller <= 0 or cur_final <= 0:
+            return None
+
+        key = f"promo_lock:{product.id}"
+        lock = cache_get(key)
+        if lock:
+            try:
+                lk_disc = Decimal(str(lock["discount"]))
+                lk_final = Decimal(str(lock["final"]))
+            except (KeyError, TypeError, ValueError, ArithmeticError):
+                cache_delete(key)
+            else:
+                if cur_disc < lk_disc - self._PROMO_LOCK_DISCOUNT_PP or abs(cur_final - lk_final) > self._promo_final_tol(lk_final):
+                    logger.info(
+                        "nm_id=%s: promo-lock снят — скидка %s%% → %s%%, цена покупателя %s → %s",
+                        product.nm_id, self._q2(lk_disc), self._q2(cur_disc), self._q2(lk_final), self._q2(cur_final),
+                    )
+                    cache_delete(key)
+                else:
+                    return (
+                        f"Акция WB держит цену покупателя {self._q2(lk_final)}₽ (скидка {self._q2(cur_disc)}%): "
+                        f"повышение базы только увеличит скидку — не повышаем"
+                    )
+
+        hit = None
+        probe_key = f"promo_probe:{product.id}"
+        probe = cache_get(probe_key)
+        if probe:
+            try:
+                p_old_seller = Decimal(str(probe["old_seller"]))
+                p_old_final = Decimal(str(probe["old_final"]))
+                p_old_disc = Decimal(str(probe["old_discount"]))
+                p_new_seller = Decimal(str(probe["new_seller"]))
+            except (KeyError, TypeError, ValueError, ArithmeticError):
+                cache_delete(probe_key)
+            else:
+                if (
+                    p_new_seller > 0
+                    and abs(cur_seller - p_new_seller) / p_new_seller <= self._CATALOG_LAG_PRICE_DELTA
+                    and cur_disc >= p_old_disc + self._PROMO_LOCK_DISCOUNT_PP
+                    and abs(cur_final - p_old_final) <= self._promo_final_tol(p_old_final)
+                ):
+                    hit = (
+                        f"наше повышение базы {self._q2(p_old_seller)}₽ → {self._q2(p_new_seller)}₽ не изменило цену "
+                        f"покупателя ({self._q2(p_old_final)}₽ → {self._q2(cur_final)}₽), WB поднял скидку {self._q2(p_old_disc)}% → {self._q2(cur_disc)}%"
+                    )
+
+        if hit is None:
+            try:
+                cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=self._PROMO_LOCK_SNAPSHOT_LOOKBACK_SEC)
+                snap = self.db.query(PriceSnapshot).filter(
+                    PriceSnapshot.product_id == product.id,
+                    PriceSnapshot.final_price > 0,
+                    PriceSnapshot.seller_price > 0,
+                    PriceSnapshot.snapshot_at >= cutoff,
+                ).order_by(PriceSnapshot.snapshot_at.desc()).first()
+            except Exception as e:
+                logger.warning("nm_id=%s: не удалось прочитать снимок для promo-lock: %s", product.nm_id, e)
+                self.db.rollback()
+                snap = None
+            if snap:
+                s_seller = Decimal(str(snap.seller_price))
+                s_final = Decimal(str(snap.final_price))
+                s_disc = Decimal(str(snap.discount or 0))
+                if (
+                    cur_seller > s_seller * (1 + self._CATALOG_LAG_PRICE_DELTA)
+                    and cur_disc >= s_disc + self._PROMO_LOCK_DISCOUNT_PP
+                    and abs(cur_final - s_final) <= self._promo_final_tol(s_final)
+                ):
+                    hit = (
+                        f"база выросла {self._q2(s_seller)}₽ → {self._q2(cur_seller)}₽, скидка {self._q2(s_disc)}% → {self._q2(cur_disc)}%, "
+                        f"цена покупателя {self._q2(s_final)}₽ не изменилась"
+                    )
+
+        if hit is None:
+            return None
+        cache_set(key, {
+            "seller": float(cur_seller),
+            "discount": float(cur_disc),
+            "final": float(cur_final),
+            "ts": time.time(),
+            "reason": hit,
+        }, ttl=self._PROMO_LOCK_TTL_SEC)
+        cache_delete(probe_key)
+        logger.warning("nm_id=%s: promo-lock поставлен — %s", product.nm_id, hit)
+        return f"Акция WB держит цену покупателя: {hit} — базу не повышаем"
 
     def _calculate_seller_price_from_final(
         self,
@@ -2388,6 +2537,19 @@ class RepricerEngine:
             reason_msg = (reason_msg or "") + f". Ступенчатое снижение: отправляем {stepped} (целевая {final_new_price}, текущая {_curr_sp_for_step})"
             final_new_price = stepped
 
+        # Promo-lock: в акции WB повышение базы не двигает цену покупателя,
+        # а только раскручивает скидку. Проверяем только перед повышением.
+        if marketplace == "wb" and _curr_sp_for_step > 0 and final_new_price > _curr_sp_for_step:
+            _promo_reason = self._check_promo_lock(product, current_data)
+            if _promo_reason:
+                return {"product": product, "needs_update": False, "skip_code": "PROMO_LOCKED",
+                        "current_data": current_data, "new_price": _curr_sp_for_step,
+                        "limit_reason": limit_reason,
+                        "reason_msg": f"{reason_msg}. {_promo_reason}" if reason_msg else _promo_reason,
+                        "_t0": _t0,
+                        "snap_competitor_price": snap_competitor_price, "snap_competitor_nm_id": snap_competitor_nm_id,
+                        "effective_strategy": effective_strategy}
+
         _MAX_RAISE_RATIO = self._RRP_MAX_RAISE_RATIO if effective_strategy == "rrp" else self._COMPETITOR_MAX_RAISE_RATIO
         if marketplace == "wb" and _curr_sp_for_step > 0 and final_new_price > _curr_sp_for_step * _MAX_RAISE_RATIO:
             stepped_up = Decimal(self._round_up(_curr_sp_for_step * _MAX_RAISE_RATIO))
@@ -2493,6 +2655,8 @@ class RepricerEngine:
         reason_code = limit_reason if limit_reason != "UPDATED" else "UPDATED"
         self._save_price_change(run, product, current_data, new_price, new_final,
                                 reason_code, str(reason_msg) + ". Цена применена: " + str(new_price) + "₽")
+        if self._marketplace(product.account) == "wb":
+            self._remember_promo_probe(product, current_data, new_price)
         try:
             old_price = current_data.get("seller_price") if isinstance(current_data, dict) else getattr(current_data, "seller_price", None)
             log_activity(
