@@ -4,7 +4,7 @@ import api from '../api/client';
 import {
   Activity, Filter, Download, ChevronLeft, ChevronRight,
   Loader2, Tag, DollarSign, User, Settings, Zap,
-  Pause, Package, Trash2, Play, LogIn,
+  Pause, Package, Trash2, Play, LogIn, KeyRound,
 } from 'lucide-react';
 import { formatMsk } from '../utils/date';
 
@@ -13,6 +13,7 @@ const EVENT_CONFIG = {
   strategy_activated:    { icon: Zap,        color: '#00c8ff', label: 'Стратегия включена' },
   strategy_deactivated:  { icon: Pause,      color: '#9ca3af', label: 'Стратегия отключена' },
   account_created:       { icon: User,       color: '#3b82f6', label: 'Аккаунт создан' },
+  account_key_changed:   { icon: KeyRound,   color: '#f59e0b', label: 'API-ключ изменён' },
   product_created:       { icon: Package,    color: '#3b82f6', label: 'Товар добавлен' },
   product_deleted:       { icon: Trash2,     color: '#ef4444', label: 'Товар удалён' },
   repricer_run:          { icon: Play,       color: '#00c8ff', label: 'Запуск репрайсера' },

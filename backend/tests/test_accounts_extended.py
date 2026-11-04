@@ -103,6 +103,16 @@ class TestAccountUpdate:
         assert r.status_code == 200
         assert r.json()["name"] == "Updated Name"
 
+    def test_update_key_only(self, client, test_account):
+        """UI sends only the fields that changed ??? key alone must be enough."""
+        old_name = test_account.name
+        r = client.put(f"/api/accounts/{test_account.id}",
+                       json={"wb_api_token": "brand-new-token-1234567890"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["name"] == old_name
+        assert body["wb_token_masked"] == "••••7890"
+
     def test_update_idor(self, client, db_session):
         from app.models.user import User
         from app.api.auth import hash_password
@@ -180,3 +190,52 @@ class TestAccountSync:
         r = client.post(f"/api/accounts/{test_account.id}/sync-catalog")
         # 202 accepted (queued) or 503 if Celery unavailable in test
         assert r.status_code in (202, 503)
+
+
+# ????????? API key visibility & check ?????????????????????????????????????????????
+
+class TestAccountCredentials:
+    def test_list_shows_masked_key_not_secret(self, client, test_account):
+        """UI needs to see WHICH key is stored ??? tail only, never the key itself."""
+        r = client.get("/api/accounts")
+        assert r.status_code == 200
+        acc = next(a for a in r.json()["accounts"] if a["id"] == test_account.id)
+        # conftest token is "fake-wb-token-for-testing"
+        assert acc["wb_token_masked"] == "••••ting"
+        assert acc["has_credentials"] is True
+        assert "wb_api_token" not in acc
+        assert "fake-wb-token" not in str(acc)
+
+    def test_check_credentials_ok(self, client, test_account):
+        from unittest.mock import AsyncMock, patch
+        with patch("app.services.wb_api.WBAPIClient.check_token",
+                   new=AsyncMock(return_value=(True, "ok"))):
+            r = client.post(f"/api/accounts/{test_account.id}/check-credentials")
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+    def test_check_credentials_rejected(self, client, test_account):
+        from unittest.mock import AsyncMock, patch
+        with patch("app.services.wb_api.WBAPIClient.check_token",
+                   new=AsyncMock(return_value=(False, "WB rejected the key"))):
+            r = client.post(f"/api/accounts/{test_account.id}/check-credentials")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is False
+        assert "rejected" in body["message"]
+
+    def test_check_credentials_idor(self, client, db_session):
+        from app.models.user import User
+        from app.api.auth import hash_password
+        other = User(email="idor_check@test.com", password_hash=hash_password("P123!"),
+                     is_active=True, is_verified=True, token_version=1,
+                     verification_attempts=0, reset_attempts=0)
+        db_session.add(other); db_session.commit()
+        acc = Account(user_id=other.id, name="CheckVic", wb_api_token="t",
+                      is_active=True)
+        db_session.add(acc); db_session.commit()
+
+        r = client.post(f"/api/accounts/{acc.id}/check-credentials")
+        assert r.status_code == 404
+
+        db_session.delete(acc); db_session.delete(other); db_session.commit()

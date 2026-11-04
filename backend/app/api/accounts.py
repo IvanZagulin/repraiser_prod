@@ -8,7 +8,8 @@ from app.database import get_db
 from app.models import Account
 from app.models.user import User
 from app.schemas.account import (
-    AccountCreate, AccountUpdate, AccountResponse, AccountListResponse
+    AccountCreate, AccountUpdate, AccountResponse, AccountListResponse,
+    CredentialsCheckResponse,
 )
 from app.api.auth import get_current_user
 from app.services.activity_logger import log_activity
@@ -27,7 +28,16 @@ def _check_ownership(account: Account, current_user: User):
                             detail="Account not found")
 
 
+def _mask(secret: str | None) -> str | None:
+    """Хвост ключа для UI: по нему видно, какой ключ стоит, но не сам ключ."""
+    if not secret:
+        return None
+    tail = secret[-4:] if len(secret) >= 4 else secret
+    return f"••••{tail}"
+
+
 def _build_response(account: Account) -> AccountResponse:
+    is_wb = account.marketplace == "wb"
     return AccountResponse(**{
         'id': account.id,
         'name': account.name,
@@ -36,7 +46,12 @@ def _build_response(account: Account) -> AccountResponse:
         'token_expires_at': account.token_expires_at,
         'created_at': account.created_at,
         'updated_at': account.updated_at,
-        'token_ttl_days': get_token_ttl_days(account.wb_api_token) if account.marketplace == "wb" and account.wb_api_token else None,
+        'token_ttl_days': get_token_ttl_days(account.wb_api_token) if is_wb and account.wb_api_token else None,
+        'wb_token_masked': _mask(account.wb_api_token) if is_wb else None,
+        'ozon_client_id': account.ozon_client_id if not is_wb else None,
+        'ozon_api_key_masked': _mask(account.ozon_api_key) if not is_wb else None,
+        'has_credentials': bool(account.wb_api_token) if is_wb
+                           else bool(account.ozon_client_id and account.ozon_api_key),
     })
 
 
@@ -154,6 +169,14 @@ async def update_account(
     db.commit()
     db.refresh(account)
 
+    if token_changed or "ozon_api_key" in update_data:
+        try:
+            log_activity(db, current_user.id, "account_key_changed",
+                         account_id=account.id, details={"name": account.name})
+            db.commit()
+        except Exception as e:
+            logger.warning(f"Failed to log activity 'account_key_changed': {e}")
+
     # При смене токена — перекачиваем каталог с новым ключом
     if account.marketplace == "wb" and (token_changed or old_marketplace != account.marketplace):
         try:
@@ -163,6 +186,43 @@ async def update_account(
             logger.warning(f"Failed to start catalog sync for account {account.id}: {e}")
 
     return _build_response(account)
+
+
+@router.post("/{account_id}/check-credentials", response_model=CredentialsCheckResponse)
+@limiter.limit("10/minute")
+async def check_credentials(
+    request: Request,
+    account_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Проверить сохранённый API-ключ живым запросом к маркетплейсу"""
+    account = db.query(Account).filter(
+        Account.id == account_id, Account.user_id == current_user.id
+    ).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    if account.marketplace == "wb":
+        if not account.wb_api_token:
+            return CredentialsCheckResponse(ok=False, message="Ключ не задан")
+        from app.services.wb_api import WBAPIClient
+        ok, message = await WBAPIClient(account.wb_api_token).check_token()
+        return CredentialsCheckResponse(
+            ok=ok, message=message,
+            token_ttl_days=get_token_ttl_days(account.wb_api_token),
+        )
+
+    if account.marketplace == "ozon":
+        if not (account.ozon_client_id and account.ozon_api_key):
+            return CredentialsCheckResponse(ok=False, message="Ключ не задан")
+        from app.services.ozon_api import OzonAPIClient
+        ok, message = await OzonAPIClient(
+            account.ozon_client_id, account.ozon_api_key
+        ).check_credentials()
+        return CredentialsCheckResponse(ok=ok, message=message)
+
+    raise HTTPException(status_code=400, detail="Unsupported marketplace")
 
 
 @router.post("/{account_id}/sync-catalog", status_code=status.HTTP_202_ACCEPTED)
